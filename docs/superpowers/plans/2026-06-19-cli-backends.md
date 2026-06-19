@@ -8,6 +8,8 @@
 
 **Tech Stack:** Swift 6.2, SwiftUI + AppKit, `Foundation.Process`/`Pipe`, Swift Testing (`import Testing`). Design tokens via `AppTheme`. Spec: `docs/superpowers/specs/2026-06-19-cli-backends-design.md`.
 
+**Cost & process safety (Claude CLI backend):** `claude -p` spends the user's own Claude quota, so the backend is frugal and self-contained by design: it **defaults to Haiku** (`ClaudeCLIModelPreference`, never silently Opus/Sonnet), caps each turn with `--max-turns 30`, **never auto-retries** a failed turn, and runs **exactly one `claude` process per turn** that is terminated on cancel/timeout (no stale processes).
+
 ---
 
 ## File structure
@@ -402,12 +404,36 @@ enum ChatBackend: String, CaseIterable, Sendable {
         return nil
     }
 }
+
+/// Model for the Claude Code CLI backend. Separate from the API-key/Palmier model and
+/// defaults to Haiku — `claude -p` spends the user's own Claude quota, so never default
+/// to Opus/Sonnet.
+enum ClaudeCLIModelPreference {
+    private static let key = "io.palmier.pro.chat.cli.model"
+    static var value: AnthropicModel {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: key),
+               let m = AnthropicModel(rawValue: raw) { return m }
+            return .haiku45
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+```
+
+Also add a test asserting the default to `ChatBackendTests`:
+
+```swift
+    @Test func claudeCLIDefaultsToHaiku() {
+        UserDefaults.standard.removeObject(forKey: "io.palmier.pro.chat.cli.model")
+        #expect(ClaudeCLIModelPreference.value == .haiku45)
+    }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `swift test --filter ChatBackend`
-Expected: PASS (4 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -708,6 +734,9 @@ struct ClaudeCLIRunner {
     let claudePath: String
     let model: AnthropicModel
     let systemPrompt: String
+    /// Hard cap on the CLI's internal agentic loop so one chat turn can't run away on
+    /// the user's Claude quota.
+    var maxTurns: Int = 30
 
     /// CLI model alias for `--model`.
     static func alias(for model: AnthropicModel) -> String {
@@ -734,6 +763,7 @@ struct ClaudeCLIRunner {
             "--output-format", "stream-json",
             "--verbose",
             "--model", Self.alias(for: model),
+            "--max-turns", String(maxTurns),
             "--mcp-config", PalmierMCPConfig.inlineConfigJSON(),
             "--strict-mcp-config",
             "--allowedTools", PalmierMCPConfig.allowedToolsPattern,
@@ -800,12 +830,14 @@ Change `canStream`:
     var canStream: Bool { effectiveBackend != nil }
 ```
 
-Change `availableModels` so the CLI backend offers all three aliases:
+Change `availableModels` so the CLI backend lists Haiku first (cheapest default) and the
+API-key backend keeps all three:
 
 ```swift
     var availableModels: [AnthropicModel] {
         switch effectiveBackend {
-        case .apiKey, .claudeCLI: return AnthropicModel.allCases
+        case .apiKey: return AnthropicModel.allCases
+        case .claudeCLI: return [.haiku45, .sonnet46, .opus47]   // Haiku first = default
         case .palmier: return AccountService.shared.isPaid ? [.sonnet46] : [.haiku45]
         case .none: return [.sonnet46]
         }
@@ -852,13 +884,13 @@ Add `runCLITurn()`:
             streamError = .upstream("Claude Code CLI not found. Install it or set its path in Settings.")
             return
         }
-        guard AppState.shared.mcpService?.isRunning ?? false else {
+        // Start the MCP server once if needed — never self-recurse / retry in a loop.
+        if !(AppState.shared.mcpService?.isRunning ?? false) {
             AppState.shared.startMCPService()
-            if AppState.shared.mcpService?.isRunning != true {
-                streamError = .upstream("Enable the MCP server in Settings to use the Claude Code CLI backend.")
-                return
-            }
-            return await runCLITurn()
+        }
+        guard AppState.shared.mcpService?.isRunning ?? false else {
+            streamError = .upstream("Enable the MCP server in Settings to use the Claude Code CLI backend.")
+            return
         }
 
         await PalmierMCPConfig.registerIfNeeded(claudePath: claudePath)
@@ -867,9 +899,11 @@ Add `runCLITurn()`:
         guard let userText = messages.last(where: { $0.role == .user })
             .flatMap(Self.plainText) else { return }
 
+        // The CLI bills the user's own Claude quota, so use the Haiku-defaulted CLI model
+        // preference — not the Sonnet/Opus model used by the API/Palmier backends.
         let runner = ClaudeCLIRunner(
             claudePath: claudePath,
-            model: effectiveModel,
+            model: ClaudeCLIModelPreference.value,
             systemPrompt: AgentInstructions.serverInstructions
         )
         let resume = currentSessionId
@@ -1711,6 +1745,8 @@ Expected: all suites pass, including the 5 new ones (`CLILocator`, `ClaudeStream
 ## Notes for the implementer
 
 - The CLI chat path deliberately bypasses `runLoop()`/`ToolExecutor`: the CLI executes MCP tools itself against the live editor. Do not feed CLI `tool_use` blocks back through `ToolExecutor`.
+- **Cost discipline (Claude CLI):** default model is Haiku via `ClaudeCLIModelPreference`; the agent-panel model picker, when backend is `.claudeCLI`, must read/write `ClaudeCLIModelPreference` (not `AgentService.model`) so the user can opt up to Sonnet/Opus but the default stays Haiku. Keep `--max-turns 30` and never wrap `runCLITurn` in an automatic retry.
+- **No stale processes:** after wiring Task 6, manually verify `ps aux | grep "[c]laude -p"` shows nothing once a turn finishes, errors, or is cancelled mid-stream. If a `claude` lingers, the cancellation/timeout termination in `CLIProcess`/`ClaudeCLIRunner` is not firing — fix before marking T6 done.
 - Image-mention inlining for the CLI path is text-only in v1 (see spec open notes).
 - Verify real JSON key names from `higgsfield generate create … --json` and `higgsfield model list --json` while implementing Tasks 10/12 and adjust the defensive parsers if needed.
 - All new UI must use `AppTheme` tokens; no hardcoded numbers (per AGENTS.md).

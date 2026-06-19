@@ -93,14 +93,16 @@ else fall back to the first available among {apiKey, palmier, claudeCLI}.
 
 **Turn flow (`runCLITurn`)** — used instead of `runLoop()` when backend is `.claudeCLI`:
 
-1. Ensure the MCP server is running (`AppState.shared.startMCPService()`); if disabled,
-   surface an actionable error ("Enable the MCP server in Settings to use the Claude CLI
-   backend").
+1. Ensure the MCP server is running: if not, call `AppState.shared.startMCPService()`
+   **once** (no self-recursion / retry loop); if it still isn't running, surface an
+   actionable error ("Enable the MCP server in Settings to use the Claude CLI backend")
+   and return.
 2. Build the command:
    ```
    claude -p "<latest user text>"
      --output-format stream-json --verbose
-     --model <sonnet|opus|haiku>
+     --model haiku            # default; see Models & cost controls below
+     --max-turns 30           # hard cap on the agentic loop to bound token usage
      --mcp-config <inline JSON for palmier-pro http server>
      --strict-mcp-config
      --allowedTools "mcp__palmier-pro__*"
@@ -110,6 +112,8 @@ else fall back to the first available among {apiKey, palmier, claudeCLI}.
    - `--strict-mcp-config` so only Palmier's server loads (no unrelated user servers).
    - `--allowedTools "mcp__palmier-pro__*"` pre-authorizes all Palmier tools so the
      non-interactive run never blocks on a permission prompt; no other tools are allowed.
+   - `--max-turns 30` bounds the CLI's internal agentic loop so a single chat turn can't
+     silently spend a large amount of the user's Claude quota.
    - Mentions/`@` context and inlined images: passed as text appended to the prompt
      (image bytes referenced by path; the CLI can read project files if needed). v1 keeps
      this simple — text context only; image inlining is a follow-up note below.
@@ -130,9 +134,29 @@ else fall back to the first available among {apiKey, palmier, claudeCLI}.
 own terminal sessions also see Palmier. Failure here is non-fatal (the app's own calls
 use the inline config regardless); log and continue.
 
-**Models.** When backend is `.claudeCLI`, `availableModels` maps to the CLI aliases
-`opus` / `sonnet` / `haiku` (reuse `AnthropicModel`, mapping rawValue → alias). No
-credits/key needed; the CLI uses the user's Claude subscription.
+**Models & cost controls.** The `claude -p` calls bill against the user's own Claude
+subscription/limits, so the CLI backend is deliberately frugal by default:
+
+- **Default model is Haiku.** The `.claudeCLI` backend has its own model preference
+  (`ClaudeCLIModel`, UserDefaults) that **defaults to `.haiku45`**, independent of the
+  Sonnet/Opus model used by the API-key and Palmier backends. `availableModels` for this
+  backend lists `[.haiku45, .sonnet46, .opus47]` (Haiku first); the user can opt up to
+  Sonnet/Opus explicitly, but nothing silently runs Opus.
+- **Bounded per turn.** `--max-turns 30` caps the CLI's agentic loop.
+- **No automatic retry.** A failed turn surfaces the error to the user; the app never
+  silently re-invokes `claude` (that's what previously looked like runaway "retries").
+- **No background spend.** Exactly one `claude` process per active turn; it is terminated
+  on cancel/timeout (see process lifecycle below). No credits/API key needed.
+
+**Process lifecycle (no stale `claude` processes).** Every `claude` invocation goes
+through `CLIProcess`, which guarantees the child is terminated when:
+
+- the user cancels the chat (`AgentService.cancel()` → the consuming task is cancelled →
+  the stream's `onTermination` calls `process.terminate()`),
+- the turn times out (a bounded wall-clock timeout terminates the process), or
+- the app tears down the turn for any other reason (defer-based termination).
+
+The runner never leaves a detached `claude` running after a turn ends, succeeds, or fails.
 
 ### Generation: Higgsfield CLI provider
 

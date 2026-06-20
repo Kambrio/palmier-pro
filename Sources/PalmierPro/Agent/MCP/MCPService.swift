@@ -6,7 +6,7 @@ import MCP
 @MainActor
 final class MCPService {
 
-    static let port: UInt16 = 19789
+    nonisolated static let port: UInt16 = 19789
 
     private static let enabledKey = "io.palmier.pro.mcp.enabled"
 

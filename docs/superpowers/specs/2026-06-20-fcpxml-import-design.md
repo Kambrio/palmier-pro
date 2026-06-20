@@ -31,6 +31,8 @@ only *exports* XMEML and opens its own `.palmier` projects; there is no importer
 - Full FCPXML fidelity. Skipped-and-reported: transitions, effects/filters,
   transform/crop/opacity adjustments + keyframes, `<title>` elements, compound clips /
   `<ref-clip>`, multicam, markers, color/grade.
+- **Lanes / connected clips → separate tracks.** v1 imports a single flat `<spine>`
+  (one track per spine; the astronaut file is flat). Lane support is a follow-up.
 - XMEML and OTIO import (the parser is structured so they could be added later).
 - A media-access approval popup (separate feature). Import is user-initiated — choosing
   the `.fcpxml` (or the agent passing its path) is the consent. The non-sandboxed app

@@ -25,9 +25,9 @@ struct HiggsfieldGenerationProvider {
             referencePaths: referencePaths, numImages: numImages)
 
         for attempt in 0..<2 {
+            // The CLI prints pretty-printed multi-line JSON; parse the whole output.
             let out = try await CLIProcess(executable: path, arguments: argv).runCapturing()
-            let lastJSON = out.split(separator: "\n").last.map(String.init) ?? out
-            let urls = try HiggsfieldResult.resultURLs(fromJSON: lastJSON)
+            let urls = try HiggsfieldResult.resultURLs(fromJSON: out)
             let inputUUIDs = referencePaths.map { ($0 as NSString).lastPathComponent }
             if attempt == 0, let first = urls.first,
                HiggsfieldResult.isInputReference(first, inputUUIDs: inputUUIDs) {

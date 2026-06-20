@@ -17,6 +17,28 @@ struct HiggsfieldResultTests {
         #expect(urls == ["https://x/1.mp4", "https://x/2.mp4"])
     }
 
+    // The real `higgsfield generate create --json` shape: an array of job objects with
+    // result_url, pretty-printed, with input refs under params that must NOT be returned.
+    @Test func parsesRealResultUrlArrayIgnoringInputs() throws {
+        let json = """
+        [
+          {
+            "id": "j1",
+            "status": "completed",
+            "result_url": "https://cdn/out/result1.jpeg",
+            "params": { "input_images": ["https://cdn/in/INPUT.png"], "prompt": "p" }
+          }
+        ]
+        """
+        let urls = try HiggsfieldResult.resultURLs(fromJSON: json)
+        #expect(urls == ["https://cdn/out/result1.jpeg"])
+    }
+
+    @Test func toleratesLeadingProgressText() throws {
+        let json = "Submitting…\nWaiting…\n{ \"result_url\": \"https://cdn/out/x.png\" }"
+        #expect(try HiggsfieldResult.resultURLs(fromJSON: json) == ["https://cdn/out/x.png"])
+    }
+
     @Test func throwsWhenNoURL() {
         #expect(throws: (any Error).self) {
             _ = try HiggsfieldResult.resultURLs(fromJSON: #"{"status":"ok"}"#)

@@ -322,16 +322,27 @@ enum CompositionBuilder {
         let sourceDuration = CMTime(value: CMTimeValue(sourceFrames), timescale: timescale)
         let sourceRange = CMTimeRange(start: trimStart, duration: sourceDuration)
 
-        do {
-            try compTrack.insertTimeRange(sourceRange, of: sourceTrack, at: clipStart)
-        } catch {
+        var inserted = (try? compTrack.insertTimeRange(sourceRange, of: sourceTrack, at: clipStart)) != nil
+        if !inserted {
+            // A clip's declared duration can slightly exceed the real media (e.g. FCPXML
+            // rounds an audio bed up to a whole second). Clamp the source range to what the
+            // track actually has and retry, so the clip still plays (just a hair shorter)
+            // instead of being dropped entirely.
+            let available = ((try? await sourceAsset.load(.duration)) ?? .zero) - trimStart
+            if available > .zero {
+                let clamped = CMTimeMinimum(sourceDuration, available)
+                inserted = (try? compTrack.insertTimeRange(
+                    CMTimeRange(start: trimStart, duration: clamped),
+                    of: sourceTrack, at: clipStart)) != nil
+            }
+        }
+        guard inserted else {
             let srcSeconds = (try? await sourceAsset.load(.duration).seconds) ?? 0
             Log.preview.error("""
                 insertTimeRange failed — skipping clip. \
                 clipId=\(clip.id) mediaRef=\(clip.mediaRef) \
                 trimStart=\(clip.trimStartFrame)f durationFrames=\(clip.durationFrames)f \
-                speed=\(clip.speed) sourceSeconds=\(String(format: "%.3f", srcSeconds)) \
-                error=\(error.localizedDescription)
+                speed=\(clip.speed) sourceSeconds=\(String(format: "%.3f", srcSeconds))
                 """)
             return false
         }

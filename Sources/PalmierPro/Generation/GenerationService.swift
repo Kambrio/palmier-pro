@@ -103,11 +103,16 @@ final class GenerationService {
                         if i == 0 && trimmedFirst { return nil }
                         return asset
                     }
-                    uploaded = try await uploadReferences(
-                        at: urlsToUpload,
-                        types: refTypes,
-                        cacheKeys: cacheKeys,
-                    )
+                    if GenerationProvider.selected == .higgsfield {
+                        // Higgsfield's CLI auto-uploads local file paths, so skip Convex upload.
+                        uploaded = urlsToUpload.map(\.path)
+                    } else {
+                        uploaded = try await uploadReferences(
+                            at: urlsToUpload,
+                            types: refTypes,
+                            cacheKeys: cacheKeys,
+                        )
+                    }
                 }
 
                 var finalGenInput = genInput
@@ -296,6 +301,13 @@ final class GenerationService {
         onComplete: (@MainActor (MediaAsset) -> Void)?,
         onFailure: (@MainActor () -> Void)?
     ) async {
+        if GenerationProvider.selected == .higgsfield {
+            await runHiggsfieldJob(
+                placeholders: placeholders, genInput: genInput,
+                editor: editor, onComplete: onComplete, onFailure: onFailure)
+            return
+        }
+
         let runId = String(UUID().uuidString.prefix(8))
         Log.generation.notice("run \(runId) start model=\(genInput.model) placeholders=\(placeholders.count)")
         defer { Log.generation.notice("run \(runId) settled") }
@@ -358,6 +370,35 @@ final class GenerationService {
             case .queued, .running:
                 continue
             }
+        }
+    }
+
+    /// Runs a generation through the Higgsfield CLI, then reuses the shared
+    /// download/finalize path. References were passed as local file paths.
+    private func runHiggsfieldJob(
+        placeholders: [MediaAsset],
+        genInput: GenerationInput,
+        editor: EditorViewModel,
+        onComplete: (@MainActor (MediaAsset) -> Void)?,
+        onFailure: (@MainActor () -> Void)?
+    ) async {
+        let assetType = placeholders.first?.type ?? .image
+        let referencePaths = genInput.imageURLs ?? []
+        do {
+            let urlStrings = try await HiggsfieldGenerationProvider.generate(
+                genInput: genInput, assetType: assetType,
+                referencePaths: referencePaths, numImages: placeholders.count)
+            let job = BackendGenerationJob(
+                _id: "higgsfield", status: .succeeded,
+                resultUrls: urlStrings, errorMessage: nil,
+                costCredits: nil, completedAt: nil)
+            await finalizeSuccess(job: job, placeholders: placeholders, editor: editor,
+                                  onComplete: onComplete, onFailure: onFailure)
+        } catch {
+            let message = error.localizedDescription
+            Log.generation.error("higgsfield generate failed: \(message)")
+            for placeholder in placeholders { placeholder.generationStatus = .failed(message) }
+            onFailure?()
         }
     }
 

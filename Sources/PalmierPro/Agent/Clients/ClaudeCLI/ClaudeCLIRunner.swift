@@ -19,6 +19,32 @@ struct ClaudeCLIRunner {
         }
     }
 
+    /// Builds the `claude` argv. Pure + static so it can be unit-tested without spawning.
+    static func argv(
+        userText: String,
+        model: AnthropicModel,
+        systemPrompt: String,
+        maxTurns: Int,
+        resumeSessionId: String?
+    ) -> [String] {
+        var args = [
+            "-p", userText,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--model", alias(for: model),
+            "--max-turns", String(maxTurns),
+            "--mcp-config", PalmierMCPConfig.inlineConfigJSON(),
+            "--strict-mcp-config",
+            "--allowedTools", PalmierMCPConfig.allowedTools,
+            "--disallowedTools", PalmierMCPConfig.disallowedBuiltinTools,
+            "--append-system-prompt", systemPrompt,
+        ]
+        if let resumeSessionId {
+            args.append(contentsOf: ["--resume", resumeSessionId])
+        }
+        return args
+    }
+
     /// Streams events for one user turn. `resumeSessionId` continues a prior CLI session.
     /// The stream finishes when the CLI exits; cancelling it terminates the process.
     func stream(
@@ -26,20 +52,9 @@ struct ClaudeCLIRunner {
         resumeSessionId: String?,
         onSessionId: @escaping @Sendable (String) -> Void
     ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
-        var args = [
-            "-p", userText,
-            "--output-format", "stream-json",
-            "--verbose",
-            "--model", Self.alias(for: model),
-            "--max-turns", String(maxTurns),
-            "--mcp-config", PalmierMCPConfig.inlineConfigJSON(),
-            "--strict-mcp-config",
-            "--allowedTools", PalmierMCPConfig.allowedToolsPattern,
-            "--append-system-prompt", systemPrompt,
-        ]
-        if let resumeSessionId {
-            args.append(contentsOf: ["--resume", resumeSessionId])
-        }
+        let args = Self.argv(
+            userText: userText, model: model, systemPrompt: systemPrompt,
+            maxTurns: maxTurns, resumeSessionId: resumeSessionId)
 
         let proc = CLIProcess(executable: claudePath, arguments: args)
 

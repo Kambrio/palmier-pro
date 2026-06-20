@@ -105,13 +105,19 @@ else fall back to the first available among {apiKey, palmier, claudeCLI}.
      --max-turns 30           # hard cap on the agentic loop to bound token usage
      --mcp-config <inline JSON for palmier-pro http server>
      --strict-mcp-config
-     --allowedTools "mcp__palmier-pro__*"
+     --allowedTools "mcp__palmier-pro"      # server scope — NOT a __* glob (matches nothing)
+     --disallowedTools "Bash Read Write Edit … WebFetch WebSearch Task"
      [--resume <sessionId>]   # after the first turn of this chat
      --append-system-prompt "<AgentInstructions.serverInstructions>"
    ```
    - `--strict-mcp-config` so only Palmier's server loads (no unrelated user servers).
-   - `--allowedTools "mcp__palmier-pro__*"` pre-authorizes all Palmier tools so the
-     non-interactive run never blocks on a permission prompt; no other tools are allowed.
+   - `--allowedTools "mcp__palmier-pro"` pre-authorizes all Palmier MCP tools so the
+     non-interactive run never blocks on a permission prompt. Use the **server scope**, not
+     `mcp__palmier-pro__*` — the CLI matches MCP tools by server name, and a `__*` glob
+     matches nothing, so every tool would prompt and be denied (cancelled) in -p mode.
+   - `--disallowedTools "Bash Read Write …"` makes the backend MCP-only: it can't run
+     built-in filesystem/exec tools, won't inherit the user's global Bash permissions, and
+     won't wander onto the filesystem. (`ToolSearch` stays enabled to load deferred MCP tools.)
    - `--max-turns 30` bounds the CLI's internal agentic loop so a single chat turn can't
      silently spend a large amount of the user's Claude quota.
    - Mentions/`@` context and inlined images: passed as text appended to the prompt

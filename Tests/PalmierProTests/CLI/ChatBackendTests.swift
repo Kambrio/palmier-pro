@@ -19,11 +19,18 @@ struct ChatBackendTests {
         #expect(ChatBackend.effective(selected: .apiKey, available: []) == nil)
     }
 
-    @Test func fallbackOrderPrefersApiKeyThenPalmierThenCLI() {
+    @Test func fallbackPrefersClaudeCLIThenApiKeyThenPalmier() {
         #expect(ChatBackend.effective(selected: .palmier,
-                                      available: [.apiKey, .claudeCLI]) == .apiKey)
+                                      available: [.apiKey, .claudeCLI]) == .claudeCLI)
         #expect(ChatBackend.effective(selected: .palmier,
-                                      available: [.claudeCLI]) == .claudeCLI)
+                                      available: [.apiKey]) == .apiKey)
+        #expect(ChatBackend.effective(selected: .apiKey,
+                                      available: [.palmier]) == .palmier)
+    }
+
+    @Test func defaultsToClaudeCLIWhenUnset() {
+        UserDefaults.standard.removeObject(forKey: "io.palmier.pro.chat.backend")
+        #expect(ChatBackend.selected == .claudeCLI)
     }
 
     @Test func claudeCLIDefaultsToHaiku() {

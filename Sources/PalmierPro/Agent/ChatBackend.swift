@@ -19,16 +19,19 @@ enum ChatBackend: String, CaseIterable, Sendable {
         get {
             if let raw = UserDefaults.standard.string(forKey: key),
                let b = ChatBackend(rawValue: raw) { return b }
-            return .palmier
+            // Default prefers the locally-installed Claude Code CLI (subscription, no
+            // sign-in/key); `effective` falls back when it isn't available.
+            return .claudeCLI
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 
     /// The selected backend if available, else the first available in priority order
-    /// (apiKey, palmier, claudeCLI). Nil if none available.
+    /// (claudeCLI, apiKey, palmier) — the local CLI is preferred when installed.
+    /// Nil if none available.
     static func effective(selected: ChatBackend, available: Set<ChatBackend>) -> ChatBackend? {
         if available.contains(selected) { return selected }
-        for candidate in [ChatBackend.apiKey, .palmier, .claudeCLI] where available.contains(candidate) {
+        for candidate in [ChatBackend.claudeCLI, .apiKey, .palmier] where available.contains(candidate) {
             return candidate
         }
         return nil

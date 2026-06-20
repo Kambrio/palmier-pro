@@ -2,10 +2,10 @@ import Foundation
 
 /// Resolves an absolute path to a CLI tool. A GUI app launched from Finder has a
 /// minimal PATH, so we probe common install dirs and fall back to a login shell.
-struct CLILocator {
+struct CLILocator: Sendable {
     let tool: String
     let searchDirs: [String]
-    let shellResolver: () -> String?
+    let shellResolver: @Sendable () -> String?
 
     static let defaultSearchDirs = [
         "/opt/homebrew/bin",
@@ -16,7 +16,7 @@ struct CLILocator {
 
     init(tool: String,
          searchDirs: [String] = CLILocator.defaultSearchDirs,
-         shellResolver: (() -> String?)? = nil) {
+         shellResolver: (@Sendable () -> String?)? = nil) {
         self.tool = tool
         self.searchDirs = searchDirs
         self.shellResolver = shellResolver ?? { CLILocator.loginShellWhich(tool) }

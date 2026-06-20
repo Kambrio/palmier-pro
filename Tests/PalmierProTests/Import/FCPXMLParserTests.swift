@@ -19,6 +19,9 @@ struct FCPXMLParserTests {
         <asset id="r3" name="shotB" start="0s" duration="116/24s" hasVideo="1" hasAudio="0" format="r1">
           <media-rep kind="original-media" src="file:///tmp/shotB.png" />
         </asset>
+        <asset id="r4" name="music" start="0s" duration="240s" hasVideo="0" hasAudio="1">
+          <media-rep kind="original-media" src="file:///tmp/music.mp3" />
+        </asset>
       </resources>
       <library>
         <event name="E">
@@ -28,6 +31,7 @@ struct FCPXMLParserTests {
                 <video ref="r2" name="shotA" offset="0s" duration="5s" start="0s" />
                 <gap offset="5s" duration="1s" />
                 <video ref="r3" name="shotB" offset="146/24s" duration="116/24s" start="12/24s" />
+                <asset-clip ref="r4" name="music" lane="-1" offset="0s" duration="10s" start="0s" audioRole="music" />
                 <title ref="r9" offset="0s" duration="1s" />
               </spine>
             </sequence>
@@ -58,9 +62,11 @@ struct FCPXMLParserTests {
 
     @Test func buildsSpineTrackWithClipsAndGap() throws {
         let t = try parse()
-        #expect(t.tracks.count == 1)
-        let clips = t.tracks[0].clips
-        #expect(clips.count == 3)            // 2 videos + 1 gap (title skipped)
+        #expect(t.tracks.count == 2)         // video track + audio track
+        let video = t.tracks[0]
+        #expect(video.kind == .video)
+        let clips = video.clips
+        #expect(clips.count == 3)            // 2 videos + 1 gap (title skipped, music split out)
         #expect(clips[0].assetId == "r2")
         #expect(clips[0].startFrame == 0)
         #expect(clips[0].durationFrames == 120)
@@ -69,6 +75,15 @@ struct FCPXMLParserTests {
         #expect(clips[2].startFrame == 146)
         #expect(clips[2].durationFrames == 116)
         #expect(clips[2].sourceInFrames == 12)
+    }
+
+    @Test func routesAudioAssetsToSeparateAudioTrack() throws {
+        let t = try parse()
+        let audio = try #require(t.tracks.first { $0.kind == .audio })
+        #expect(audio.clips.count == 1)
+        #expect(audio.clips[0].assetId == "r4")
+        #expect(audio.clips[0].durationFrames == 240)   // 10s @24
+        #expect(audio.clips[0].isGap == false)
     }
 
     @Test func recordsUnsupportedElementsAsSkipped() throws {

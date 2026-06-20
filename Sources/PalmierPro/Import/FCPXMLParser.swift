@@ -64,9 +64,21 @@ enum FCPXMLParser {
             }
         }
 
-        let firstAsset = clips.first(where: { !$0.isGap }).flatMap { assets[$0.assetId] }
-        let kind: ParsedTrackKind = (firstAsset?.hasAudio == true && firstAsset?.hasVideo == false) ? .audio : .video
-        let tracks = clips.isEmpty ? [] : [ParsedTrack(kind: kind, clips: clips)]
+        // Split into video and audio tracks by the referenced asset's type, so audio
+        // elements (e.g. a music bed on a connected lane) get their own audio track
+        // instead of being flattened onto the video track as silent video clips.
+        var videoClips: [ParsedClip] = []
+        var audioClips: [ParsedClip] = []
+        for clip in clips {
+            if !clip.isGap, isAudioOnly(assets[clip.assetId]) {
+                audioClips.append(clip)
+            } else {
+                videoClips.append(clip)
+            }
+        }
+        var tracks: [ParsedTrack] = []
+        if !videoClips.isEmpty { tracks.append(ParsedTrack(kind: .video, clips: videoClips)) }
+        if !audioClips.isEmpty { tracks.append(ParsedTrack(kind: .audio, clips: audioClips)) }
 
         return ParsedTimeline(fps: fps, width: width, height: height,
                               assets: assets, tracks: tracks, skipped: skipped)
@@ -74,6 +86,17 @@ enum FCPXMLParser {
 
     private static func attr(_ el: XMLElement, _ name: String) -> String? {
         el.attribute(forName: name)?.stringValue
+    }
+
+    private static let audioExtensions: Set<String> = ["mp3", "wav", "aac", "m4a", "aiff", "caf"]
+
+    private static func isAudioOnly(_ asset: ParsedAsset?) -> Bool {
+        guard let asset else { return false }
+        if asset.hasAudio && !asset.hasVideo { return true }
+        if !asset.hasAudio && !asset.hasVideo, let ext = asset.src?.pathExtension.lowercased() {
+            return audioExtensions.contains(ext)
+        }
+        return false
     }
 
     private static func parseFormat(_ resources: XMLElement?) -> (fps: Int, width: Int, height: Int) {

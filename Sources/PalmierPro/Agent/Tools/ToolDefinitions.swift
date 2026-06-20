@@ -21,6 +21,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case generateAudio = "generate_audio"
     case upscaleMedia = "upscale_media"
     case importMedia = "import_media"
+    case importTimeline = "import_timeline"
     case listModels = "list_models"
     case inspectMedia = "inspect_media"
     case getTranscript = "get_transcript"
@@ -445,6 +446,16 @@ enum ToolDefinitions {
                     "folderId": ["type": "string", "description": "Optional. Folder id (from list_folders or create_folder) to place the result in. Omit for the project root."],
                 ],
                 required: ["source"]
+            )
+        ),
+        AgentTool(
+            name: .importTimeline,
+            description: "Imports an FCPXML timeline file from a local path into the current project. Parses the sequence and its referenced media (images/video/audio), imports the media, and builds the timeline — replacing the current timeline if it is empty, otherwise appending the imported clips as new tracks. Only FCPXML (.fcpxml) is supported; unsupported constructs (transitions, titles, effects, keyframes) are skipped and reported. Returns a summary of what was imported.",
+            inputSchema: objectSchema(
+                properties: [
+                    "path": ["type": "string", "description": "Absolute local path to a .fcpxml file. The file (and the media it references) must be readable by the Palmier process."],
+                ],
+                required: ["path"]
             )
         ),
         AgentTool(

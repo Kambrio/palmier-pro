@@ -3,11 +3,16 @@ import Foundation
 extension ToolExecutor {
     func generate(_ editor: EditorViewModel, _ args: [String: Any], type: ClipType) throws -> ToolResult {
         let prompt = try args.requireString("prompt")
-        guard AccountService.shared.isSignedIn else {
-            throw ToolError("Generation requires signing in to Palmier. Tell the user to sign in.")
+        guard GenerationProvider.canGenerate else {
+            throw ToolError(GenerationProvider.cannotGenerateReason)
         }
-        guard AccountService.shared.hasCredits else {
-            throw ToolError("Out of credits. Tell the user to add credits or subscribe to keep generating.")
+        // Higgsfield routes through the local CLI (no Palmier account / catalog).
+        if GenerationProvider.selected == .higgsfield {
+            switch type {
+            case .image: return try generateImageHiggsfield(editor, args, prompt: prompt)
+            default:
+                throw ToolError("With the Higgsfield provider, the agent can generate images. For video or audio, use the in-app generation panel or switch the provider to Palmier in Settings → Models.")
+            }
         }
         switch type {
         case .video:
@@ -194,6 +199,46 @@ extension ToolExecutor {
         return .ok("Generation started. Placeholder asset ID: \(placeholderId). Model: \(model.displayName), aspect: \(aspectRatio)")
     }
 
+    /// Image generation via the Higgsfield CLI (no Palmier catalog). The model is a
+    /// Higgsfield model id (default nano_banana_2); GenerationService routes the job
+    /// through the CLI because GenerationProvider.selected == .higgsfield.
+    private func generateImageHiggsfield(
+        _ editor: EditorViewModel, _ args: [String: Any], prompt: String
+    ) throws -> ToolResult {
+        let model = args.string("model") ?? HiggsfieldCatalog.shared.image.first?.id ?? "nano_banana_2"
+        let aspectRatio = args.string("aspectRatio") ?? "1:1"
+        let resolution = args.string("resolution")
+        let refs: [MediaAsset] = try args.stringArray("referenceMediaRefs").map { id in
+            let a = try asset(id, editor: editor, label: "Reference image")
+            guard a.type == .image else {
+                throw ToolError("referenceMediaRefs entry '\(id)' must be an image asset (got \(a.type.rawValue))")
+            }
+            return a
+        }
+        var genInput = GenerationInput(
+            prompt: prompt, model: model, duration: 0,
+            aspectRatio: aspectRatio, resolution: resolution
+        )
+        genInput.imageURLAssetIds = refs.isEmpty ? nil : refs.map(\.id)
+        let folderId = try resolveFolderId(args, editor: editor, fallbackReferences: refs)
+        let placeholderId = editor.generationService.generate(
+            genInput: genInput,
+            assetType: .image,
+            placeholderDuration: Defaults.imageDurationSeconds,
+            references: refs,
+            folderId: folderId,
+            buildParams: { uploaded in
+                .image(ImageGenerationParams(
+                    prompt: prompt, aspectRatio: aspectRatio, resolution: resolution,
+                    quality: nil, imageURLs: uploaded, numImages: 1))
+            },
+            fileExtension: "jpg",
+            projectURL: editor.projectURL,
+            editor: editor
+        )
+        return .ok("Higgsfield image generation started. Placeholder asset ID: \(placeholderId). Model: \(model), aspect: \(aspectRatio). Runs in the background via the higgsfield CLI; appears in get_media when ready.")
+    }
+
     func generateAudio(_ editor: EditorViewModel, _ args: [String: Any]) async throws -> ToolResult {
         guard AccountService.shared.isSignedIn else {
             throw ToolError("Generation requires signing in to Palmier. Tell the user to sign in.")
@@ -372,6 +417,9 @@ extension ToolExecutor {
 
     func listModels(_ args: [String: Any]) -> ToolResult {
         let filter = args.string("type")
+        if GenerationProvider.selected == .higgsfield {
+            return higgsfieldModelList(filter: filter)
+        }
         var out: [[String: Any]] = []
         if filter == nil || filter == "video" {
             out += VideoModelConfig.allModels.map { Self.videoModelInfo($0, includeType: true) }
@@ -392,6 +440,27 @@ extension ToolExecutor {
         guard let json = Self.jsonString(roundJSONFloatingPointNumbers(body, toPlaces: 3)) else {
             return .error("Failed to encode model list")
         }
+        return .ok(json)
+    }
+
+    /// Model list when the Higgsfield provider is active. v1: the agent generates images
+    /// via Higgsfield; pass `model` (default nano_banana_2) to generate_image.
+    private func higgsfieldModelList(filter: String?) -> ToolResult {
+        var models: [[String: Any]] = []
+        if filter == nil || filter == "image" {
+            let image = HiggsfieldCatalog.shared.image
+            if image.isEmpty {
+                models.append(["id": "nano_banana_2", "displayName": "Nano Banana 2", "type": "image"])
+            } else {
+                models += image.map { ["id": $0.id, "displayName": $0.displayName, "type": "image"] }
+            }
+        }
+        let body: [String: Any] = [
+            "provider": "higgsfield",
+            "models": models,
+            "note": "Higgsfield via the local CLI. The agent currently generates images only; pass 'model' to generate_image (default nano_banana_2). Video/audio generation uses the in-app panel.",
+        ]
+        guard let json = Self.jsonString(body) else { return .error("Failed to encode model list") }
         return .ok(json)
     }
 

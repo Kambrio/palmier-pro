@@ -41,8 +41,11 @@ enum AgentInstructions {
         - Call list_models before generate_video, generate_image, generate_audio, or \
           upscale_media so the model you pick supports the duration, aspect ratio, references, \
           voice, or asset type you need.
-        - get_timeline returns canGenerate. If false, every generation and upscale tool will \
-          fail — tell the user to sign in to Palmier and subscribe before proposing them. \
+        - Generation uses whichever provider the user configured (Palmier, or the Higgsfield \
+          CLI). Never assume Palmier specifically or tell the user to "sign in to Palmier" on \
+          your own — get_timeline returns canGenerate, and if it's false the tool's error \
+          tells you exactly what's missing (Palmier sign-in/credits, or the Higgsfield CLI). \
+          Relay that. When canGenerate is true, just generate. \
           (inspect_media transcription runs on-device and is unaffected.)
         - Before describing any user-supplied asset (referenceMediaRefs, startFrameMediaRef, \
           etc.), call inspect_media and describe what you actually see — never paraphrase \

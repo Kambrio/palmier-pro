@@ -21,6 +21,26 @@ enum GenerationProvider: String, CaseIterable, Sendable {
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
+
+    /// Whether the currently-selected provider can run a generation right now. Palmier
+    /// needs sign-in + credits; Higgsfield just needs its CLI installed (it uses the user's
+    /// own Higgsfield login — no Palmier subscription).
+    @MainActor static var canGenerate: Bool {
+        switch selected {
+        case .palmier: return AccountService.shared.isSignedIn && AccountService.shared.hasCredits
+        case .higgsfield: return HiggsfieldCLI.isAvailable
+        }
+    }
+
+    /// Actionable message when `canGenerate` is false, tailored to the selected provider.
+    @MainActor static var cannotGenerateReason: String {
+        switch selected {
+        case .palmier:
+            return "Generation needs a Palmier account with credits — tell the user to sign in to Palmier and subscribe, or switch the generation provider to Higgsfield in Settings → Models."
+        case .higgsfield:
+            return "The Higgsfield CLI isn't installed. Tell the user to install it (and run `higgsfield auth login`), or switch the generation provider to Palmier in Settings → Models."
+        }
+    }
 }
 
 /// Locates the higgsfield binary and reports login state.

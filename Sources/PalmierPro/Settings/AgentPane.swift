@@ -72,7 +72,7 @@ struct AgentPane: View {
                 .font(.system(size: AppTheme.FontSize.sm))
                 .foregroundStyle(AppTheme.Text.tertiaryColor)
             Picker("", selection: $cliModel) {
-                ForEach([AnthropicModel.haiku45, .sonnet46, .opus47], id: \.self) { m in
+                ForEach([AnthropicModel.haiku45, .sonnet46, .opus48], id: \.self) { m in
                     Text(m.displayName).tag(m)
                 }
             }

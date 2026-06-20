@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Window controller that handles keyboard shortcuts via the responder chain.
 /// Forwards actions to the EditorViewModel owned by VideoProject.
@@ -218,6 +219,30 @@ extension EditorWindowController: EditorActions {
 
     @objc func importMedia(_ sender: Any?) {
         // Handled by MediaTab directly
+    }
+
+    @objc func importTimeline(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "fcpxml") ?? .xml]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let summary = try FCPXMLImporter.importFile(at: url, into: editorViewModel)
+            Log.project.notice("fcpxml import: \(summary.text)")
+            if summary.clipsAdded == 0 {
+                presentImportError("No importable clips found in \(url.lastPathComponent).")
+            }
+        } catch {
+            presentImportError(error.localizedDescription)
+        }
+    }
+
+    private func presentImportError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Import Failed"
+        alert.informativeText = message
+        alert.runModal()
     }
 
     @objc func showExport(_ sender: Any?) {

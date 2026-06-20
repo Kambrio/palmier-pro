@@ -2,12 +2,41 @@
 
 AI-native macOS video editor. Swift 6.2, SwiftUI + AppKit, AVFoundation. macOS 26 only, arm64 only. Non-sandboxed Developer ID app.
 
-## Build
+## Build, run, test
 
 ```bash
 swift build
-swift run
+swift run                       # build + launch from SPM
+./scripts/dev.sh                # bundled debug .app, launched, streaming OSLog (subsystem io.palmier.pro)
+./scripts/dev.sh --no-stream    # launch without tailing logs
+swift test                                              # full suite (Swift Testing + XCTest)
+swift test --filter RippleEngineTests                   # one suite/type
+swift test --filter PalmierProTests.TimeFormattingTests # fully-qualified
 ```
+
+`scripts/bundle.sh` builds the `.app`; `scripts/release.sh` builds + notarizes for Developer ID distribution (Sparkle `appcast.xml`).
+
+## Architecture
+
+The whole editor revolves around one observable model and one shared command surface.
+
+- **`EditorViewModel`** (`Editor/ViewModel/`) is the central `@MainActor @Observable` state for an open project: the `Timeline`, `MediaManifest`, `GenerationLog`, selection, playhead, focus. It's huge by design and split across `EditorViewModel+*.swift` extensions (ClipMutations, Ripple, Keyframes, Tracks, Linking, MediaLibrary, AIEdit, …) — each editing capability is one extension file. Add new editing operations as a new extension, not inline.
+- **`Timeline` / `Track` / `Clip`** (`Models/Timeline.swift`) is the pure-value, `Codable` document model. Everything is frame-based (integer frames at `timeline.fps`), not seconds. Mutating `editorViewModel.timeline` bumps `timelineRenderRevision`, which drives re-render.
+- **`VideoProject: NSDocument`** (`Project/`) owns persistence. A `.palmier` project is a file *package* (directory): `project.json` (timeline), `media.json` (manifest), `generation-log.json`, `thumbnail.jpg`, and a `media/` dir — names in `Project` enum (`Utilities/Constants.swift`). Autosave-in-place; decode happens off-main, applied on main.
+- **`AppState.shared`** (`App/`) is the app-level singleton: holds `activeProject`, starts/stops the MCP service, switches Home ↔ Editor windows.
+
+**Agent + MCP share one executor.** `ToolExecutor` (`Agent/Tools/`) is the single implementation of every timeline operation an LLM can perform (addClips, ripple delete, setKeyframes, generate, captions, search…), again split across `ToolExecutor+*.swift`. Two front-ends call into it:
+  - **`MCPService` / `MCPHTTPServer`** expose it over HTTP at `127.0.0.1:19789/mcp` for external agents (Claude Code, Codex, Cursor). Enabled by default via UserDefaults.
+  - **In-app agent** (`Agent/Panel/`, `Agent/Clients/`) drives the same tools from the chat panel.
+  Tool schemas live in `ToolDefinitions.swift`; the model-facing prompt is `AgentInstructions.swift`. When you add a tool, wire it in `ToolName`/`execute`, define its schema, and it's available to both front-ends at once.
+
+**Local-CLI backends (no sign-in / no API key).** Selectable alternatives that shell out to locally-installed CLIs via the shared `CLILocator`/`CLIProcess` (`Utilities/`):
+  - **Chat** (`ChatBackend`): besides API key and Palmier sign-in, the **Claude Code CLI** backend (`Agent/Clients/ClaudeCLI/`) runs `claude -p … --output-format stream-json` with an inline Palmier `--mcp-config`, so the CLI itself drives MCP tools against the live editor (the app does *not* run `ToolExecutor` for this path). It defaults to Haiku, caps turns with `--max-turns`, never auto-retries, and runs one process per turn terminated on cancel/timeout. Picked in `Settings/AgentPane`.
+  - **Generation** (`GenerationProvider`): the **Higgsfield CLI** provider (`Generation/Higgsfield/`) replaces the Convex submit/upload/poll with `higgsfield generate create … --wait --json` (local refs auto-upload), then reuses the existing download/finalize path. Picked in `Settings/ModelsPane`.
+
+**Rendering/preview** (`Preview/`): `CompositionBuilder` turns the frame-based timeline into an `AVComposition` + Core Animation layers; `VideoEngine` plays it; text/Lottie/image clips are rendered to video by their generators. **Export** (`Export/`) reuses the composition path and also writes FCP `XMLExporter` and `.palmier` bundles.
+
+**Other subsystems:** `Generation/` (closed-source generative AI — Seedance/Kling/Nano Banana via `GenerationService`), `Search/` (on-device SigLIP2 visual search + transcript search, models under `models/`), `Transcription/` (captions/transcripts), `Account/` (Clerk + Convex auth, gates generative features).
 
 ## Code style
 

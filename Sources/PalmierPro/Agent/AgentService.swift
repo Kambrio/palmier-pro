@@ -412,6 +412,7 @@ final class AgentService {
                     break
                 }
             }
+            markCLIToolUsesSucceeded(assistantID: assistantID)
             dropEmptyAssistantTurn(id: assistantID)
         } catch is CancellationError {
             dropEmptyAssistantTurn(id: assistantID)
@@ -419,6 +420,22 @@ final class AgentService {
             dropEmptyAssistantTurn(id: assistantID)
             streamError = .upstream(error.localizedDescription)
         }
+    }
+
+    /// The CLI runs its own tool calls via MCP, so the app records no tool_results for the
+    /// tool_use markers it streams. Without results they'd be orphan-cancelled and render as
+    /// failures — record success results so a completed turn's tools show as done.
+    private func markCLIToolUsesSucceeded(assistantID: UUID) {
+        guard let idx = assistantMessageIndex(id: assistantID) else { return }
+        let toolUseIds: [String] = messages[idx].blocks.compactMap {
+            if case let .toolUse(id, _, _) = $0 { return id }
+            return nil
+        }
+        guard !toolUseIds.isEmpty else { return }
+        let results = toolUseIds.map {
+            AgentContentBlock.toolResult(toolUseId: $0, content: [.text("Done")], isError: false)
+        }
+        messages.append(AgentMessage(role: .user, blocks: results))
     }
 
     private func storeCLISessionId(_ sid: String) {

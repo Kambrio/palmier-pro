@@ -38,15 +38,32 @@ final class AgentService {
 
     var hasApiKey: Bool { !apiKey.isEmpty }
 
-    var canStream: Bool {
-        if hasApiKey { return true }
+    private static let claudeLocator = CLILocator(tool: "claude")
+    private var claudePath: String? { Self.claudeLocator.resolve(override: nil) }
+    var isClaudeCLIAvailable: Bool { claudePath != nil }
+
+    var availableBackends: Set<ChatBackend> {
+        var set: Set<ChatBackend> = []
+        if hasApiKey { set.insert(.apiKey) }
         let account = AccountService.shared
-        return account.isSignedIn && account.hasCredits
+        if account.isSignedIn && account.hasCredits { set.insert(.palmier) }
+        if isClaudeCLIAvailable { set.insert(.claudeCLI) }
+        return set
     }
 
+    var effectiveBackend: ChatBackend? {
+        ChatBackend.effective(selected: ChatBackend.selected, available: availableBackends)
+    }
+
+    var canStream: Bool { effectiveBackend != nil }
+
     var availableModels: [AnthropicModel] {
-        if hasApiKey { return AnthropicModel.allCases }
-        return AccountService.shared.isPaid ? [.sonnet46] : [.haiku45]
+        switch effectiveBackend {
+        case .apiKey: return AnthropicModel.allCases
+        case .claudeCLI: return [.haiku45, .sonnet46, .opus47]   // Haiku first = default
+        case .palmier: return AccountService.shared.isPaid ? [.sonnet46] : [.haiku45]
+        case .none: return [.sonnet46]
+        }
     }
 
     private func selectClient() -> (any AgentClient)? {
@@ -296,7 +313,7 @@ final class AgentService {
 
     func send(text: String, mentions: [AgentMention]) {
         guard canStream else {
-            streamError = .upstream("Sign in to a paid plan or add an Anthropic API key to start.")
+            streamError = .upstream("Sign in, add an Anthropic API key, or install the Claude Code CLI to start.")
             return
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -334,8 +351,87 @@ final class AgentService {
                 self?.syncMessagesIntoCurrentSession()
                 self?.onSessionsChanged?()
             }
-            await self?.runLoop()
+            if self?.effectiveBackend == .claudeCLI {
+                await self?.runCLITurn()
+            } else {
+                await self?.runLoop()
+            }
         }
+    }
+
+    /// CLI-backed turn: the `claude` CLI runs the whole agentic loop itself, calling
+    /// Palmier MCP tools that mutate the live editor. The app only streams its output —
+    /// it never executes tools for this path.
+    private func runCLITurn() async {
+        guard let claudePath else {
+            streamError = .upstream("Claude Code CLI not found. Install it or set its path in Settings.")
+            return
+        }
+
+        // Start the MCP server once if needed — never self-recurse / retry in a loop.
+        if !(AppState.shared.mcpService?.isRunning ?? false) {
+            AppState.shared.startMCPService()
+        }
+        guard AppState.shared.mcpService?.isRunning ?? false else {
+            streamError = .upstream("Enable the MCP server in Settings to use the Claude Code CLI backend.")
+            return
+        }
+
+        await PalmierMCPConfig.registerIfNeeded(claudePath: claudePath)
+
+        // The latest user message is what we send; the CLI keeps prior context via --resume.
+        guard let userText = messages.last(where: { $0.role == .user })
+            .flatMap(Self.plainText) else { return }
+
+        // The CLI bills the user's own Claude quota, so use the Haiku-defaulted CLI model
+        // preference — not the Sonnet/Opus model used by the API/Palmier backends.
+        let runner = ClaudeCLIRunner(
+            claudePath: claudePath,
+            model: ClaudeCLIModelPreference.value,
+            systemPrompt: AgentInstructions.serverInstructions
+        )
+        let resume = currentSessionId
+            .flatMap { id in sessions.first { $0.id == id }?.cliSessionId }
+
+        let assistant = AgentMessage(role: .assistant, blocks: [])
+        messages.append(assistant)
+        let assistantID = assistant.id
+
+        do {
+            let stream = runner.stream(userText: userText, resumeSessionId: resume) { [weak self] sid in
+                Task { @MainActor in self?.storeCLISessionId(sid) }
+            }
+            for try await event in stream {
+                try Task.checkCancellation()
+                switch event {
+                case .textDelta(let chunk):
+                    appendTextDelta(chunk, toAssistant: assistantID)
+                case .toolUseComplete(let id, let name, let inputJSON):
+                    appendToolUse(id: id, name: name, inputJSON: inputJSON, toAssistant: assistantID)
+                case .messageStop:
+                    break
+                }
+            }
+            dropEmptyAssistantTurn(id: assistantID)
+        } catch is CancellationError {
+            dropEmptyAssistantTurn(id: assistantID)
+        } catch {
+            dropEmptyAssistantTurn(id: assistantID)
+            streamError = .upstream(error.localizedDescription)
+        }
+    }
+
+    private func storeCLISessionId(_ sid: String) {
+        guard let id = currentSessionId,
+              let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[idx].cliSessionId = sid
+    }
+
+    private static func plainText(_ message: AgentMessage) -> String? {
+        for block in message.blocks {
+            if case let .text(s) = block, !s.isEmpty { return s }
+        }
+        return nil
     }
 
     private func runLoop() async {

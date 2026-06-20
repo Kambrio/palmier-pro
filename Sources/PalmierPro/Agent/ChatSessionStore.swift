@@ -6,16 +6,19 @@ struct ChatSession: Codable, Identifiable {
     var updatedAt: Date
     var messages: [AgentMessage]
     var isOpen: Bool
+    /// Claude CLI session id (when using the Claude Code CLI backend), for `--resume`.
+    var cliSessionId: String?
 
-    init(id: UUID = UUID(), title: String = "New chat", messages: [AgentMessage] = [], isOpen: Bool = true) {
+    init(id: UUID = UUID(), title: String = "New chat", messages: [AgentMessage] = [], isOpen: Bool = true, cliSessionId: String? = nil) {
         self.id = id
         self.title = title
         self.updatedAt = Date()
         self.messages = messages
         self.isOpen = isOpen
+        self.cliSessionId = cliSessionId
     }
 
-    private enum CodingKeys: String, CodingKey { case id, title, updatedAt, messages, isOpen }
+    private enum CodingKeys: String, CodingKey { case id, title, updatedAt, messages, isOpen, cliSessionId }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,6 +27,7 @@ struct ChatSession: Codable, Identifiable {
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
         self.messages = try c.decode([AgentMessage].self, forKey: .messages)
         self.isOpen = try c.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
+        self.cliSessionId = try c.decodeIfPresent(String.self, forKey: .cliSessionId)
     }
 }
 

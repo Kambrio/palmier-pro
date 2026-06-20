@@ -100,6 +100,9 @@ extension FCPXMLImporter {
         var summary = built.1
         summary.mediaImported = imported
         editor.timeline = built.0
+        // Assigning `timeline` only bumps the render revision; the preview composition is
+        // rebuilt by an explicit notify (like every other edit path), else Play has nothing.
+        editor.notifyTimelineChanged()
         return summary
     }
 

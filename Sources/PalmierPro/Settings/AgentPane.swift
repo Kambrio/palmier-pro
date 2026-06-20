@@ -7,16 +7,79 @@ struct AgentPane: View {
     @State private var maskedKey: String = ""
     @State private var draft: String = ""
     @FocusState private var isFocused: Bool
+    @State private var backend: ChatBackend = ChatBackend.selected
+    @State private var claudeFound: Bool = false
+    @State private var cliModel: AnthropicModel = ClaudeCLIModelPreference.value
 
     private let consoleURL = URL(string: "https://console.anthropic.com/settings/keys")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
+            backendSection
+            Divider().overlay(AppTheme.Border.subtleColor)
             apiKeySection
             Divider().overlay(AppTheme.Border.subtleColor)
             mcpSection
         }
         .onAppear(perform: refresh)
+    }
+
+    private var backendSection: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            Text("Chat Backend")
+                .font(.system(size: AppTheme.FontSize.md, weight: .medium))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+
+            Picker("", selection: $backend) {
+                ForEach(ChatBackend.allCases, id: \.self) { b in
+                    Text(b.displayName).tag(b)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .onChange(of: backend) { _, newValue in ChatBackend.selected = newValue }
+
+            if backend == .claudeCLI {
+                claudeCLIStatusRow
+                claudeCLIModelPicker
+            }
+        }
+    }
+
+    private var claudeCLIStatusRow: some View {
+        HStack(spacing: AppTheme.Spacing.sm) {
+            Circle()
+                .fill(claudeFound ? Color.green : AppTheme.Text.mutedColor)
+                .frame(width: 8, height: 8)
+            Text(claudeFound
+                 ? "claude found — uses your Claude Code subscription"
+                 : "claude not found on PATH")
+                .font(.system(size: AppTheme.FontSize.sm))
+                .foregroundStyle(AppTheme.Text.secondaryColor)
+            Spacer()
+        }
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.vertical, AppTheme.Spacing.smMd)
+        .background(RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
+            .fill(Color.black.opacity(AppTheme.Opacity.muted)))
+        .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
+            .strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.thin))
+    }
+
+    private var claudeCLIModelPicker: some View {
+        HStack(spacing: AppTheme.Spacing.sm) {
+            Text("Model")
+                .font(.system(size: AppTheme.FontSize.sm))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+            Picker("", selection: $cliModel) {
+                ForEach([AnthropicModel.haiku45, .sonnet46, .opus47], id: \.self) { m in
+                    Text(m.displayName).tag(m)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .onChange(of: cliModel) { _, newValue in ClaudeCLIModelPreference.value = newValue }
+        }
     }
 
     private var apiKeySection: some View {
@@ -111,6 +174,7 @@ struct AgentPane: View {
         let key = AnthropicKeychain.load() ?? ""
         hasKey = !key.isEmpty
         maskedKey = mask(key)
+        claudeFound = CLILocator(tool: "claude").resolve(override: nil) != nil
     }
 
     private func save() {

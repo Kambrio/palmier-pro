@@ -37,7 +37,10 @@ struct ClaudeCLIRunner {
             "--strict-mcp-config",
             "--allowedTools", PalmierMCPConfig.allowedTools,
             "--disallowedTools", PalmierMCPConfig.disallowedBuiltinTools,
-            "--append-system-prompt", systemPrompt,
+            // Replace (not append) Claude Code's default coding-assistant identity, and drop
+            // its dynamic repo/cwd sections, so the agent is purely the Palmier video editor.
+            "--system-prompt", systemPrompt,
+            "--exclude-dynamic-system-prompt-sections",
         ]
         if let resumeSessionId {
             args.append(contentsOf: ["--resume", resumeSessionId])

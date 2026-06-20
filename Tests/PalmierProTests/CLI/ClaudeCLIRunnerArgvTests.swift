@@ -41,6 +41,14 @@ struct ClaudeCLIRunnerArgvTests {
         #expect(!argv(resume: nil).contains("--resume"))
     }
 
+    @Test func replacesSystemPromptInsteadOfAppending() {
+        let a = argv()
+        // Replace Claude Code's coding-assistant identity, don't append to it.
+        #expect(adjacent(a, "--system-prompt", "sys"))
+        #expect(!a.contains("--append-system-prompt"))
+        #expect(a.contains("--exclude-dynamic-system-prompt-sections"))
+    }
+
     private func adjacent(_ argv: [String], _ flag: String, _ value: String) -> Bool {
         for i in argv.indices where argv[i] == flag {
             if i + 1 < argv.count && argv[i + 1] == value { return true }

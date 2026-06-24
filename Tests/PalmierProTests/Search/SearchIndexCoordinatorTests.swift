@@ -49,6 +49,6 @@ struct TranscriptGatingTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("no-\(UUID().uuidString).mov")
         FileManager.default.createFile(atPath: url.path, contents: Data("x".utf8))
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(!TranscriptCache.hasCachedOnDisk(for: url))
+        #expect(!TranscriptCache.hasCachedOnDisk(for: url, engineTag: "apple"))
     }
 }

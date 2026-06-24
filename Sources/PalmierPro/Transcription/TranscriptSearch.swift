@@ -9,13 +9,13 @@ enum TranscriptSearch {
         let text: String
     }
 
-    static func search(query: String, assets: [(id: String, url: URL)], limit: Int = 20) -> [Hit] {
+    static func search(query: String, assets: [(id: String, url: URL)], engineTag: String, limit: Int = 20) -> [Hit] {
         let terms = terms(in: query)
         guard !terms.isEmpty else { return [] }
 
         var hits: [Hit] = []
         for asset in assets {
-            guard let transcript = TranscriptCache.cachedOnDisk(for: asset.url) else { continue }
+            guard let transcript = TranscriptCache.cachedOnDisk(for: asset.url, engineTag: engineTag) else { continue }
             for segment in transcript.segments where matches(segment.text, terms: terms) {
                 hits.append(Hit(assetID: asset.id, start: segment.start, end: segment.end, text: segment.text))
                 if hits.count >= limit { return hits }

@@ -215,10 +215,11 @@ extension MediaTab {
             .filter { $0.type == .video || $0.type == .audio }
             .map { (id: $0.id, url: $0.url) }
         let coordinator = editor.searchIndex
+        let engineTag = TranscriptCache.currentEngineTag()
         momentSearchTask = Task {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            let spoken = TranscriptSearch.search(query: query, assets: assets)
+            let spoken = TranscriptSearch.search(query: query, assets: assets, engineTag: engineTag)
             let visual = await coordinator.search(query: query)
             guard !Task.isCancelled else { return }
             visualHits = visual

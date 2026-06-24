@@ -9,8 +9,24 @@ actor TranscriptCache {
     private var memory: [String: TranscriptionResult] = [:]
     private static let memoryMax = 4
 
-    func transcript(for url: URL, isVideo: Bool, range: ClosedRange<Double>?) async throws -> TranscriptionResult {
-        let key = Self.key(for: url)
+    /// Identifies which engine/model produced a cached transcript, so switching
+    /// engines never returns a stale cross-engine result.
+    @MainActor static func currentEngineTag() -> String {
+        switch WhisperModelManager.shared.engineMode {
+        case .alwaysApple: return "apple"
+        case .alwaysWhisper: return "whisper-\(WhisperModelManager.shared.activeModelId)"
+        case .automatic:
+            return WhisperModelManager.shared.activeModelAvailable
+                ? "auto-\(WhisperModelManager.shared.activeModelId)" : "auto-apple"
+        }
+    }
+
+    nonisolated static func cacheKeyComponent(engineTag: String) -> String {
+        SHA256.hash(data: Data(engineTag.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8).description
+    }
+
+    func transcript(for url: URL, isVideo: Bool, range: ClosedRange<Double>?, engineTag: String) async throws -> TranscriptionResult {
+        let key = Self.key(for: url, engineTag: engineTag)
         if let key, let full = cached(key) {
             return range.map { Self.filter(full, to: $0) } ?? full
         }
@@ -67,23 +83,23 @@ actor TranscriptCache {
         directory.appendingPathComponent("\(key).json")
     }
 
-    nonisolated static func hasCachedOnDisk(for url: URL) -> Bool {
-        guard let key = key(for: url) else { return false }
+    nonisolated static func hasCachedOnDisk(for url: URL, engineTag: String) -> Bool {
+        guard let key = key(for: url, engineTag: engineTag) else { return false }
         return FileManager.default.fileExists(atPath: diskURL(key).path)
     }
 
     /// Disk-only read
-    nonisolated static func cachedOnDisk(for url: URL) -> TranscriptionResult? {
-        guard let key = key(for: url),
+    nonisolated static func cachedOnDisk(for url: URL, engineTag: String) -> TranscriptionResult? {
+        guard let key = key(for: url, engineTag: engineTag),
               let data = try? Data(contentsOf: diskURL(key)) else { return nil }
         return try? JSONDecoder().decode(TranscriptionResult.self, from: data)
     }
 
-    private static func key(for url: URL) -> String? {
+    private static func key(for url: URL, engineTag: String) -> String? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = (attrs[.size] as? NSNumber)?.int64Value,
               let mtime = attrs[.modificationDate] as? Date else { return nil }
-        let identity = "\(url.path)|\(mtime.timeIntervalSince1970)|\(size)"
+        let identity = "\(url.path)|\(mtime.timeIntervalSince1970)|\(size)|\(engineTag)"
         return SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined().prefix(32).description
     }
 }

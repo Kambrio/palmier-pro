@@ -120,7 +120,8 @@ final class SearchIndexCoordinator {
     }
 
     private func needsTranscript(_ asset: MediaAsset) -> Bool {
-        Self.wantsTranscript(asset) && !TranscriptCache.hasCachedOnDisk(for: asset.url)
+        Self.wantsTranscript(asset)
+            && !TranscriptCache.hasCachedOnDisk(for: asset.url, engineTag: TranscriptCache.currentEngineTag())
     }
 
     /// Stops the worker and waits for the in-flight asset to actually stop.
@@ -185,12 +186,13 @@ final class SearchIndexCoordinator {
         }
         let url = asset.url
         let isVideo = asset.type == .video
+        let engineTag = TranscriptCache.currentEngineTag()
         let start = ContinuousClock.now
         do {
             async let transcriptDone: Void = {
                 if transcribe {
                     try await SearchIndexCoordinator.waitWhileExportActive()
-                    _ = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideo, range: nil)
+                    _ = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideo, range: nil, engineTag: engineTag)
                 }
             }()
             switch asset.type {

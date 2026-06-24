@@ -359,13 +359,14 @@ extension ToolExecutor {
         let wantsOverview = args.bool("overview") == true
         let requested = args.int("maxFrames") ?? Self.defaultReadVideoFrames
         let frameCount = max(1, min(requested, Self.readVideoMaxFrames))
+        let engineTag = TranscriptCache.currentEngineTag()
         async let visualTask = Self.extractVisual(
             url: url, name: asset.name, overview: wantsOverview,
             frameCount: frameCount, start: windowStart, end: windowEnd
         )
         async let transcriptTask: Result<TranscriptionResult, Error>? = {
             guard hasAudio else { return nil }
-            do { return .success(try await TranscriptCache.shared.transcript(for: url, isVideo: true, range: range)) }
+            do { return .success(try await TranscriptCache.shared.transcript(for: url, isVideo: true, range: range, engineTag: engineTag)) }
             catch { return .failure(error) }
         }()
 
@@ -480,8 +481,9 @@ extension ToolExecutor {
     private func readAudio(editor: EditorViewModel, asset: MediaAsset, args: [String: Any], mapping: (clip: Clip, fps: Int)? = nil) async throws -> ToolResult {
         let range = try Self.sourceRange(args, duration: asset.duration)
         let transcript: TranscriptionResult
+        let engineTag = TranscriptCache.currentEngineTag()
         do {
-            transcript = try await TranscriptCache.shared.transcript(for: asset.url, isVideo: false, range: range)
+            transcript = try await TranscriptCache.shared.transcript(for: asset.url, isVideo: false, range: range, engineTag: engineTag)
         } catch {
             throw ToolError("Transcription failed: \(error.localizedDescription)")
         }
@@ -573,8 +575,9 @@ extension ToolExecutor {
         // Transcribe each unique source once (cached); skip — don't fail — on per-asset errors.
         var transcripts: [URL: TranscriptionResult] = [:]
         var skipped: [[String: Any]] = []
+        let engineTag = TranscriptCache.currentEngineTag()
         for url in Set(frags.map(\.url)) {
-            do { transcripts[url] = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideoByURL[url] ?? true, range: nil) }
+            do { transcripts[url] = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideoByURL[url] ?? true, range: nil, engineTag: engineTag) }
             catch { skipped.append(["file": url.lastPathComponent, "reason": error.localizedDescription]) }
         }
 

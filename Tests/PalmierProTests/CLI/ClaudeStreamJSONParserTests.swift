@@ -56,4 +56,43 @@ struct ClaudeStreamJSONParserTests {
         let (evts, _) = events(["", "not json", "   "])
         #expect(evts.isEmpty)
     }
+
+    @Test func emitsToolResultForUserToolResult() {
+        let (evts, _) = events([
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}]}}"#
+        ])
+        guard case .toolResult(let id, let isError)? = evts.first else {
+            Issue.record("expected toolResult"); return
+        }
+        #expect(id == "t1")
+        #expect(isError == false)
+    }
+
+    @Test func emitsErrorToolResult() {
+        let (evts, _) = events([
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"boom","is_error":true}]}}"#
+        ])
+        guard case .toolResult(let id, let isError)? = evts.first else {
+            Issue.record("expected toolResult"); return
+        }
+        #expect(id == "t2")
+        #expect(isError == true)
+    }
+
+    @Test func toolResultDefaultsToSuccessWhenIsErrorMissing() {
+        let (evts, _) = events([
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","content":"ok"}]}}"#
+        ])
+        guard case .toolResult(_, let isError)? = evts.first else {
+            Issue.record("expected toolResult"); return
+        }
+        #expect(isError == false)
+    }
+
+    @Test func ignoresPlainUserTextMessage() {
+        let (evts, _) = events([
+            #"{"type":"user","message":{"content":"hello"}}"#
+        ])
+        #expect(evts.isEmpty)
+    }
 }

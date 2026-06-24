@@ -18,11 +18,28 @@ struct ClaudeStreamJSONParser {
         switch type {
         case "assistant":
             return assistantEvents(obj)
+        case "user":
+            return userEvents(obj)
         case "result":
             return [.messageStop(stopReason: .endTurn)]
         default:
             return []
         }
+    }
+
+    /// `user` messages carry the CLI's own tool_result blocks (the CLI runs its tools via
+    /// MCP). Surfacing them lets each tool_use flip to done/failed as its result streams,
+    /// instead of all spinning until the turn ends.
+    private func userEvents(_ obj: [String: Any]) -> [AnthropicStreamEvent] {
+        guard let message = obj["message"] as? [String: Any],
+              let content = message["content"] as? [[String: Any]] else { return [] }
+        var events: [AnthropicStreamEvent] = []
+        for block in content where block["type"] as? String == "tool_result" {
+            guard let id = block["tool_use_id"] as? String else { continue }
+            let isError = block["is_error"] as? Bool ?? false
+            events.append(.toolResult(toolUseId: id, isError: isError))
+        }
+        return events
     }
 
     private func assistantEvents(_ obj: [String: Any]) -> [AnthropicStreamEvent] {

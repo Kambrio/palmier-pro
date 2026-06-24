@@ -396,6 +396,9 @@ final class AgentService {
         let assistant = AgentMessage(role: .assistant, blocks: [])
         messages.append(assistant)
         let assistantID = assistant.id
+        // The CLI's tool_results stream into one trailing user message; tracked so each
+        // tool flips done/failed as its result arrives, not all at once at turn end.
+        var resultsMessageID: UUID?
 
         do {
             let stream = runner.stream(userText: userText, resumeSessionId: resume) { [weak self] sid in
@@ -408,34 +411,62 @@ final class AgentService {
                     appendTextDelta(chunk, toAssistant: assistantID)
                 case .toolUseComplete(let id, let name, let inputJSON):
                     appendToolUse(id: id, name: name, inputJSON: inputJSON, toAssistant: assistantID)
+                case .toolResult(let id, let isError):
+                    recordCLIToolResult(toolUseId: id, isError: isError, resultsMessageID: &resultsMessageID)
                 case .messageStop:
                     break
                 }
             }
-            markCLIToolUsesSucceeded(assistantID: assistantID)
+            resolveRemainingCLIToolUses(assistantID: assistantID, resultsMessageID: &resultsMessageID, isError: false)
             dropEmptyAssistantTurn(id: assistantID)
         } catch is CancellationError {
+            resolveRemainingCLIToolUses(assistantID: assistantID, resultsMessageID: &resultsMessageID, isError: true)
             dropEmptyAssistantTurn(id: assistantID)
         } catch {
+            resolveRemainingCLIToolUses(assistantID: assistantID, resultsMessageID: &resultsMessageID, isError: true)
             dropEmptyAssistantTurn(id: assistantID)
             streamError = .upstream(error.localizedDescription)
         }
     }
 
-    /// The CLI runs its own tool calls via MCP, so the app records no tool_results for the
-    /// tool_use markers it streams. Without results they'd be orphan-cancelled and render as
-    /// failures — record success results so a completed turn's tools show as done.
-    private func markCLIToolUsesSucceeded(assistantID: UUID) {
+    /// Records a CLI tool_result into a single trailing user message (created lazily),
+    /// so the matching tool_use card flips to done/failed the moment its result streams.
+    private func recordCLIToolResult(toolUseId: String, isError: Bool, resultsMessageID: inout UUID?) {
+        let block = AgentContentBlock.toolResult(
+            toolUseId: toolUseId, content: [.text(isError ? "Failed" : "Done")], isError: isError)
+        if let mid = resultsMessageID, let idx = messages.firstIndex(where: { $0.id == mid }) {
+            let already = messages[idx].blocks.contains {
+                if case let .toolResult(rid, _, _) = $0 { return rid == toolUseId }
+                return false
+            }
+            if !already { messages[idx].blocks.append(block) }
+        } else {
+            let msg = AgentMessage(role: .user, blocks: [block])
+            resultsMessageID = msg.id
+            messages.append(msg)
+        }
+    }
+
+    /// Fills in results for any tool_use markers the CLI didn't stream a result for, so none
+    /// are left orphan-spinning. Used on turn end: success → "Done", abnormal end → "Failed".
+    /// Tools that already got a streamed result keep it.
+    private func resolveRemainingCLIToolUses(assistantID: UUID, resultsMessageID: inout UUID?, isError: Bool) {
         guard let idx = assistantMessageIndex(id: assistantID) else { return }
         let toolUseIds: [String] = messages[idx].blocks.compactMap {
             if case let .toolUse(id, _, _) = $0 { return id }
             return nil
         }
         guard !toolUseIds.isEmpty else { return }
-        let results = toolUseIds.map {
-            AgentContentBlock.toolResult(toolUseId: $0, content: [.text("Done")], isError: false)
+        let resolved: Set<String> = {
+            guard let mid = resultsMessageID, let ridx = messages.firstIndex(where: { $0.id == mid }) else { return [] }
+            return Set(messages[ridx].blocks.compactMap {
+                if case let .toolResult(rid, _, _) = $0 { return rid }
+                return nil
+            })
+        }()
+        for id in toolUseIds where !resolved.contains(id) {
+            recordCLIToolResult(toolUseId: id, isError: isError, resultsMessageID: &resultsMessageID)
         }
-        messages.append(AgentMessage(role: .user, blocks: results))
     }
 
     private func storeCLISessionId(_ sid: String) {
@@ -483,6 +514,8 @@ final class AgentService {
                         appendTextDelta(chunk, toAssistant: assistantID)
                     case .toolUseComplete(let id, let name, let inputJSON):
                         appendToolUse(id: id, name: name, inputJSON: inputJSON, toAssistant: assistantID)
+                    case .toolResult:
+                        break   // API path records its own results after executing tools.
                     case .messageStop(let reason):
                         stopReason = reason
                     }

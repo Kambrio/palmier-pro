@@ -44,6 +44,9 @@ enum TranscriptionError: LocalizedError {
     case decodeFailed
     case audioExtractionFailed(String)
     case analysisFailed(String)
+    case whisperModelNotInstalled
+    case whisperLoadFailed(String)
+    case whisperTranscribeFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -57,6 +60,12 @@ enum TranscriptionError: LocalizedError {
             return "Audio extraction failed: \(reason)"
         case .analysisFailed(let reason):
             return "Transcription failed: \(reason)"
+        case .whisperModelNotInstalled:
+            return "No Whisper model downloaded — add one in Settings › Transcription."
+        case .whisperLoadFailed(let reason):
+            return "Could not load the Whisper model: \(reason)"
+        case .whisperTranscribeFailed(let reason):
+            return "Whisper transcription failed: \(reason)"
         }
     }
 }

@@ -106,7 +106,7 @@ enum Transcription {
             return result.offsetting(by: sourceRange.lowerBound)
         }
 
-        // Decode to 16 kHz mono PCM once; both backends consume this.
+        // `fileURL` may already be decoded PCM (from transcribeVideoAudio/range paths); re-decoding is cheap and acceptable.
         let pcmURL = try await extractAudioTrack(from: fileURL)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         return try await route(pcmURL: pcmURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale)

@@ -11,6 +11,7 @@ struct CaptionTab: View {
     @State private var censorProfanity = false
     @State private var locale: Locale?
     @State private var supportedLocales: [Locale] = []
+    @State private var appleCodes: Set<String> = []
     @State private var isGenerating = false
     @State private var note: String?
 
@@ -76,8 +77,9 @@ struct CaptionTab: View {
         .background(AppTheme.Background.surfaceColor)
         .task {
             guard supportedLocales.isEmpty else { return }
-            supportedLocales = (await Transcription.supportedLocales())
-                .sorted { languageName($0) < languageName($1) }
+            let langs = await Transcription.availableLanguages()
+            appleCodes = await Set(Transcription.supportedLocales().compactMap { $0.language.languageCode?.identifier })
+            supportedLocales = langs.sorted { languageName($0) < languageName($1) }
         }
         .onAppear { rememberSelectedClipTargets() }
         .onChange(of: editor.selectedClipIds) { _, _ in rememberSelectedClipTargets() }
@@ -96,7 +98,15 @@ struct CaptionTab: View {
                     if !supportedLocales.isEmpty {
                         Divider()
                         ForEach(supportedLocales, id: \.identifier) { loc in
-                            Button(languageName(loc)) { locale = loc }
+                            Button {
+                                locale = loc
+                            } label: {
+                                if Transcription.isWhisperOnly(loc, appleCodes: appleCodes) {
+                                    Text("\(languageName(loc))  ·  Whisper")
+                                } else {
+                                    Text(languageName(loc))
+                                }
+                            }
                         }
                     }
                 } label: { menuValueLabel(locale.map(languageName) ?? "Auto") }

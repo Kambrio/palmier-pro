@@ -19,7 +19,9 @@ enum WhisperModelCatalog {
         WhisperModel(id: "balanced", displayName: "Large v3 Turbo (compressed)", repo: "openai_whisper-large-v3-v20240930_626MB",
                      approxBytes: 630_000_000,   hint: "Balanced speed and accuracy"),
         WhisperModel(id: "turbo",    displayName: "Large v3 Turbo", repo: "openai_whisper-large-v3-v20240930",
-                     approxBytes: 1_500_000_000, hint: "Best accuracy (recommended)"),
+                     approxBytes: 1_500_000_000, hint: "Fast, best for plain text"),
+        WhisperModel(id: "large-v3", displayName: "Large v3", repo: "openai_whisper-large-v3",
+                     approxBytes: 3_100_000_000, hint: "Most accurate word timing (best for captions)"),
     ]
 
     static let defaultModelId = "turbo"

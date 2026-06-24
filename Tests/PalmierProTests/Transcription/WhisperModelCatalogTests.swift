@@ -2,10 +2,10 @@ import Testing
 @testable import PalmierPro
 
 struct WhisperModelCatalogTests {
-    @Test func hasThreeTiersWithUniqueIds() {
+    @Test func hasTiersWithUniqueIds() {
         let ids = WhisperModelCatalog.all.map(\.id)
-        #expect(ids.count == 3)
-        #expect(Set(ids).count == 3)
+        #expect(ids.count >= 3)
+        #expect(Set(ids).count == ids.count)
     }
 
     @Test func everyModelHasNonEmptyRepoAndName() {

@@ -361,7 +361,7 @@ enum ToolDefinitions {
             inputSchema: objectSchema(
                 properties: [
                     "clipIds": ["type": "array", "items": ["type": "string"], "description": "Optional. Audio/video clips to caption. Omit to auto-detect the primary spoken track."],
-                    "language": ["type": "string", "description": "Optional BCP-47 language of the speech (e.g. 'es', 'ja', 'en-GB'). Defaults to the system language — set this when the footage is in another language, or transcription will be garbage."],
+                    "language": ["type": "string", "description": "Optional BCP-47 language of the speech (e.g. 'es', 'ja', 'ru'). Defaults to the system language. Languages Apple doesn't support on-device (e.g. Russian) are transcribed with Whisper if a Whisper model is downloaded in Settings › Transcription; otherwise the tool errors asking the user to download one. Set this when the footage isn't in the system language."],
                     "fontName": ["type": "string", "description": "Optional font PostScript or family name (default 'Helvetica-Bold'). Falls back to bold system font if not found."],
                     "fontSize": ["type": "number", "description": "Optional font size in canvas points (default 48)."],
                     "color": ["type": "string", "description": "Optional hex '#RRGGBB' or '#RRGGBBAA' (default white)."],

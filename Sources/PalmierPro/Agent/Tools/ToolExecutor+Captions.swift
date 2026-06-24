@@ -19,10 +19,14 @@ extension ToolExecutor {
         var locale: Locale?
         if let lang = args.string("language") {
             let candidate = Locale(identifier: lang)
-            guard let match = Transcription.matchLocale(candidates: [candidate], supported: await Transcription.supportedLocales()) else {
-                throw ToolError("add_captions: on-device transcription does not support language '\(lang)'.")
+            let langCode = candidate.language.languageCode?.identifier
+            let appleLangs = await Transcription.supportedLocales()
+            let appleMatch = Transcription.matchLocale(candidates: [candidate], supported: appleLangs)
+            let whisperOK = langCode.map { WhisperModelCatalog.languages.contains($0) } ?? false
+            guard appleMatch != nil || whisperOK else {
+                throw ToolError("add_captions: language '\(lang)' is not supported by Apple on-device or Whisper.")
             }
-            locale = match
+            locale = appleMatch ?? candidate
         }
 
         var center = AppTheme.Caption.defaultCenter

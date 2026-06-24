@@ -4,6 +4,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case account
     case general
     case models
+    case transcription
     case agent
     case storage
 
@@ -14,6 +15,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .account: return "Account"
         case .general: return "General"
         case .models: return "Models"
+        case .transcription: return "Transcription"
         case .agent: return "Agent"
         case .storage: return "Storage"
         }
@@ -24,6 +26,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .account: return "person.circle"
         case .general: return "gearshape"
         case .models: return "square.stack.3d.up"
+        case .transcription: return "captions.bubble"
         case .agent: return "paperplane"
         case .storage: return "internaldrive"
         }
@@ -122,6 +125,8 @@ private struct SettingsDetail: View {
                         PrivacyPane()
                     case .models:
                         ModelsPane()
+                    case .transcription:
+                        TranscriptionPane()
                     case .agent:
                         AgentPane()
                     case .storage:

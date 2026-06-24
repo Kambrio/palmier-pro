@@ -58,6 +58,7 @@ actor WhisperKitRunner {
         let options = DecodingOptions(
             language: language,
             detectLanguage: language == nil,
+            skipSpecialTokens: true,
             wordTimestamps: true
         )
 

@@ -40,4 +40,30 @@ struct WhisperTranscriptMapperTests {
         let r = WhisperTranscriptMapper.map(sample(), requestedLanguage: nil)
         #expect(r.language == "ru")
     }
+
+    @Test func stripsWhisperSpecialAndTimestampTokens() {
+        let raw = RawTranscript(
+            detectedLanguage: "ru",
+            segments: [
+                RawSegment(
+                    text: "<|startoftranscript|><|ru|><|transcribe|><|0.00|> Привет мир<|15.80|>",
+                    start: 0.0, end: 15.8,
+                    words: [
+                        RawWord(text: "<|0.00|>Привет", start: 0.0, end: 0.7),
+                        RawWord(text: "мир<|15.80|>", start: 0.7, end: 15.8),
+                    ]
+                ),
+            ]
+        )
+        let r = WhisperTranscriptMapper.map(raw, requestedLanguage: nil)
+        #expect(r.segments.count == 1)
+        #expect(r.segments[0].text == "Привет мир")
+        #expect(r.text == "Привет мир")
+        #expect(r.words.map(\.text) == ["Привет", "мир"])
+    }
+
+    @Test func cleanedStripsTokensAndCollapsesSpace() {
+        #expect(WhisperTranscriptMapper.cleaned("<|0.00|>  hello  <|world|>") == "hello")
+        #expect(WhisperTranscriptMapper.cleaned("plain text") == "plain text")
+    }
 }

@@ -29,8 +29,20 @@ final class WhisperModelManager {
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("\(Log.subsystem)/WhisperModels", isDirectory: true)
 
+    /// WhisperKit downloads into `downloadBase/models/<repo-id>/<variant>` (HubApi.localRepoLocation +
+    /// WhisperKit.download appending the variant folder). We pass the model repo as the variant, so the
+    /// asset folder (where the `.mlmodelc` bundles live, and what must be the load `modelFolder`) is this.
+    static func variantFolder(base: URL, repo: String) -> URL {
+        base
+            .appendingPathComponent("models", isDirectory: true)
+            .appendingPathComponent("argmaxinc", isDirectory: true)
+            .appendingPathComponent("whisperkit-coreml", isDirectory: true)
+            .appendingPathComponent(repo, isDirectory: true)
+    }
+
+    /// Canonical asset folder for a model under the shared download base.
     static func folder(for model: WhisperModel) -> URL {
-        modelsDirectory.appendingPathComponent(model.repo, isDirectory: true)
+        variantFolder(base: modelsDirectory, repo: model.repo)
     }
 
     private init() {
@@ -50,7 +62,9 @@ final class WhisperModelManager {
     static func isDownloaded(_ model: WhisperModel) -> Bool {
         let folder = folder(for: model)
         guard let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return false }
-        return !contents.isEmpty
+        // WhisperKit loads MelSpectrogram/AudioEncoder/TextDecoder as `.mlmodelc` bundles from this folder;
+        // a non-empty dir (e.g. a stray `.cache`) is not enough — require an actual compiled model.
+        return contents.contains { $0.hasSuffix(".mlmodelc") }
     }
 
     /// True when the active model is downloaded and ready for the router.
@@ -62,14 +76,18 @@ final class WhisperModelManager {
     func download(_ model: WhisperModel) {
         guard downloadTasks[model.id] == nil else { return }
         states[model.id] = .downloading(0)
+        let base = Self.modelsDirectory
         let folder = Self.folder(for: model)
         downloadTasks[model.id] = Task { [weak self] in
             do {
-                _ = try await WhisperKitRunner.download(repo: model.repo, to: folder) { [weak self] p in
+                let returned = try await WhisperKitRunner.download(repo: model.repo, to: base) { [weak self] p in
                     guard let s = self else { return }
                     Task { @MainActor in
                         if case .downloading = s.states[model.id] { s.states[model.id] = .downloading(p) }
                     }
+                }
+                if returned.standardizedFileURL != folder.standardizedFileURL {
+                    Log.transcription.warning("Whisper download path \(returned.path) != expected \(folder.path)")
                 }
                 await MainActor.run {
                     self?.states[model.id] = Self.isDownloaded(model) ? .downloaded : .error("Download incomplete")

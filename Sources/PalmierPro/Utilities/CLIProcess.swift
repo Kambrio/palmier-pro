@@ -22,6 +22,10 @@ struct CLIProcess {
     let arguments: [String]
     var environment: [String: String]? = nil
     var timeout: TimeInterval = 600
+    /// When set, replaces the absolute `timeout` with an inactivity watchdog: the process is
+    /// killed only after this many seconds with NO stdout/stderr output. Right for streaming
+    /// agentic turns that legitimately run long while actively producing output.
+    var idleTimeout: TimeInterval? = nil
 
     /// Runs to completion and returns full stdout. Throws on non-zero exit or timeout.
     func runCapturing() async throws -> String {
@@ -43,16 +47,19 @@ struct CLIProcess {
             process.standardOutput = stdout
             process.standardError = stderr
 
+            let lastActivity = LockedTimestamp()
+
             let stderrData = LockedData()
             stderr.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
-                if !chunk.isEmpty { stderrData.append(chunk) }
+                if !chunk.isEmpty { lastActivity.touch(); stderrData.append(chunk) }
             }
 
             let lineBuffer = LockedData()
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 guard !chunk.isEmpty else { return }
+                lastActivity.touch()
                 lineBuffer.append(chunk)
                 lineBuffer.drainLines { continuation.yield($0) }
             }
@@ -80,11 +87,26 @@ struct CLIProcess {
                 return
             }
 
-            let deadline = DispatchTime.now() + timeout
-            DispatchQueue.global().asyncAfter(deadline: deadline) {
-                if process.isRunning {
-                    process.terminate()
-                    continuation.finish(throwing: CLIProcessError.timedOut)
+            if let idleTimeout {
+                // Inactivity watchdog: re-arm until the process has been silent for `idleTimeout`.
+                func checkIdle() {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + idleTimeout) {
+                        guard process.isRunning else { return }
+                        if lastActivity.secondsSinceLast() >= idleTimeout {
+                            process.terminate()
+                            continuation.finish(throwing: CLIProcessError.timedOut)
+                        } else {
+                            checkIdle()
+                        }
+                    }
+                }
+                checkIdle()
+            } else {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    if process.isRunning {
+                        process.terminate()
+                        continuation.finish(throwing: CLIProcessError.timedOut)
+                    }
                 }
             }
 
@@ -120,5 +142,16 @@ private final class LockedData: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard !data.isEmpty else { return nil }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Thread-safe monotonic timestamp for the inactivity watchdog.
+private final class LockedTimestamp: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = DispatchTime.now()
+    func touch() { lock.lock(); last = DispatchTime.now(); lock.unlock() }
+    func secondsSinceLast() -> Double {
+        lock.lock(); defer { lock.unlock() }
+        return Double(DispatchTime.now().uptimeNanoseconds &- last.uptimeNanoseconds) / 1_000_000_000
     }
 }

@@ -9,6 +9,11 @@ struct ClaudeCLIRunner {
     /// Hard cap on the CLI's internal agentic loop so one chat turn can't run away on
     /// the user's Claude quota.
     var maxTurns: Int = 30
+    /// An agentic turn streams output continuously and can legitimately run many minutes,
+    /// so it's bounded by inactivity (silence), not a wall-clock cap. The turn is killed only
+    /// after this long with no output — i.e. a genuinely hung CLI. `--max-turns` and user
+    /// cancellation bound the rest.
+    static let idleTimeoutSeconds: TimeInterval = 300
 
     /// CLI model alias for `--model`.
     static func alias(for model: AnthropicModel) -> String {
@@ -59,7 +64,9 @@ struct ClaudeCLIRunner {
             userText: userText, model: model, systemPrompt: systemPrompt,
             maxTurns: maxTurns, resumeSessionId: resumeSessionId)
 
-        let proc = CLIProcess(executable: claudePath, arguments: args)
+        var configured = CLIProcess(executable: claudePath, arguments: args)
+        configured.idleTimeout = Self.idleTimeoutSeconds
+        let proc = configured
 
         return AsyncThrowingStream { continuation in
             let task = Task {

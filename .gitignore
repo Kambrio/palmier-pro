@@ -34,3 +34,6 @@ models/*/.venv/
 models/*/build*/
 models/*/checkpoint*
 models/*/convert*.log
+
+# git worktrees for isolated implementation
+.worktrees/

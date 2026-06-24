@@ -1,7 +1,7 @@
 import Foundation
 
 struct WhisperModel: Identifiable, Sendable, Equatable {
-    let id: String          // stable, persisted ("small"/"medium"/"turbo")
+    let id: String          // stable, persisted ("small"/"balanced"/"turbo")
     let displayName: String
     let repo: String        // WhisperKit/HuggingFace repo variant
     let approxBytes: Int64
@@ -14,11 +14,11 @@ struct WhisperModel: Identifiable, Sendable, Equatable {
 
 enum WhisperModelCatalog {
     static let all: [WhisperModel] = [
-        WhisperModel(id: "small",  displayName: "Small",  repo: "openai_whisper-small",
-                     approxBytes: 500_000_000,  hint: "Fastest, lowest accuracy"),
-        WhisperModel(id: "medium", displayName: "Medium", repo: "openai_whisper-medium",
-                     approxBytes: 1_500_000_000, hint: "Balanced"),
-        WhisperModel(id: "turbo",  displayName: "Large v3 Turbo", repo: "openai_whisper-large-v3-turbo",
+        WhisperModel(id: "small",    displayName: "Small",          repo: "openai_whisper-small",
+                     approxBytes: 480_000_000,   hint: "Fastest, lower accuracy"),
+        WhisperModel(id: "balanced", displayName: "Large v3 Turbo (compressed)", repo: "openai_whisper-large-v3-v20240930_626MB",
+                     approxBytes: 630_000_000,   hint: "Balanced speed and accuracy"),
+        WhisperModel(id: "turbo",    displayName: "Large v3 Turbo", repo: "openai_whisper-large-v3-v20240930",
                      approxBytes: 1_500_000_000, hint: "Best accuracy (recommended)"),
     ]
 

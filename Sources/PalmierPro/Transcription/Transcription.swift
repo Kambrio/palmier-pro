@@ -106,106 +106,52 @@ enum Transcription {
             return result.offsetting(by: sourceRange.lowerBound)
         }
 
-        let supported = await SpeechTranscriber.supportedLocales
-        let locale: Locale
-        if let preferredLocale, let match = matchLocale(candidates: [preferredLocale], supported: supported) {
-            locale = match
-        } else if let auto = bestSupportedLocale(from: supported) {
-            locale = auto
-        } else {
-            throw TranscriptionError.unsupportedLocale((preferredLocale ?? Locale.current).identifier(.bcp47))
+        // Decode to 16 kHz mono PCM once; both backends consume this.
+        let pcmURL = try await extractAudioTrack(from: fileURL)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        return try await route(pcmURL: pcmURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale)
+    }
+
+    @MainActor
+    static func route(pcmURL: URL, censorProfanity: Bool, preferredLocale: Locale?) async throws -> TranscriptionResult {
+        let apple = AppleSpeechBackend()
+        let whisper = WhisperBackend()
+        let mode = WhisperModelManager.shared.engineMode
+        let whisperAvailable = WhisperModelManager.shared.activeModelAvailable
+
+        let requestedLang = preferredLocale?.language.languageCode?.identifier
+        var routingLang = requestedLang
+        if mode == .automatic, routingLang == nil, whisperAvailable {
+            routingLang = try? await whisper.detectLanguage(fileURL: pcmURL)
         }
-        Log.transcription.notice(
-            "transcribe locale=\(locale.identifier(.bcp47))",
-            telemetry: "Transcription started",
-            data: [
-                "locale": locale.identifier(.bcp47),
-                "censorProfanity": censorProfanity,
-                "hasPreferredLocale": preferredLocale != nil
-            ]
+
+        let appleLangs = await apple.supportedLanguages()
+        let appleSupports = routingLang.map { appleLangs.contains($0) } ?? !appleLangs.isEmpty
+
+        let choice = try TranscriptionRouter.decide(
+            mode: mode, appleSupportsLanguage: appleSupports, whisperModelAvailable: whisperAvailable
         )
 
-        let transcriber = SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: censorProfanity ? [.etiquetteReplacements] : [],
-            reportingOptions: [],
-            attributeOptions: [.audioTimeRange],
-        )
-
-        if let install = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            Log.transcription.notice(
-                "install model start locale=\(locale.identifier)",
-                telemetry: "Transcription model install started",
-                data: ["locale": locale.identifier(.bcp47)]
-            )
-            do {
-                try await install.downloadAndInstall()
-            } catch {
-                Log.transcription.warning(
-                    "install model failed locale=\(locale.identifier) error=\(error.localizedDescription)",
-                    telemetry: "Transcription model install failed",
-                    data: ["locale": locale.identifier(.bcp47), "error": error.localizedDescription]
-                )
-                throw TranscriptionError.modelInstallFailed(error.localizedDescription)
-            }
-            Log.transcription.notice(
-                "install model ok locale=\(locale.identifier)",
-                telemetry: "Transcription model install finished",
-                data: ["locale": locale.identifier(.bcp47)]
-            )
+        let routeLocale = routingLang.map { Locale(identifier: $0) } ?? preferredLocale
+        switch choice {
+        case .apple:   return try await apple.transcribe(fileURL: pcmURL, language: routeLocale, censorProfanity: censorProfanity)
+        case .whisper: return try await whisper.transcribe(fileURL: pcmURL, language: routeLocale, censorProfanity: censorProfanity)
         }
+    }
 
-        let audioFile: AVAudioFile
-        do {
-            audioFile = try AVAudioFile(forReading: fileURL)
-        } catch {
-            throw TranscriptionError.audioExtractionFailed(error.localizedDescription)
-        }
+    @MainActor
+    static func availableLanguages() async -> [Locale] {
+        let apple = await SpeechTranscriber.supportedLocales
+        let appleCodes = Set(apple.compactMap { $0.language.languageCode?.identifier })
+        let whisperOnly = WhisperModelCatalog.languages
+            .subtracting(appleCodes)
+            .map { Locale(identifier: $0) }
+        return apple + whisperOnly
+    }
 
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-
-        let resultsTask = Task { () throws -> [SpeechTranscriber.Result] in
-            var acc: [SpeechTranscriber.Result] = []
-            for try await result in transcriber.results { acc.append(result) }
-            return acc
-        }
-
-        Log.transcription.notice("analyze start file=\(fileURL.lastPathComponent)", telemetry: "Transcription analysis started")
-        do {
-            if let lastSampleTime = try await analyzer.analyzeSequence(from: audioFile) {
-                try await analyzer.finalizeAndFinish(through: lastSampleTime)
-            } else {
-                await analyzer.cancelAndFinishNow()
-            }
-        } catch {
-            resultsTask.cancel()
-            Log.transcription.warning(
-                "analyze failed error=\(error.localizedDescription)",
-                telemetry: "Transcription analysis failed",
-                data: ["error": error.localizedDescription]
-            )
-            throw TranscriptionError.analysisFailed(error.localizedDescription)
-        }
-
-        let collected: [SpeechTranscriber.Result]
-        do {
-            collected = try await resultsTask.value
-        } catch {
-            throw TranscriptionError.analysisFailed(error.localizedDescription)
-        }
-
-        let decoded = decodeResults(collected, locale: locale)
-        Log.transcription.notice(
-            "ok textChars=\(decoded.text.count) words=\(decoded.words.count) lang=\(decoded.language ?? "?")",
-            telemetry: "Transcription finished",
-            data: [
-                "textChars": decoded.text.count,
-                "words": decoded.words.count,
-                "segments": decoded.segments.count,
-                "language": decoded.language ?? "unknown"
-            ]
-        )
-        return decoded
+    static func isWhisperOnly(_ locale: Locale, appleCodes: Set<String>) -> Bool {
+        guard let code = locale.language.languageCode?.identifier else { return false }
+        return !appleCodes.contains(code) && WhisperModelCatalog.languages.contains(code)
     }
 
     /// Decode the asset's audio track to a PCM file with AVAssetReader
@@ -257,7 +203,7 @@ enum Transcription {
 
     /// Each `Result` is one endpointed segment; emit it as a TranscriptionSegment
     /// (text + time range) and walk its runs into per-token TranscriptionWords.
-    private static func decodeResults(
+    static func decodeAppleResults(
         _ results: [SpeechTranscriber.Result],
         locale: Locale,
     ) -> TranscriptionResult {

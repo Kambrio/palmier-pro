@@ -264,6 +264,7 @@ enum AppTheme {
         static let projectCardWidth: CGFloat = 150
         static let projectCardHeight: CGFloat = 120
         static let updateOverlayWidth: CGFloat = 640
+        static let downloadProgressWidth: CGFloat = 100
     }
 
     enum Window {

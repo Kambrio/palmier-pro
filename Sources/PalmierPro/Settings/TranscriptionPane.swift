@@ -73,7 +73,7 @@ struct TranscriptionPane: View {
             Button("Download") { manager.download(model) }
         case .downloading(let p):
             HStack(spacing: AppTheme.Spacing.xs) {
-                ProgressView(value: p).frame(width: 100)
+                ProgressView(value: p).frame(width: AppTheme.ComponentSize.downloadProgressWidth)
                 Button("Cancel") { manager.cancelDownload(model) }
             }
         case .downloaded:

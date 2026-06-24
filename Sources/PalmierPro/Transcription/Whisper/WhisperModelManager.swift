@@ -78,7 +78,7 @@ final class WhisperModelManager {
         states[model.id] = .downloading(0)
         let base = Self.modelsDirectory
         let folder = Self.folder(for: model)
-        downloadTasks[model.id] = Task { [weak self] in
+        let task = Task { [weak self] in
             do {
                 let returned = try await WhisperKitRunner.download(repo: model.repo, to: base) { [weak self] p in
                     guard let s = self else { return }
@@ -89,18 +89,21 @@ final class WhisperModelManager {
                 if returned.standardizedFileURL != folder.standardizedFileURL {
                     Log.transcription.warning("Whisper download path \(returned.path) != expected \(folder.path)")
                 }
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard !Task.isCancelled, self?.downloadTasks[model.id] != nil else { return }
                     self?.states[model.id] = Self.isDownloaded(model) ? .downloaded : .error("Download incomplete")
                     self?.downloadTasks[model.id] = nil
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard !Task.isCancelled, self?.downloadTasks[model.id] != nil else { return }
                     self?.states[model.id] = .error(error.localizedDescription)
                     self?.downloadTasks[model.id] = nil
                     try? FileManager.default.removeItem(at: folder)  // no silent partial models
                 }
             }
         }
+        downloadTasks[model.id] = task
     }
 
     func cancelDownload(_ model: WhisperModel) {

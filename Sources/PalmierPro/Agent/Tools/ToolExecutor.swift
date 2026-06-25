@@ -107,6 +107,7 @@ final class ToolExecutor {
         case .renameFolder:  return try renameFolder(editor, args)
         case .deleteMedia:   return try deleteMedia(editor, args)
         case .deleteFolder:  return try deleteFolder(editor, args)
+        case .setProjectSettings: return try setProjectSettings(editor, args)
         }
     }
 

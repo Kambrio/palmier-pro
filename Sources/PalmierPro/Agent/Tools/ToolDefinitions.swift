@@ -38,6 +38,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case renameFolder = "rename_folder"
     case deleteMedia = "delete_media"
     case deleteFolder = "delete_folder"
+    case setProjectSettings = "set_project_settings"
 }
 
 struct AgentTool: @unchecked Sendable {
@@ -579,7 +580,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .deleteMedia,
-            description: "Deletes media assets from the library. Any clips referencing them are removed from the timeline in the same undoable action.",
+            description: "Removes media assets from the project library — this is the 'unlink' / 'remove' operation. Source files on disk are NOT deleted; only the library reference and any clips using the asset are removed, in one undoable action. Use this to unlink imported or linked files (e.g. keep some, drop the rest).",
             inputSchema: objectSchema(
                 properties: [
                     "assetIds": [
@@ -721,6 +722,17 @@ enum ToolDefinitions {
                     "mediaRef": ["type": "string", "description": "Media asset id from get_media to measure RAW (no grade). Provide this or clipId."],
                     "atFrame": ["type": "integer", "description": "Optional project frame to sample a clip. Defaults to the clip's midpoint. Ignored for mediaRef."],
                     "reference": ["type": "string", "description": "Optional image/video asset id from get_media to compare against; returns its scopes + the subject−reference gap."],
+                ]
+            )
+        ),
+        AgentTool(
+            name: .setProjectSettings,
+            description: "Sets the project's canvas resolution and/or frame rate (the timeline settings in Project Settings). Pass any of width, height, fps — omitted fields keep their current value, so set width+height together to change resolution or aspect ratio (e.g. match the source clips instead of 16:9). Changing resolution refits auto-fitted clips to the new canvas; changing fps rescales all existing clip timing. Undoable. Read current values and source dimensions from get_timeline / inspect_media first.",
+            inputSchema: objectSchema(
+                properties: [
+                    "width": ["type": "integer", "description": "Canvas width in pixels. Even number, 16–8192. Omit to keep current."],
+                    "height": ["type": "integer", "description": "Canvas height in pixels. Even number, 16–8192. Omit to keep current."],
+                    "fps": ["type": "integer", "description": "Frames per second, 1–240. Changing this rescales all existing clip timing. Omit to keep current."],
                 ]
             )
         ),

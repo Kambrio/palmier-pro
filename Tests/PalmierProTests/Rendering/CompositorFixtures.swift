@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreMedia
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -91,6 +92,72 @@ enum CompositorFixtures {
         t.width = Int(size.width)
         t.height = Int(size.height)
         return t
+    }
+
+    /// Solid-gray H.264 `.mov` WITH a silent LPCM stereo audio track. Used to exercise
+    /// the multi-track transcode path (video-only fixtures hide reader-stall bugs).
+    static func makeSolidVideoWithAudio(width: Int, height: Int, seconds: Double) async throws -> URL {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("solidA-\(width)x\(height)-\(UUID().uuidString).mov")
+        var pb: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &pb) == kCVReturnSuccess,
+              let pixelBuffer = pb else { throw NSError(domain: "fixture", code: 2) }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        if let ptr = CVPixelBufferGetBaseAddress(pixelBuffer) { memset(ptr, 128, CVPixelBufferGetDataSize(pixelBuffer)) }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoIn, sourcePixelBufferAttributes: nil)
+        writer.add(videoIn)
+
+        let sampleRate = 44_100.0
+        let audioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 2, AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false,
+        ])
+        writer.add(audioIn)
+
+        guard writer.startWriting() else { throw NSError(domain: "fixture", code: 3) }
+        writer.startSession(atSourceTime: .zero)
+
+        let timescale: CMTimeScale = 600
+        let endValue = CMTimeValue(max(1, Double(timescale) * seconds - 1))
+        for time in [CMTime.zero, CMTime(value: endValue, timescale: timescale)] {
+            while !videoIn.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(10)) }
+            guard adaptor.append(pixelBuffer, withPresentationTime: time) else { throw NSError(domain: "fixture", code: 4) }
+        }
+        videoIn.markAsFinished()
+
+        let frames = Int(sampleRate * seconds)
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: sampleRate, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4,
+            mChannelsPerFrame: 2, mBitsPerChannel: 16, mReserved: 0)
+        var format: CMAudioFormatDescription?
+        CMAudioFormatDescriptionCreate(allocator: nil, asbd: &asbd, layoutSize: 0, layout: nil,
+            magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &format)
+        let dataSize = frames * 4
+        var block: CMBlockBuffer?
+        CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: dataSize,
+            blockAllocator: nil, customBlockSource: nil, offsetToData: 0, dataLength: dataSize,
+            flags: 0, blockBufferOut: &block)
+        CMBlockBufferFillDataBytes(with: 0, blockBuffer: block!, offsetIntoDestination: 0, dataLength: dataSize)
+        var audioSample: CMSampleBuffer?
+        CMAudioSampleBufferCreateReadyWithPacketDescriptions(allocator: nil, dataBuffer: block!,
+            formatDescription: format!, sampleCount: frames, presentationTimeStamp: .zero,
+            packetDescriptions: nil, sampleBufferOut: &audioSample)
+        while !audioIn.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(10)) }
+        guard audioIn.append(audioSample!) else { throw NSError(domain: "fixture", code: 6) }
+        audioIn.markAsFinished()
+
+        await writer.finishWriting()
+        guard writer.status == .completed else { throw NSError(domain: "fixture", code: 5) }
+        return url
     }
 
     /// Writes a short solid-gray H.264 `.mov` at the given dimensions and returns its URL.

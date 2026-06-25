@@ -49,15 +49,17 @@ enum ProxyService {
         )
         writer.add(writerVideo)
 
+        var audioReader: AVAssetReader?
         var readerAudio: AVAssetReaderTrackOutput?
         var writerAudio: AVAssetWriterInput?
         if let audioTrack = try await asset.loadTracks(withMediaType: .audio).first {
+            let ar = try AVAssetReader(asset: asset)
             let ra = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false,
                 AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false,
             ])
-            reader.add(ra); readerAudio = ra
+            ar.add(ra); audioReader = ar; readerAudio = ra
             let wa = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC, AVNumberOfChannelsKey: 2,
                 AVSampleRateKey: 44_100, AVEncoderBitRateKey: 128_000,
@@ -67,6 +69,9 @@ enum ProxyService {
         }
 
         guard reader.startReading() else { throw Failure(reason: reader.error?.localizedDescription ?? "reader failed") }
+        if let audioReader {
+            guard audioReader.startReading() else { throw Failure(reason: audioReader.error?.localizedDescription ?? "audio reader failed") }
+        }
         guard writer.startWriting() else { throw Failure(reason: writer.error?.localizedDescription ?? "writer failed") }
         writer.startSession(atSourceTime: .zero)
 
@@ -119,7 +124,7 @@ enum ProxyService {
             }
         }
 
-        if let readerAudio, let writerAudio {
+        if let audioReader, let readerAudio, let writerAudio {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                 let resumed = OSAllocatedUnfairLock(initialState: false)
                 @Sendable func finish(_ result: Result<Void, Error>) {
@@ -131,12 +136,13 @@ enum ProxyService {
                 writerAudio.requestMediaDataWhenReady(on: queue) {
                     while writerAudio.isReadyForMoreMediaData {
                         if Task.isCancelled {
+                            audioReader.cancelReading()
                             finish(.failure(CancellationError()))
                             return
                         }
                         guard let sample = readerAudio.copyNextSampleBuffer() else {
-                            if reader.status == .failed {
-                                finish(.failure(reader.error ?? Failure(reason: "reader failed")))
+                            if audioReader.status == .failed {
+                                finish(.failure(audioReader.error ?? Failure(reason: "audio reader failed")))
                             } else {
                                 writerAudio.markAsFinished()
                                 finish(.success(()))

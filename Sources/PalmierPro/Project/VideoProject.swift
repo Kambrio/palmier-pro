@@ -329,6 +329,11 @@ final class VideoProject: NSDocument {
                     .environment(editorViewModel)
             }
             .animation(.default, value: editorViewModel.mediaPrep)
+            .overlay(alignment: .bottomLeading) {
+                ProxyProgressHUD()
+                    .environment(editorViewModel)
+            }
+            .animation(.default, value: editorViewModel.proxyManager.isGenerating)
         let hostingController = NSHostingController(rootView: editorView.tint(AppTheme.Accent.primary))
 
         let window = NSWindow(contentViewController: hostingController)

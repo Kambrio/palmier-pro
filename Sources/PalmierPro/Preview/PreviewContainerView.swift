@@ -97,6 +97,37 @@ struct PreviewContainerView: View {
             if isTimeline {
                 settingsMenuButton(label: editor.previewQuality.badgeLabel, help: "Preview Quality — lower for faster playback (export is always full quality)") { qualityMenuItems }
             }
+            if isTimeline {
+                Menu {
+                    Toggle("Use Proxies", isOn: Binding(
+                        get: { editor.useProxies }, set: { editor.useProxies = $0 }))
+                    Menu("Proxy Resolution") {
+                        ForEach(ProxyResolution.allCases, id: \.self) { res in
+                            Button {
+                                editor.proxyResolution = res
+                            } label: {
+                                HStack {
+                                    Text(res.label)
+                                    Spacer()
+                                    if editor.proxyResolution == res { Image(systemName: "checkmark") }
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button(proxyActionLabel) { editor.proxyManager.createProxies() }
+                        .disabled(editor.proxyManager.isGenerating || editor.proxyManager.assetsNeedingProxies().isEmpty)
+                    Button(proxyDeleteLabel) { editor.proxyManager.deleteProxies() }
+                        .disabled(editor.proxyManager.proxyDiskUsage() == 0)
+                } label: {
+                    badgeLabel(editor.useProxies ? "Proxy" : "Src")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .hoverHighlight()
+                .help("Proxy media — edit lighter copies; export always uses source")
+            }
             settingsMenuButton(label: zoomBadgeLabel, help: "Canvas Zoom") { zoomMenuItems }
         }
         .padding(.horizontal, AppTheme.Spacing.lg)
@@ -164,6 +195,18 @@ struct PreviewContainerView: View {
                 }
             }
         }
+    }
+
+    private var proxyActionLabel: String {
+        let n = editor.proxyManager.assetsNeedingProxies().count
+        return n == 0 ? "Proxies Ready" : "Create Proxies (\(n))"
+    }
+
+    private var proxyDeleteLabel: String {
+        let bytes = editor.proxyManager.proxyDiskUsage()
+        guard bytes > 0 else { return "Delete Proxies" }
+        let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        return "Delete Proxies (\(size))"
     }
 
     private func qualityMenuLabel(_ quality: PreviewQuality) -> String {

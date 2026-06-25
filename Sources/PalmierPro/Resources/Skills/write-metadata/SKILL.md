@@ -60,3 +60,4 @@ State which target you're optimizing for, then write accordingly.
 - **Title / description / hashtags** are export-side metadata — deliver them as text for the user to paste, or write them into the project's export fields where supported.
 - **On-screen title text** (a title card that reuses the headline) → `add_texts`.
 - Pull the spoken content for keyword/description ideas with `get_transcript`.
+- **Save the metadata as a file** → `save_document(filename, content, format: "md")` so the user keeps the titles/descriptions/hashtags. It writes to the project's documents folder (`documents/` inside the .palmier project by default; configurable in Settings → Storage) and appears in the Library's **Documents** tab.

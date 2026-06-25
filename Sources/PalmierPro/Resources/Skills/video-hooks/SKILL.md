@@ -66,3 +66,4 @@ The final moments drive rewatches and shares (many platforms count each replay a
 ## Apply in Palmier
 - **On-screen hook text / captions / CTA overlays** → `add_texts` (place the hook text clip at frame 0; CTA near the end). Spoken subtitles → `add_captions`.
 - **Loop polish** → use `get_timeline` / `inspect_timeline` to compare the first and last frames for a match cut, and `set_clip_properties` to trim the tail so the loop lands near ~20–25s with no dead "video-over" beat.
+- **Save the hooks / CTAs as a file** → `save_document(filename, content, format: "md")`. It writes to the project's documents folder (`documents/` inside the .palmier project by default; configurable in Settings → Storage) and appears in the Library's **Documents** tab. Offer this when you produce a set of hooks the user may want to keep.

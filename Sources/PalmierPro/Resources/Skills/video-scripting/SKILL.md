@@ -87,3 +87,4 @@ Large, high-contrast, concise captions; emphasize key words; avoid the bottom ~1
 - **Captions** → `add_captions`.
 - **Build the spine** → arrange clips per the beat order using the timeline tools (`add_clips` / `move_clips` / `set_clip_properties`); verify with `inspect_timeline`.
 - **Set project format** → `set_project_settings` to match the target aspect ratio/resolution before exporting platform versions.
+- **Save the beat / chapter outline as a file** → `save_document(filename, content, format: "md")`. It writes to the project's documents folder (`documents/` inside the .palmier project by default; configurable in Settings → Storage) and shows in the Library's **Documents** tab. For a full caption/subtitle file from the current timeline, use `export_transcript(format: "srt")` (or `"md"`) instead.

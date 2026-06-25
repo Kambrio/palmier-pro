@@ -98,7 +98,8 @@ When the project is open in Palmier, the agent can place script output straight 
 - **Titles, lower-thirds, chapter cards, on-screen text** → `add_texts` (one call, multiple text clips; position via normalized coords).
 - **Spoken-line subtitles / captions** → `add_captions` (transcribes audio and places styled caption clips).
 - **Chapter cards** → one `add_texts` clip per chapter at the chapter's start frame.
-Draft the script first, confirm with the user, then offer to apply it.
+- **Save the script / hooks / fact sheet as a file** → `save_document(filename, content, format: "md")`. It writes to the project's documents folder (a `documents/` folder inside the .palmier project by default; the user can change the location in Settings → Storage) and the saved file appears in the Library's **Documents** tab. Pass the complete text as `content`. Offer to save after producing a full script or a batch.
+Draft the script first, confirm with the user, then offer to apply it onto the timeline and/or save it as a file.
 
 ## Process
 1. Ask: short-form (TikTok/Shorts/Reels) or long-form (YouTube)?

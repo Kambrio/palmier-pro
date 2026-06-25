@@ -120,6 +120,19 @@ final class EditorViewModel {
     }() {
         didSet { UserDefaults.standard.set(layoutPreset.rawValue, forKey: "layoutPreset") }
     }
+    var previewQuality: PreviewQuality = {
+        if let raw = UserDefaults.standard.string(forKey: "previewQuality"),
+           let quality = PreviewQuality(rawValue: raw) {
+            return quality
+        }
+        return .high
+    }() {
+        didSet {
+            guard previewQuality != oldValue else { return }
+            UserDefaults.standard.set(previewQuality.rawValue, forKey: "previewQuality")
+            videoEngine?.rebuild()
+        }
+    }
     // MARK: - Media library (in-memory, rebuilt on project open)
 
     var mediaAssets: [MediaAsset] = [] {

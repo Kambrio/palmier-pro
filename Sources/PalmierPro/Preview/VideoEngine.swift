@@ -34,19 +34,21 @@ final class VideoEngine {
         setupTimeObserver()
     }
 
-    /// Preview composites at a capped resolution. A 6K canvas otherwise forces the
-    /// player to render full-canvas frames only to scale them down to the (far smaller)
-    /// preview pane — wasted decode + composite proportional to (canvas/pane)². Export
-    /// keeps the full canvas (see `TimelineRenderer`). Geometry is renderSize-independent
-    /// (stored transforms are source-space; the compositor scales per instruction), so
-    /// capping only lowers preview resolution, never changes layout.
-    static let previewMaxLongSide = 2560
-
+    /// Preview composites at the resolution chosen by `editor.previewQuality`. A 6K
+    /// canvas otherwise forces the player to render full-canvas frames only to scale
+    /// them down to the (far smaller) preview pane — wasted decode + composite
+    /// proportional to (canvas/pane)². Export keeps the full canvas (see
+    /// `TimelineRenderer`). Geometry is renderSize-independent (stored transforms are
+    /// source-space; the compositor scales per instruction), so capping only lowers
+    /// preview resolution, never changes layout.
     private var previewRenderSize: CGSize {
         guard let editor else { return .zero }
         let w = editor.timeline.width, h = editor.timeline.height
         guard w > 0, h > 0 else { return CGSize(width: w, height: h) }
-        let scale = min(1.0, Double(Self.previewMaxLongSide) / Double(max(w, h)))
+        guard let cap = editor.previewQuality.longSideCap else {
+            return CGSize(width: w, height: h)   // Full: render at canvas resolution.
+        }
+        let scale = min(1.0, Double(cap) / Double(max(w, h)))
         func even(_ v: Double) -> Int { let i = Int(v.rounded()); return i - (i % 2) }
         return CGSize(width: even(Double(w) * scale), height: even(Double(h) * scale))
     }

@@ -94,6 +94,9 @@ struct PreviewContainerView: View {
             if isTimeline || editor.activePreviewTab.clipType == .video {
                 captureFrameButton
             }
+            if isTimeline {
+                settingsMenuButton(label: editor.previewQuality.badgeLabel, help: "Preview Quality — lower for faster playback (export is always full quality)") { qualityMenuItems }
+            }
             settingsMenuButton(label: zoomBadgeLabel, help: "Canvas Zoom") { zoomMenuItems }
         }
         .padding(.horizontal, AppTheme.Spacing.lg)
@@ -139,6 +142,23 @@ struct PreviewContainerView: View {
                     Text(preset.label)
                     Spacer()
                     if isZoomPresetActive(preset) {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var qualityMenuItems: some View {
+        ForEach(PreviewQuality.allCases, id: \.self) { quality in
+            Button {
+                editor.previewQuality = quality
+            } label: {
+                HStack {
+                    Text(quality.menuLabel)
+                    Spacer()
+                    if editor.previewQuality == quality {
                         Image(systemName: "checkmark")
                     }
                 }

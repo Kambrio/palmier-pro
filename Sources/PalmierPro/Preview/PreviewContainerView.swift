@@ -156,7 +156,7 @@ struct PreviewContainerView: View {
                 editor.previewQuality = quality
             } label: {
                 HStack {
-                    Text(quality.menuLabel)
+                    Text(qualityMenuLabel(quality))
                     Spacer()
                     if editor.previewQuality == quality {
                         Image(systemName: "checkmark")
@@ -164,6 +164,13 @@ struct PreviewContainerView: View {
                 }
             }
         }
+    }
+
+    private func qualityMenuLabel(_ quality: PreviewQuality) -> String {
+        guard quality == .adaptive else { return quality.menuLabel }
+        let canvas = CGSize(width: editor.timeline.width, height: editor.timeline.height)
+        let size = quality.renderSize(canvas: canvas, adaptivePixelSize: editor.previewPixelSize)
+        return "Adaptive (\(Int(size.width))×\(Int(size.height)))"
     }
 
     private var zoomBadgeLabel: String {

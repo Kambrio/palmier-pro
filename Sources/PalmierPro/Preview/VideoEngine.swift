@@ -43,19 +43,28 @@ final class VideoEngine {
     /// preview resolution, never changes layout.
     private var previewRenderSize: CGSize {
         guard let editor else { return .zero }
-        let w = editor.timeline.width, h = editor.timeline.height
-        guard w > 0, h > 0 else { return CGSize(width: w, height: h) }
-        guard let cap = editor.previewQuality.longSideCap else {
-            return CGSize(width: w, height: h)   // Full: render at canvas resolution.
+        let canvas = CGSize(width: editor.timeline.width, height: editor.timeline.height)
+        return editor.previewQuality.renderSize(canvas: canvas, adaptivePixelSize: editor.previewPixelSize)
+    }
+
+    /// Coalesce the rapid preview-rect changes during a window resize into one
+    /// rebuild once it settles, so `.adaptive` re-renders at the new size without
+    /// thrashing the composition mid-drag.
+    private var adaptiveRebuildTask: Task<Void, Never>?
+    func scheduleAdaptiveRebuild() {
+        adaptiveRebuildTask?.cancel()
+        adaptiveRebuildTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.rebuild()
         }
-        let scale = min(1.0, Double(cap) / Double(max(w, h)))
-        func even(_ v: Double) -> Int { let i = Int(v.rounded()); return i - (i % 2) }
-        return CGSize(width: even(Double(w) * scale), height: even(Double(h) * scale))
     }
 
     func teardown() {
         rebuildTask?.cancel()
         rebuildTask = nil
+        adaptiveRebuildTask?.cancel()
+        adaptiveRebuildTask = nil
         invalidateSeekState()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         timeObserver = nil

@@ -125,12 +125,20 @@ final class EditorViewModel {
            let quality = PreviewQuality(rawValue: raw) {
             return quality
         }
-        return .high
+        return .adaptive
     }() {
         didSet {
             guard previewQuality != oldValue else { return }
             UserDefaults.standard.set(previewQuality.rawValue, forKey: "previewQuality")
             videoEngine?.rebuild()
+        }
+    }
+    /// Device-pixel size of the on-screen preview rectangle, reported by the preview
+    /// view. Drives `.adaptive` preview resolution; rebuilds (debounced) on resize.
+    var previewPixelSize: CGSize = .zero {
+        didSet {
+            guard previewPixelSize != oldValue else { return }
+            if previewQuality == .adaptive { videoEngine?.scheduleAdaptiveRebuild() }
         }
     }
     // MARK: - Media library (in-memory, rebuilt on project open)

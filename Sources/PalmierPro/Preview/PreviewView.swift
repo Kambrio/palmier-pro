@@ -10,7 +10,11 @@ struct PreviewView: NSViewRepresentable {
         view.playerLayer.player = engine.player
         engine.previewView = view
         view.setTextRoot(engine.textController.textRoot)
-        view.onVideoRectChange = { [weak engine] _ in engine?.syncTextLayers() }
+        view.onVideoRectChange = { [weak engine, weak editor, weak view] rect in
+            engine?.syncTextLayers()
+            guard let editor, let view else { return }
+            editor.previewPixelSize = view.convertToBacking(rect).size
+        }
         view.onCmdScroll = { [weak editor] deltaY, pointTopDown, viewSize in
             guard let editor = editor else { return }
             let oldZoom = editor.canvasZoom

@@ -92,4 +92,54 @@ enum CompositorFixtures {
         t.height = Int(size.height)
         return t
     }
+
+    /// Writes a short solid-gray H.264 `.mov` at the given dimensions and returns its URL.
+    static func makeSolidVideo(width: Int, height: Int, seconds: Double) async throws -> URL {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("solid-\(width)x\(height)-\(UUID().uuidString).mov")
+
+        let attrs: [String: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+        ]
+        var pb: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA,
+                                  attrs as CFDictionary, &pb) == kCVReturnSuccess,
+              let pixelBuffer = pb else {
+            throw NSError(domain: "fixture", code: 2)
+        }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        if let ptr = CVPixelBufferGetBaseAddress(pixelBuffer) {
+            memset(ptr, 128, CVPixelBufferGetDataSize(pixelBuffer))
+        }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input, sourcePixelBufferAttributes: nil)
+        writer.add(input)
+        guard writer.startWriting() else { throw NSError(domain: "fixture", code: 3) }
+        writer.startSession(atSourceTime: .zero)
+
+        let timescale: CMTimeScale = 600
+        let endValue = CMTimeValue(max(1, Double(timescale) * seconds - 1))
+        for time in [CMTime.zero, CMTime(value: endValue, timescale: timescale)] {
+            while !adaptor.assetWriterInput.isReadyForMoreMediaData {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            guard adaptor.append(pixelBuffer, withPresentationTime: time) else {
+                throw NSError(domain: "fixture", code: 4)
+            }
+        }
+
+        input.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else { throw NSError(domain: "fixture", code: 5) }
+        return url
+    }
 }

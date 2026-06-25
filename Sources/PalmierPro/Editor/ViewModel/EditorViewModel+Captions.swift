@@ -162,7 +162,8 @@ extension EditorViewModel {
         captionJob?.total = distinct.count
         for t in targets where results[t.clip.mediaRef] == nil {
             try Task.checkCancellation()
-            captionJob?.label = "Transcribing clip \((captionJob?.completed ?? 0) + 1) of \(distinct.count)"
+            let done = captionJob?.completed ?? 0
+            captionJob?.label = "Transcribing clip \(done + 1) of \(distinct.count)"
             do {
                 guard let url = mediaResolver.resolveURL(for: t.clip.mediaRef) else { captionJob?.completed += 1; continue }
                 let range = visibleSourceUnion(for: t.clip.mediaRef, in: targets)

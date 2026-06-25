@@ -83,26 +83,34 @@ enum ProxyService {
         let scaleX = target.width / absSize.width
         let scaleY = target.height / absSize.height
 
+        // Drain video and audio CONCURRENTLY. AVAssetWriter throttles one input when the
+        // other lags (to keep tracks aligned), so feeding all video before any audio
+        // deadlocks the video input a frame in. Resume when both inputs finish, or on
+        // first error.
         let frames = OSAllocatedUnfairLock(initialState: 0)
+        let hasAudio = audioReader != nil && readerAudio != nil && writerAudio != nil
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let resumed = OSAllocatedUnfairLock(initialState: false)
-            @Sendable func finish(_ result: Result<Void, Error>) {
-                let already = resumed.withLock { done -> Bool in defer { done = true }; return done }
-                guard !already else { return }
-                cont.resume(with: result)
+            let state = OSAllocatedUnfairLock(initialState: (done: false, remaining: hasAudio ? 2 : 1))
+            @Sendable func isDone() -> Bool { state.withLock { $0.done } }
+            @Sendable func fail(_ error: Error) {
+                let resume = state.withLock { s -> Bool in if s.done { return false }; s.done = true; return true }
+                if resume { cont.resume(throwing: error) }
             }
-            let queue = DispatchQueue(label: "io.palmier.proxy.video")
-            writerVideo.requestMediaDataWhenReady(on: queue) {
+            @Sendable func finishedOne() {
+                let resume = state.withLock { s -> Bool in
+                    if s.done { return false }
+                    s.remaining -= 1
+                    if s.remaining == 0 { s.done = true; return true }
+                    return false
+                }
+                if resume { cont.resume(returning: ()) }
+            }
+
+            writerVideo.requestMediaDataWhenReady(on: DispatchQueue(label: "io.palmier.proxy.video")) {
                 while writerVideo.isReadyForMoreMediaData {
-                    if Task.isCancelled {
-                        reader.cancelReading()
-                        writer.cancelWriting()
-                        finish(.failure(CancellationError()))
-                        return
-                    }
-                    // Drain per frame: a tiny ProRes output never back-pressures, so this
-                    // block loops without returning; without the pool each ~100 MB 6K
-                    // decoded buffer is held until the decoder's pool starves and stalls.
+                    if isDone() { return }
+                    if Task.isCancelled { fail(CancellationError()); return }
+                    // autoreleasepool: each iteration holds a ~100 MB 6K decoded buffer.
                     let outcome: FrameOutcome = autoreleasepool {
                         guard let sample = readerVideo.copyNextSampleBuffer(),
                               let src = CMSampleBufferGetImageBuffer(sample) else {
@@ -124,48 +132,29 @@ enum ProxyService {
                     }
                     switch outcome {
                     case .keepGoing: continue
-                    case .finished: writerVideo.markAsFinished(); finish(.success(())); return
-                    case .readerFailed: finish(.failure(reader.error ?? Failure(reason: "reader failed"))); return
-                    case .appendFailed: finish(.failure(writer.error ?? Failure(reason: "writer append failed"))); return
+                    case .finished: writerVideo.markAsFinished(); finishedOne(); return
+                    case .readerFailed: fail(reader.error ?? Failure(reason: "reader failed")); return
+                    case .appendFailed: fail(writer.error ?? Failure(reason: "writer append failed")); return
                     }
                 }
             }
-        }
-        Log.proxy.notice("tx video pass done frames=\(frames.withLock { $0 })")
 
-        if let audioReader, let readerAudio, let writerAudio {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                let resumed = OSAllocatedUnfairLock(initialState: false)
-                @Sendable func finish(_ result: Result<Void, Error>) {
-                    let already = resumed.withLock { done -> Bool in defer { done = true }; return done }
-                    guard !already else { return }
-                    cont.resume(with: result)
-                }
-                let queue = DispatchQueue(label: "io.palmier.proxy.audio")
-                writerAudio.requestMediaDataWhenReady(on: queue) {
-                    while writerAudio.isReadyForMoreMediaData {
-                        if Task.isCancelled {
-                            audioReader.cancelReading()
-                            finish(.failure(CancellationError()))
+            if let aReader = audioReader, let aOut = readerAudio, let aIn = writerAudio {
+                aIn.requestMediaDataWhenReady(on: DispatchQueue(label: "io.palmier.proxy.audio")) {
+                    while aIn.isReadyForMoreMediaData {
+                        if isDone() { return }
+                        if Task.isCancelled { fail(CancellationError()); return }
+                        guard let sample = aOut.copyNextSampleBuffer() else {
+                            if aReader.status == .failed { fail(aReader.error ?? Failure(reason: "audio reader failed")) }
+                            else { aIn.markAsFinished(); finishedOne() }
                             return
                         }
-                        guard let sample = readerAudio.copyNextSampleBuffer() else {
-                            if audioReader.status == .failed {
-                                finish(.failure(audioReader.error ?? Failure(reason: "audio reader failed")))
-                            } else {
-                                writerAudio.markAsFinished()
-                                finish(.success(()))
-                            }
-                            return
-                        }
-                        if !writerAudio.append(sample) {
-                            finish(.failure(writer.error ?? Failure(reason: "writer append failed")))
-                            return
-                        }
+                        if !aIn.append(sample) { fail(writer.error ?? Failure(reason: "audio append failed")); return }
                     }
                 }
             }
         }
+        Log.proxy.notice("tx av pass done frames=\(frames.withLock { $0 })")
 
         Log.proxy.notice("tx finishing")
         await writer.finishWriting()

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 @MainActor
 @Observable
@@ -60,6 +61,7 @@ final class ProxyManager {
         let resolution = editor.mediaManifest.proxyResolution
 
         isGenerating = true; completed = 0; total = targets.count
+        Log.proxy.notice("createProxies begin total=\(targets.count) res=\(resolution.label) dir=\(dir.path)")
         job = Task { [weak self] in
             guard let self else { return }
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -81,12 +83,19 @@ final class ProxyManager {
         asset.proxyState = .generating(0)
         let out = dir.appendingPathComponent("\(asset.id).mov")
         let rel = "\(Project.mediaDirectoryName)/\(Project.proxiesDirname)/\(asset.id).mov"
+        Log.proxy.notice("proxy start id=\(asset.id.prefix(8)) src=\(asset.url.lastPathComponent)")
         do {
+            // Throttle to integer-percent changes; otherwise every decoded frame hops the main actor.
+            let lastPct = OSAllocatedUnfairLock(initialState: -1)
             try await ProxyService.transcode(source: asset.url, to: out, resolution: resolution) { p in
+                let pct = Int(p * 100)
+                let changed = lastPct.withLock { v -> Bool in if v == pct { return false }; v = pct; return true }
+                guard changed else { return }
                 Task { @MainActor in asset.proxyState = .generating(p) }
             }
             let sig = ProxySignature.of(asset.url)
             asset.proxyState = .ready
+            Log.proxy.notice("proxy ok id=\(asset.id.prefix(8))")
             if let i = editor.mediaManifest.entries.firstIndex(where: { $0.id == asset.id }) {
                 editor.mediaManifest.entries[i].proxyPath = rel
                 editor.mediaManifest.entries[i].proxySourceSig = sig
@@ -94,8 +103,12 @@ final class ProxyManager {
             editor.onPersistentStateChanged?()
             completed += 1
             if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
+        } catch is CancellationError {
+            asset.proxyState = .none
+            completed += 1
         } catch {
-            asset.proxyState = error is CancellationError ? .none : .failed(error.localizedDescription)
+            Log.proxy.error("proxy failed id=\(asset.id.prefix(8)): \(Log.detail(error))")
+            asset.proxyState = .failed(error.localizedDescription)
             completed += 1
         }
     }

@@ -365,6 +365,7 @@ final class VideoProject: NSDocument {
             editorViewModel.mediaManifest = manifest
             loadedManifest = nil
             restoreAssetsFromManifest()
+            editorViewModel.refreshProxyBackedRefs()
         }
         if let log = loadedGenerationLog {
             editorViewModel.generationLog = log

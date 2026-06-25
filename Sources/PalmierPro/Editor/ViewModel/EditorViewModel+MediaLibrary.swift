@@ -391,7 +391,8 @@ extension EditorViewModel {
 
     /// missing on disk or present-but-unloadable (no permission, ejected volume)
     func isMediaOffline(_ mediaRef: String) -> Bool {
-        offlineMediaRefs.contains(mediaRef)
+        if mediaManifest.useProxies && proxyBackedMediaRefs.contains(mediaRef) { return false }
+        return offlineMediaRefs.contains(mediaRef)
             || unprocessableMediaRefs.contains(mediaRef)
             || missingMediaRefs.contains(mediaRef)
     }

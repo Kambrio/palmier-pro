@@ -152,6 +152,14 @@ final class EditorViewModel {
     var offlineMediaRefs: Set<String> = []
     var unprocessableMediaRefs: Set<String> = []
     var missingMediaRefs: Set<String> = []
+    /// Asset ids that have a proxy on disk. When `useProxies` is on, a proxy-backed clip
+    /// is playable even if its source is offline, so it isn't treated as offline.
+    var proxyBackedMediaRefs: Set<String> = []
+
+    /// Rebuild `proxyBackedMediaRefs` from the manifest's recorded proxy paths.
+    func refreshProxyBackedRefs() {
+        proxyBackedMediaRefs = Set(mediaManifest.entries.compactMap { $0.proxyPath != nil ? $0.id : nil })
+    }
     @ObservationIgnored var missingMediaRefreshTask: Task<Void, Never>?
     let mediaVisualCache = MediaVisualCache()
     let searchIndex = SearchIndexCoordinator()

@@ -67,6 +67,7 @@ final class ProxyManager {
             editor.mediaManifest.entries[i].proxySourceSig = nil
         }
         for asset in editor.mediaAssets where asset.proxyState != .none { asset.proxyState = .none }
+        editor.proxyBackedMediaRefs.removeAll()
         editor.onPersistentStateChanged?()
         if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
     }
@@ -121,6 +122,7 @@ final class ProxyManager {
                 editor.mediaManifest.entries[i].proxyPath = rel
                 editor.mediaManifest.entries[i].proxySourceSig = sig
             }
+            editor.proxyBackedMediaRefs.insert(asset.id)
             editor.onPersistentStateChanged?()
             bytesThisRun += (try? out.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             completed += 1; processedDuration += max(0, asset.duration)

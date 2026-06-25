@@ -185,6 +185,7 @@ extension EditorViewModel {
         let redo = mediaLibraryUndoSnapshot()
         timeline = snapshot.timeline
         mediaManifest = snapshot.mediaManifest
+        refreshProxyBackedRefs()
         mediaAssets = snapshot.mediaAssets
         selectedClipIds = snapshot.selectedClipIds
         selectedMediaAssetIds = snapshot.selectedMediaAssetIds

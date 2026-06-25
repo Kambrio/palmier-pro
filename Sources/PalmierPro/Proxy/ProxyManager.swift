@@ -58,6 +58,33 @@ final class ProxyManager {
         }
     }
 
+    /// Asset ids that have a proxy on disk but aren't used by any timeline clip.
+    func unusedProxyAssetIds() -> [String] {
+        let used = Set(editor.timeline.tracks.flatMap(\.clips).map(\.mediaRef))
+        return editor.mediaManifest.entries.compactMap { entry in
+            (entry.proxyPath != nil && !used.contains(entry.id)) ? entry.id : nil
+        }
+    }
+
+    /// Remove proxies for media not on the timeline, freeing space without losing
+    /// proxies for clips still in use.
+    func deleteUnusedProxies() {
+        guard let base = editor.projectURL else { return }
+        let unused = Set(unusedProxyAssetIds())
+        guard !unused.isEmpty else { return }
+        for i in editor.mediaManifest.entries.indices where unused.contains(editor.mediaManifest.entries[i].id) {
+            if let rel = editor.mediaManifest.entries[i].proxyPath {
+                try? FileManager.default.removeItem(at: base.appendingPathComponent(rel))
+            }
+            editor.mediaManifest.entries[i].proxyPath = nil
+            editor.mediaManifest.entries[i].proxySourceSig = nil
+        }
+        editor.proxyBackedMediaRefs.subtract(unused)
+        for asset in editor.mediaAssets where unused.contains(asset.id) { asset.proxyState = .none }
+        editor.onPersistentStateChanged?()
+        if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
+    }
+
     /// Remove all proxy files and clear their manifest/asset references.
     func deleteProxies() {
         cancel()   // stop in-flight generation so it can't re-populate manifest paths

@@ -95,9 +95,6 @@ struct PreviewContainerView: View {
                 captureFrameButton
             }
             if isTimeline {
-                settingsMenuButton(label: editor.previewQuality.badgeLabel, help: "Preview Quality — lower for faster playback (export is always full quality)") { qualityMenuItems }
-            }
-            if isTimeline {
                 Menu {
                     Toggle("Use Proxies", isOn: Binding(
                         get: { editor.useProxies }, set: { editor.useProxies = $0 }))
@@ -114,19 +111,23 @@ struct PreviewContainerView: View {
                             }
                         }
                     }
-                    Divider()
                     Button(proxyActionLabel) { editor.proxyManager.createProxies() }
                         .disabled(editor.proxyManager.isGenerating || editor.proxyManager.assetsNeedingProxies().isEmpty)
+                    Button("Delete Unused Proxies") { editor.proxyManager.deleteUnusedProxies() }
+                        .disabled(editor.proxyManager.unusedProxyAssetIds().isEmpty)
                     Button(proxyDeleteLabel) { editor.proxyManager.deleteProxies() }
                         .disabled(editor.proxyManager.proxyDiskUsage() == 0)
+                    Divider()
+                    // Render-scale cap (applies when not using proxies, or on top of them).
+                    Menu("Preview Resolution") { qualityMenuItems }
                 } label: {
-                    badgeLabel(editor.useProxies ? "Proxy" : "Src")
+                    badgeLabel(editor.useProxies ? "Proxy" : editor.previewQuality.badgeLabel)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .hoverHighlight()
-                .help("Proxy media — edit lighter copies; export always uses source")
+                .help("Proxies & preview resolution — edit lighter; export is always full quality")
             }
             settingsMenuButton(label: zoomBadgeLabel, help: "Canvas Zoom") { zoomMenuItems }
         }

@@ -103,6 +103,12 @@ else
   echo "!! missing Changelog/ in SwiftPM resource bundle at $RES_BUNDLE" >&2
   exit 1
 fi
+if [ -d "$RES_BUNDLE/Skills" ]; then
+  cp -R "$RES_BUNDLE/Skills" "$APP/Contents/Resources/"
+else
+  echo "!! missing Skills/ in SwiftPM resource bundle at $RES_BUNDLE" >&2
+  exit 1
+fi
 
 if ! ls "$RES_BUNDLE"/*.metallib >/dev/null 2>&1; then
   echo "!! no .metallib in SwiftPM resource bundle at $RES_BUNDLE — Metal effects would be missing" >&2

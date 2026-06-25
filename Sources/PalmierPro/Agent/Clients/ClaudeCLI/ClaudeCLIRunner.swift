@@ -66,6 +66,9 @@ struct ClaudeCLIRunner {
 
         var configured = CLIProcess(executable: claudePath, arguments: args)
         configured.idleTimeout = Self.idleTimeoutSeconds
+        // Point cwd at the materialized skills workspace so `claude -p` discovers the
+        // app-bundled skills from its `.claude/skills/`.
+        configured.workingDirectory = ClaudeCLISkills.workspaceDirectory()
         let proc = configured
 
         return AsyncThrowingStream { continuation in

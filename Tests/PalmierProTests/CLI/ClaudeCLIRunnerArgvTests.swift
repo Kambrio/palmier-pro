@@ -10,14 +10,20 @@ struct ClaudeCLIRunnerArgvTests {
                              systemPrompt: "sys", maxTurns: 30, resumeSessionId: resume)
     }
 
-    @Test func allowsPalmierServerScopeNotGlob() {
+    @Test func allowsPalmierServerScopeAndSkillNotGlob() {
         let a = argv()
+        guard let i = a.firstIndex(of: "--allowedTools"), i + 1 < a.count else {
+            Issue.record("missing --allowedTools"); return
+        }
+        let value = a[i + 1]
         // The MCP allow rule is the server scope; the `__*` glob does NOT match MCP tools.
-        #expect(adjacent(a, "--allowedTools", "mcp__palmier-pro"))
+        #expect(value.contains("mcp__palmier-pro"))
         #expect(!a.contains("mcp__palmier-pro__*"))
+        // Skill is allowed so the chat can use the app-bundled creative skills.
+        #expect(value.contains("Skill"))
     }
 
-    @Test func disallowsBuiltinFilesystemAndExecTools() {
+    @Test func disallowsBuiltinFilesystemAndExecToolsButNotSkill() {
         let a = argv()
         guard let i = a.firstIndex(of: "--disallowedTools"), i + 1 < a.count else {
             Issue.record("missing --disallowedTools"); return
@@ -26,6 +32,8 @@ struct ClaudeCLIRunnerArgvTests {
         for tool in ["Bash", "Read", "Write", "Edit", "WebFetch"] {
             #expect(value.contains(tool), "expected \(tool) to be disallowed")
         }
+        // Skill must NOT be disallowed — it's how bundled skills are used.
+        #expect(!value.split(separator: " ").contains("Skill"))
     }
 
     @Test func includesStreamingModelMaxTurnsAndStrictConfig() {

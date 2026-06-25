@@ -10,17 +10,20 @@ enum PalmierMCPConfig {
 
     static let serverName = "palmier-pro"
 
-    /// Allow rule that pre-authorizes every Palmier MCP tool in -p mode. Claude CLI
-    /// matches MCP tools by server scope (`mcp__<server>`); a `__*` glob matches nothing,
-    /// so the tools would prompt for permission and be denied (cancelled) in -p mode.
-    static let allowedTools = "mcp__palmier-pro"
+    /// Pre-authorizes every Palmier MCP tool (matched by server scope `mcp__<server>`) plus
+    /// the `Skill` tool, so the chat can use the app-bundled creative skills (scriptwriter,
+    /// storytelling-craft, video-hooks, write-metadata, video-scripting). Loading a SKILL.md
+    /// is internal to the Skill tool; the file/shell tools below stay disallowed, so a skill
+    /// contributes knowledge but can't touch the filesystem — it applies its output only
+    /// through the Palmier MCP tools.
+    static let allowedTools = "mcp__palmier-pro Skill"
 
     /// Built-in tools the CLI backend must not use — it drives the timeline only through
     /// Palmier MCP tools. Disallowing these also prevents inheriting the user's global
     /// Bash/file permissions and keeps the agent from wandering onto the filesystem.
     /// (ToolSearch is intentionally left enabled — it loads the deferred MCP tools.)
     static let disallowedBuiltinTools =
-        "Bash Read Write Edit MultiEdit NotebookEdit Glob Grep WebFetch WebSearch Task Skill TodoWrite"
+        "Bash Read Write Edit MultiEdit NotebookEdit Glob Grep WebFetch WebSearch Task TodoWrite"
 
     /// JSON string for `--mcp-config`.
     static func inlineConfigJSON() -> String {

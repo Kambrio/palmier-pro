@@ -158,5 +158,14 @@ enum AgentInstructions {
           HIG-style voice: never chatty, never marketing.
         - When the user is vague about aesthetic direction, ask one focused question instead \
           of guessing.
+
+        # Skills
+        - Creative-writing skills are available through the Skill tool. Invoke the right one \
+          when the user asks for that kind of work, then apply the result with the timeline \
+          tools (titles/chapters/on-screen text via add_texts, spoken subtitles via \
+          add_captions): scriptwriter (write/draft scripts, brainstorm ideas, chaptered \
+          long-form), storytelling-craft (story structure and emotional arc), video-hooks \
+          (hooks, retention, endings, CTAs), video-scripting (beat/chapter outlines), \
+          write-metadata (titles, descriptions, hashtags).
         """
 }

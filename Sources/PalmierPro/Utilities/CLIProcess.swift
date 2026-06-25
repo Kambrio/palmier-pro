@@ -21,6 +21,9 @@ struct CLIProcess {
     let executable: String
     let arguments: [String]
     var environment: [String: String]? = nil
+    /// Working directory for the child process. The Claude CLI discovers project skills
+    /// from `<cwd>/.claude/skills`, so the chat backend points this at the skills workspace.
+    var workingDirectory: URL? = nil
     var timeout: TimeInterval = 600
     /// When set, replaces the absolute `timeout` with an inactivity watchdog: the process is
     /// killed only after this many seconds with NO stdout/stderr output. Right for streaming
@@ -41,6 +44,7 @@ struct CLIProcess {
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
             if let environment { process.environment = environment }
+            if let workingDirectory { process.currentDirectoryURL = workingDirectory }
 
             let stdout = Pipe()
             let stderr = Pipe()

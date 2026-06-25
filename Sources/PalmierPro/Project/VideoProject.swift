@@ -332,7 +332,7 @@ final class VideoProject: NSDocument {
                     .environment(editorViewModel)
             }
             .animation(.default, value: editorViewModel.mediaPrep)
-            .overlay(alignment: .bottomLeading) {
+            .overlay(alignment: .bottomTrailing) {
                 ProxyProgressHUD()
                     .environment(editorViewModel)
             }

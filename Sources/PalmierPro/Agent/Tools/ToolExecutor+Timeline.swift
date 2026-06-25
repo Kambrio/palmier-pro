@@ -640,7 +640,7 @@ extension ToolExecutor {
     }
 
     /// Source-seconds span → project frames, clamped to the clip's visible window first so a boundary-straddler yields its real sliver, not a fabricated full-clip span. nil if not visible.
-    private static func spanFrames(start: Double, end: Double, clip: Clip, fps: Int) -> (start: Int, end: Int)? {
+    static func spanFrames(start: Double, end: Double, clip: Clip, fps: Int) -> (start: Int, end: Int)? {
         let fpsD = Double(fps)
         let visStart = Double(clip.trimStartFrame)
         let visEnd = visStart + Double(clip.durationFrames) * max(clip.speed, 0.0001)

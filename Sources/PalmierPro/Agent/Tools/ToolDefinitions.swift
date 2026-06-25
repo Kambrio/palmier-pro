@@ -18,6 +18,8 @@ enum ToolName: String, CaseIterable, Sendable {
     case addTexts = "add_texts"
     case addCaptions = "add_captions"
     case getCaptionStatus = "get_caption_status"
+    case saveDocument = "save_document"
+    case exportTranscript = "export_transcript"
     case generateVideo = "generate_video"
     case generateImage = "generate_image"
     case generateAudio = "generate_audio"
@@ -323,6 +325,28 @@ enum ToolDefinitions {
             name: .getCaptionStatus,
             description: "Reports the status of the background caption job started by add_captions. Returns { status } where status is: 'in_progress' (with completed, total, label) while transcribing; 'completed' (with captionsAdded) when the caption track is placed; 'failed' (with message); or 'idle' if no job has run. add_captions returns immediately and transcription continues in the background, so after calling add_captions poll this until status is 'completed' or 'failed' before relying on the captions or making further timeline edits. Takes no arguments.",
             inputSchema: objectSchema()
+        ),
+        AgentTool(
+            name: .saveDocument,
+            description: "Save a text document (a script, hooks, story notes, a transcript, any text the user asked you to produce) to the project's documents folder so it persists as a file. Use when the user asks to save, export, or write out generated text to a file. Writes are confined to the configured documents directory (default: a 'documents' folder inside the .palmier project; the user can change it in Settings → Storage) — you cannot write elsewhere on disk. Returns the saved path. Provide the full content; this tool does not generate content.",
+            inputSchema: objectSchema(
+                properties: [
+                    "filename": ["type": "string", "description": "Plain file name, no slashes or '..' (e.g. 'hooks', 'episode-1-script'). The extension is added from `format` if missing."],
+                    "content": ["type": "string", "description": "The full text to write (UTF-8)."],
+                    "format": ["type": "string", "enum": ["md", "txt", "srt", "vtt"], "description": "File format/extension. Default 'md'."],
+                ],
+                required: ["filename", "content"]
+            )
+        ),
+        AgentTool(
+            name: .exportTranscript,
+            description: "Export the CURRENT timeline's spoken transcript to a file in the project's documents folder — 'srt' (timecoded subtitle cues in project time) or 'md' (plain text). Use when the user asks for a captions/subtitles file or a full transcript file. Walks every audio/video clip, maps each line to its timeline position, and writes them in order; transcription runs on-device and is cached. Returns the saved path and line count. (To place captions ON the timeline instead, use add_captions.)",
+            inputSchema: objectSchema(
+                properties: [
+                    "format": ["type": "string", "enum": ["srt", "md"], "description": "Output format. Default 'srt'."],
+                    "filename": ["type": "string", "description": "Plain file name without extension. Default 'transcript'."],
+                ]
+            )
         ),
         AgentTool(
             name: .addTexts,

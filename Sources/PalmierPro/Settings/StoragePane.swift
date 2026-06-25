@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct StoragePane: View {
@@ -6,6 +7,7 @@ struct StoragePane: View {
     @State private var indexBytes: Int64 = 0
     @State private var modelBytes: Int64 = 0
     @State private var searchEnabled = SearchIndexConfig.enabled
+    @State private var documentsOverride = DocumentPreferences.overrideDirectory
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
@@ -45,8 +47,61 @@ struct StoragePane: View {
                 .overlay(AppTheme.Border.subtleColor)
 
             searchIndexSection
+
+            Divider()
+                .overlay(AppTheme.Border.subtleColor)
+
+            documentsSection
         }
         .task { await refresh() }
+    }
+
+    private var documentsSection: some View {
+        HStack(alignment: .top, spacing: AppTheme.Spacing.md) {
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
+                Text("Documents")
+                    .font(.system(size: AppTheme.FontSize.md))
+                    .foregroundStyle(AppTheme.Text.primaryColor)
+                Text("Where the assistant saves scripts, hooks, notes, and transcript or caption exports.")
+                    .font(.system(size: AppTheme.FontSize.sm))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(documentsOverride?.path ?? "Inside each project (.palmier/documents)")
+                    .font(.system(size: AppTheme.FontSize.xs).monospaced())
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.top, AppTheme.Spacing.xs)
+            }
+
+            Spacer(minLength: AppTheme.Spacing.lg)
+
+            VStack(spacing: AppTheme.Spacing.xs) {
+                Button("Change…") { chooseDocumentsFolder() }
+                    .controlSize(.small)
+                if documentsOverride != nil {
+                    Button("Use default") {
+                        DocumentPreferences.overrideDirectory = nil
+                        documentsOverride = nil
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func chooseDocumentsFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder for assistant-saved documents"
+        if panel.runModal() == .OK, let url = panel.url {
+            DocumentPreferences.overrideDirectory = url
+            documentsOverride = url
+        }
     }
 
     private var searchIndexSection: some View {

@@ -111,6 +111,9 @@ enum Project {
     static let generationLogFilename = "generation-log.json"
     static let thumbnailFilename = "thumbnail.jpg"
     static let mediaDirectoryName = "media"
+    /// Subfolder inside a .palmier package for agent-saved documents (scripts, hooks,
+    /// transcript/caption exports, notes). Extra subdirs are tolerated by the package format.
+    static let documentsDirectoryName = "documents"
 
     static var storageDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser

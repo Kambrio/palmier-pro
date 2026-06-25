@@ -37,7 +37,7 @@ struct CaptionProgressHUD: View {
                 }
                 if job.total > 0 {
                     ProgressView(value: job.fraction)
-                        .frame(width: AppTheme.ComponentSize.downloadProgressWidth)
+                        .frame(maxWidth: .infinity)
                 }
                 HStack { Spacer(); Button("Cancel") { editor.cancelCaptionGeneration() } }
             }

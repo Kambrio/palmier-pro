@@ -80,6 +80,9 @@ final class EditorViewModel {
     /// nil when idle. Managed by startCaptionGeneration / cancelCaptionGeneration.
     var captionJob: CaptionJob?
     @ObservationIgnored var captionTask: Task<Void, Never>?
+    /// Captions added by the last completed generation (nil while running / after cancel /
+    /// before any run). Lets get_caption_status report a finished job.
+    var lastCaptionResult: Int?
     var toolMode: ToolMode = .pointer
     var showExportDialog: Bool = false
     var showGenerationPanel: Bool = false {

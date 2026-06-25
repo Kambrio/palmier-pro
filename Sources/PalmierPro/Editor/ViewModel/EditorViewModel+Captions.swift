@@ -108,20 +108,23 @@ extension EditorViewModel {
     /// Progress is shown by the app-level CaptionProgressHUD.
     func startCaptionGeneration(for request: CaptionRequest) {
         captionTask?.cancel()
+        lastCaptionResult = nil
         captionJob = CaptionJob(total: 0, completed: 0, label: "Preparing…")
         captionTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let ids = try await self.generateCaptions(for: request)
-                self.captionJob = ids.isEmpty
-                    ? CaptionJob(total: 0, completed: 0, label: "", errorMessage: "No speech detected to caption.")
-                    : nil
+                self.lastCaptionResult = ids.count
+                self.captionJob = nil
             } catch is CancellationError {
                 self.captionJob = nil
             } catch {
                 let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.captionJob?.errorMessage = msg
-                if self.captionJob == nil { self.captionJob = CaptionJob(total: 0, completed: 0, label: "", errorMessage: msg) }
+                if self.captionJob == nil {
+                    self.captionJob = CaptionJob(total: 0, completed: 0, label: "", errorMessage: msg)
+                } else {
+                    self.captionJob?.errorMessage = msg
+                }
             }
             self.captionTask = nil
         }

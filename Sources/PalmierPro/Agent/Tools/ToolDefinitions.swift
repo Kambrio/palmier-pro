@@ -17,6 +17,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case undo = "undo"
     case addTexts = "add_texts"
     case addCaptions = "add_captions"
+    case getCaptionStatus = "get_caption_status"
     case generateVideo = "generate_video"
     case generateImage = "generate_image"
     case generateAudio = "generate_audio"
@@ -316,6 +317,11 @@ enum ToolDefinitions {
         AgentTool(
             name: .undo,
             description: "Reverts the assistant's most recent timeline edit (a cut, move, trim, split, or clip/text/caption add) as one step. The recovery path when an edit went too far — e.g. a ripple_delete_ranges removed more than intended. Verify a cut first (get_transcript reflects the post-cut audio), then undo if it overshot, then retry with corrected ranges.\n\nUndoes only edits the assistant made this session, most-recent-first — it never touches the user's own manual edits, and refuses if the latest change wasn't the assistant's. After undoing, the timeline is restored to its state before that edit; the ids/frames the edit returned are no longer valid, so re-read with get_timeline or get_transcript if you'll edit again. Takes no arguments.",
+            inputSchema: objectSchema()
+        ),
+        AgentTool(
+            name: .getCaptionStatus,
+            description: "Reports the status of the background caption job started by add_captions. Returns { status } where status is: 'in_progress' (with completed, total, label) while transcribing; 'completed' (with captionsAdded) when the caption track is placed; 'failed' (with message); or 'idle' if no job has run. add_captions returns immediately and transcription continues in the background, so after calling add_captions poll this until status is 'completed' or 'failed' before relying on the captions or making further timeline edits. Takes no arguments.",
             inputSchema: objectSchema()
         ),
         AgentTool(

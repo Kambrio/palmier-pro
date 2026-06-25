@@ -55,6 +55,23 @@ extension ToolExecutor {
         // job and return immediately — progress shows in the app's caption HUD. Blocking here
         // would stall the agent turn (and trip its idle timeout) for no benefit.
         editor.startCaptionGeneration(for: request)
-        return .ok("Started generating captions. Progress shows in the editor; the caption track appears when transcription finishes.")
+        return .ok("Started generating captions in the background. Poll get_caption_status until status is 'completed' (or 'failed') before relying on the caption track or making further edits.")
+    }
+
+    /// Read-only progress of the background caption job started by add_captions.
+    func getCaptionStatus(_ editor: EditorViewModel) -> ToolResult {
+        let obj: [String: Any]
+        if let job = editor.captionJob {
+            if let err = job.errorMessage {
+                obj = ["status": "failed", "message": err]
+            } else {
+                obj = ["status": "in_progress", "completed": job.completed, "total": job.total, "label": job.label]
+            }
+        } else if let added = editor.lastCaptionResult {
+            obj = ["status": "completed", "captionsAdded": added]
+        } else {
+            obj = ["status": "idle"]
+        }
+        return .ok(Self.jsonString(obj) ?? #"{"status":"idle"}"#)
     }
 }

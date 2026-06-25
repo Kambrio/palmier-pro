@@ -168,6 +168,7 @@ final class VideoEngine {
         rebuildTask?.cancel()
 
         let resolver = editor.mediaResolver
+        let useProxies = editor.mediaManifest.useProxies
         let renderSize = previewRenderSize
         let assetSizes: [String: CGSize] = Dictionary(
             uniqueKeysWithValues: editor.mediaAssets.compactMap { asset in
@@ -181,7 +182,9 @@ final class VideoEngine {
             do {
                 result = try await CompositionBuilder.build(
                     timeline: editor.timeline,
-                    resolveURL: { resolver.resolveURL(for: $0) },
+                    resolveURL: { id in
+                        (useProxies ? resolver.proxyURL(for: id) : nil) ?? resolver.resolveURL(for: id)
+                    },
                     resolveSourceSize: { assetSizes[$0] },
                     renderSize: renderSize
                 )

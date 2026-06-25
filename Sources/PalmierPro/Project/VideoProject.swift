@@ -315,6 +315,11 @@ final class VideoProject: NSDocument {
                     .environment(editorViewModel)
             }
             .animation(.default, value: editorViewModel.captionJob)
+            .overlay(alignment: .bottomLeading) {
+                MediaLoadHUD()
+                    .environment(editorViewModel)
+            }
+            .animation(.default, value: editorViewModel.mediaPrep)
         let hostingController = NSHostingController(rootView: editorView.tint(AppTheme.Accent.primary))
 
         let window = NSWindow(contentViewController: hostingController)
@@ -429,7 +434,6 @@ final class VideoProject: NSDocument {
     // MARK: - Media restore
 
     private func restoreAssetsFromManifest() {
-        let cache = editorViewModel.mediaVisualCache
         let resolver = editorViewModel.mediaResolver
         var restored = 0
         var missing = 0
@@ -450,16 +454,10 @@ final class VideoProject: NSDocument {
                 continue
             }
             restored += 1
-            if asset.type == .audio || asset.type == .video {
-                cache.generateWaveform(for: asset)
-            }
-            if asset.type == .video {
-                cache.generateVideoThumbnails(for: asset)
-            }
-            if asset.type == .image {
-                cache.generateImageThumbnail(for: asset)
-            }
-            Task { await asset.loadMetadata() }
+            // Thumbnails / waveforms / metadata are generated lazily when a media tile or
+            // timeline clip becomes visible (see AssetThumbnailView.onAppear and TimelineView),
+            // gated by MediaVisualCache — generating all of them eagerly at open saturated the
+            // machine and froze the app for projects with hundreds of clips.
         }
         editorViewModel.missingMediaRefs = missingRefs
         Log.project.notice(

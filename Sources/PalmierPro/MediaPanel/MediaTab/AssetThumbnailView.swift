@@ -28,6 +28,14 @@ struct AssetThumbnailView: View {
             .onHover { hovering in
                 withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
             }
+            .task(id: asset.id) {
+                // Lazily load each tile's thumbnail/metadata only when it scrolls into view,
+                // instead of eagerly for every asset at project open (which froze the app).
+                guard asset.thumbnail == nil, asset.type != .text else { return }
+                editor.mediaPrepStarted()
+                await asset.loadMetadata()
+                editor.mediaPrepFinished()
+            }
 
             if isOnTimeline {
                 Capsule()

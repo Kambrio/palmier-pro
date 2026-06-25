@@ -83,6 +83,10 @@ final class EditorViewModel {
     /// Captions added by the last completed generation (nil while running / after cancel /
     /// before any run). Lets get_caption_status report a finished job.
     var lastCaptionResult: Int?
+
+    /// Live media-preparation progress (thumbnails / waveforms / metadata), surfaced by the
+    /// app-level MediaLoadHUD. nil when idle.
+    var mediaPrep: MediaPrep?
     var toolMode: ToolMode = .pointer
     var showExportDialog: Bool = false
     var showGenerationPanel: Bool = false {
@@ -193,6 +197,7 @@ final class EditorViewModel {
             projectURL: { [weak self] in self?.projectURL }
         )
         agentService.editor = self
+        mediaVisualCache.editor = self
         searchIndex.assetsProvider = { [weak self] in self?.mediaAssets ?? [] }
 
         // Re-check media presence when the app regains focus: a user may have

@@ -19,6 +19,9 @@ final class MediaVisualCache {
 
     private var videoThumbnails: [String: [(time: Double, image: CGImage)]] = [:]
     private var videoThumbnailInFlight: Set<String> = []
+    /// Cap concurrent video filmstrip decodes — the freeze culprit when a project opens
+    /// with hundreds of clips (each decode is a multi-frame AVAssetImageGenerator pass).
+    private static let videoThumbnailGate = AsyncSemaphore(value: 3)
 
     // MARK: - Image thumbnails (single still per asset)
 
@@ -29,6 +32,8 @@ final class MediaVisualCache {
     // MARK: - Redraw trigger
 
     weak var timelineView: NSView?
+    /// Reports media-prep progress to the app-level MediaLoadHUD.
+    weak var editor: EditorViewModel?
 
     // MARK: - Sync lookups (safe for draw calls)
 
@@ -51,9 +56,12 @@ final class MediaVisualCache {
         let key = asset.id
         guard waveformSamples[key] == nil, !waveformInFlight.contains(key) else { return }
         waveformInFlight.insert(key)
+        editor?.mediaPrepStarted()
 
         let url = asset.url
+        let editorRef = editor
         Task.detached(priority: .utility) { [weak self] in
+            defer { Task { @MainActor in editorRef?.mediaPrepFinished() } }
             let result = await Self.loadOrGenerateWaveform(url: url)
             guard let self else { return }
             await MainActor.run { [self] in
@@ -70,9 +78,12 @@ final class MediaVisualCache {
         let key = asset.id
         guard imageThumbnails[key] == nil, !imageThumbnailInFlight.contains(key) else { return }
         imageThumbnailInFlight.insert(key)
+        editor?.mediaPrepStarted()
 
         let url = asset.url
+        let editorRef = editor
         Task.detached(priority: .utility) { [weak self] in
+            defer { Task { @MainActor in editorRef?.mediaPrepFinished() } }
             do {
                 try await Self.imageThumbnailGate.wait()
             } catch {
@@ -97,9 +108,20 @@ final class MediaVisualCache {
         let key = asset.id
         guard videoThumbnails[key] == nil, !videoThumbnailInFlight.contains(key) else { return }
         videoThumbnailInFlight.insert(key)
+        editor?.mediaPrepStarted()
 
         let url = asset.url
-        Task.detached(priority: .userInitiated) { [weak self] in
+        let editorRef = editor
+        Task.detached(priority: .utility) { [weak self] in
+            defer { Task { @MainActor in editorRef?.mediaPrepFinished() } }
+            do {
+                try await Self.videoThumbnailGate.wait()
+            } catch {
+                await MainActor.run { [weak self] in _ = self?.videoThumbnailInFlight.remove(key) }
+                return
+            }
+            defer { Task { await Self.videoThumbnailGate.signal() } }
+
             let cacheKey = Self.diskCacheKey(for: url)
             var results = cacheKey.flatMap(Self.loadThumbnails(key:)) ?? []
 

@@ -370,6 +370,7 @@ final class TimelineView: NSView {
                 let rect = geo.clipRect(for: clip, trackIndex: ti)
                 clipDisplayRects[clip.id] = rect
                 guard rect.intersects(dirtyRect) else { continue }
+                editor.requestClipVisuals(for: clip)   // lazy: generate visuals only for on-screen clips
                 ClipRenderer.draw(clip, type: clip.mediaType, in: rect,
                                   isSelected: isSelected, context: ctx,
                                   cache: editor.mediaVisualCache,

@@ -1,6 +1,46 @@
 import AppKit
 import AVFoundation
 
+/// Live media-preparation progress (lazy thumbnail/waveform/metadata generation).
+struct MediaPrep: Equatable {
+    var total: Int
+    var completed: Int
+    var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
+}
+
+extension EditorViewModel {
+    /// Called by MediaVisualCache when a prep task is enqueued. Grows the live counter.
+    func mediaPrepStarted() {
+        if mediaPrep == nil { mediaPrep = MediaPrep(total: 1, completed: 0) }
+        else { mediaPrep?.total += 1 }
+    }
+
+    /// Called when a prep task finishes; clears the HUD once the queue drains.
+    func mediaPrepFinished() {
+        guard mediaPrep != nil else { return }
+        mediaPrep?.completed += 1
+        if let p = mediaPrep, p.completed >= p.total { mediaPrep = nil }
+    }
+
+    /// Lazily generates the visuals a visible timeline clip needs (filmstrip / waveform /
+    /// still). Idempotent and gated by MediaVisualCache, so it's safe to call from the draw
+    /// path for every visible clip — generation is deferred until a clip is actually on screen.
+    func requestClipVisuals(for clip: Clip) {
+        guard let asset = mediaAssets.first(where: { $0.id == clip.mediaRef }) else { return }
+        switch clip.mediaType {
+        case .video:
+            mediaVisualCache.generateVideoThumbnails(for: asset)
+            if asset.hasAudio { mediaVisualCache.generateWaveform(for: asset) }
+        case .audio:
+            mediaVisualCache.generateWaveform(for: asset)
+        case .image:
+            mediaVisualCache.generateImageThumbnail(for: asset)
+        default:
+            break
+        }
+    }
+}
+
 enum MediaPanelItemKey {
     static let folderPrefix = "folder-"
 

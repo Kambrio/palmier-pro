@@ -12,7 +12,6 @@ struct CaptionTab: View {
     @State private var locale: Locale?
     @State private var supportedLocales: [Locale] = []
     @State private var appleCodes: Set<String> = []
-    @State private var isGenerating = false
     @State private var note: String?
 
     private static let previewText = "Captions will look like this"
@@ -67,10 +66,6 @@ struct CaptionTab: View {
                 }
 
                 generateBar
-            }
-            if isGenerating {
-                AppTheme.Background.surfaceColor.opacity(AppTheme.Opacity.prominent)
-                GeneratingOverlay(label: "Transcribing…", size: .preview)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -383,7 +378,7 @@ struct CaptionTab: View {
                         .opacity(effectiveCount == 0 ? AppTheme.Opacity.medium : AppTheme.Opacity.opaque)
                 }
                 .buttonStyle(.plain).focusable(false)
-                .disabled(effectiveCount == 0 || isGenerating)
+                .disabled(effectiveCount == 0 || editor.captionJob != nil)
 
                 agentMenu
             }
@@ -406,15 +401,7 @@ struct CaptionTab: View {
             sourceClipIds: sourceIds, autoDetect: isAutoSource, style: style, center: center,
             textCase: textCase, censorProfanity: censorProfanity, locale: locale
         )
-        Task {
-            isGenerating = true
-            defer { isGenerating = false }
-            do {
-                let ids = try await editor.generateCaptions(for: request)
-                if ids.isEmpty { note = "No speech detected." }
-            } catch {
-                note = error.localizedDescription
-            }
-        }
+        // Runs as a tracked job; progress + errors surface in the app-level CaptionProgressHUD.
+        editor.startCaptionGeneration(for: request)
     }
 }

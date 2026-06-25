@@ -75,6 +75,11 @@ final class EditorViewModel {
     var timelineVisibleWidth: Double = 0
     var timelineRenderRevision: Int = 0
     var isScrubbing: Bool = false
+
+    /// Live caption-generation progress, surfaced by the app-level CaptionProgressHUD.
+    /// nil when idle. Managed by startCaptionGeneration / cancelCaptionGeneration.
+    var captionJob: CaptionJob?
+    @ObservationIgnored var captionTask: Task<Void, Never>?
     var toolMode: ToolMode = .pointer
     var showExportDialog: Bool = false
     var showGenerationPanel: Bool = false {

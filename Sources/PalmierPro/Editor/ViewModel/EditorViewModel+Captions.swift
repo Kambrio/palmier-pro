@@ -1,6 +1,15 @@
 import CoreGraphics
 import Foundation
 
+/// Live progress of a caption-generation job, shown by CaptionProgressHUD.
+struct CaptionJob: Equatable {
+    var total: Int
+    var completed: Int
+    var label: String
+    var errorMessage: String?
+    var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
+}
+
 extension EditorViewModel {
     struct CaptionRequest {
         var sourceClipIds: [String] = []
@@ -94,6 +103,36 @@ extension EditorViewModel {
         let clip: Clip
     }
 
+    /// Starts caption generation as a tracked background job and returns immediately, so a
+    /// long transcription never blocks the caller (Captions tab or the agent's add_captions).
+    /// Progress is shown by the app-level CaptionProgressHUD.
+    func startCaptionGeneration(for request: CaptionRequest) {
+        captionTask?.cancel()
+        captionJob = CaptionJob(total: 0, completed: 0, label: "Preparing…")
+        captionTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let ids = try await self.generateCaptions(for: request)
+                self.captionJob = ids.isEmpty
+                    ? CaptionJob(total: 0, completed: 0, label: "", errorMessage: "No speech detected to caption.")
+                    : nil
+            } catch is CancellationError {
+                self.captionJob = nil
+            } catch {
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.captionJob?.errorMessage = msg
+                if self.captionJob == nil { self.captionJob = CaptionJob(total: 0, completed: 0, label: "", errorMessage: msg) }
+            }
+            self.captionTask = nil
+        }
+    }
+
+    func cancelCaptionGeneration() {
+        captionTask?.cancel()
+        captionTask = nil
+        captionJob = nil
+    }
+
     @discardableResult
     func generateCaptions(for request: CaptionRequest) async throws -> [String] {
         let candidates = request.autoDetect ? captionTargets(ids: []) : captionTargets(ids: request.sourceClipIds)
@@ -119,9 +158,13 @@ extension EditorViewModel {
     private func transcribe(_ targets: [CaptionTarget], request: CaptionRequest) async throws -> [String: TranscriptionResult] {
         var results: [String: TranscriptionResult] = [:]
         var firstError: Error?
+        let distinct = targets.map(\.clip.mediaRef).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        captionJob?.total = distinct.count
         for t in targets where results[t.clip.mediaRef] == nil {
+            try Task.checkCancellation()
+            captionJob?.label = "Transcribing clip \((captionJob?.completed ?? 0) + 1) of \(distinct.count)"
             do {
-                guard let url = mediaResolver.resolveURL(for: t.clip.mediaRef) else { continue }
+                guard let url = mediaResolver.resolveURL(for: t.clip.mediaRef) else { captionJob?.completed += 1; continue }
                 let range = visibleSourceUnion(for: t.clip.mediaRef, in: targets)
                 let isVideo = captionUsesVideoAudioExtraction(for: t.clip)
                 if request.censorProfanity || request.locale != nil {
@@ -132,9 +175,12 @@ extension EditorViewModel {
                 } else {
                     results[t.clip.mediaRef] = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideo, range: range, engineTag: TranscriptCache.currentEngineTag())
                 }
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 firstError = firstError ?? error
             }
+            captionJob?.completed += 1
         }
         if results.isEmpty, let firstError { throw firstError }
         return results

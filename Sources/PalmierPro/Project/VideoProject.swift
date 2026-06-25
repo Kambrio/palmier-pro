@@ -310,6 +310,11 @@ final class VideoProject: NSDocument {
                 TourOverlay()
                     .environment(editorViewModel)
             }
+            .overlay(alignment: .bottomTrailing) {
+                CaptionProgressHUD()
+                    .environment(editorViewModel)
+            }
+            .animation(.default, value: editorViewModel.captionJob)
         let hostingController = NSHostingController(rootView: editorView.tint(AppTheme.Accent.primary))
 
         let window = NSWindow(contentViewController: hostingController)

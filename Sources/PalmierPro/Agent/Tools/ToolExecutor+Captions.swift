@@ -51,8 +51,10 @@ extension ToolExecutor {
             locale: locale
         )
 
-        let ids = try await editor.generateCaptions(for: request)
-        guard !ids.isEmpty else { throw ToolError("No speech detected to caption.") }
-        return .ok("Added \(ids.count) caption\(ids.count == 1 ? "" : "s").")
+        // Transcription can take minutes on long media, so run it as a tracked background
+        // job and return immediately — progress shows in the app's caption HUD. Blocking here
+        // would stall the agent turn (and trip its idle timeout) for no benefit.
+        editor.startCaptionGeneration(for: request)
+        return .ok("Started generating captions. Progress shows in the editor; the caption track appears when transcription finishes.")
     }
 }

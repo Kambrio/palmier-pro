@@ -4,17 +4,23 @@ struct MediaManifest: Codable, Sendable, Equatable {
     var version: Int = 2
     var entries: [MediaManifestEntry] = []
     var folders: [MediaFolder] = []
+    var useProxies: Bool = false
+    var proxyResolution: ProxyResolution = .p720
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
         entries = try c.decodeIfPresent([MediaManifestEntry].self, forKey: .entries) ?? []
         folders = try c.decodeIfPresent([MediaFolder].self, forKey: .folders) ?? []
+        useProxies = try c.decodeIfPresent(Bool.self, forKey: .useProxies) ?? false
+        proxyResolution = try c.decodeIfPresent(ProxyResolution.self, forKey: .proxyResolution) ?? .p720
     }
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case version, entries, folders }
+    private enum CodingKeys: String, CodingKey {
+        case version, entries, folders, useProxies, proxyResolution
+    }
 }
 
 struct MediaManifestEntry: Codable, Sendable, Equatable, Identifiable {
@@ -31,6 +37,10 @@ struct MediaManifestEntry: Codable, Sendable, Equatable, Identifiable {
     var folderId: String?
     var cachedRemoteURL: String?
     var cachedRemoteURLExpiresAt: Date?
+    /// Relative path (within the package) of the generated proxy, if any.
+    var proxyPath: String?
+    /// Source identity (mtime+size hash) the proxy was built from; for staleness checks.
+    var proxySourceSig: String?
 }
 
 struct GenerationInput: Codable, Sendable, Equatable {

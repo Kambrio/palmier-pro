@@ -112,6 +112,8 @@ enum Project {
     static let generationLogFilename = "generation-log.json"
     static let thumbnailFilename = "thumbnail.jpg"
     static let mediaDirectoryName = "media"
+    /// Subdirectory of `media/` holding generated proxy movies.
+    static let proxiesDirname = "proxies"
     /// Subfolder inside a .palmier package for agent-saved documents (scripts, hooks,
     /// transcript/caption exports, notes). Extra subdirs are tolerated by the package format.
     static let documentsDirectoryName = "documents"

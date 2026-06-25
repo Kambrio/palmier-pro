@@ -87,6 +87,9 @@ final class EditorViewModel {
     /// Live media-preparation progress (thumbnails / waveforms / metadata), surfaced by the
     /// app-level MediaLoadHUD. nil when idle.
     var mediaPrep: MediaPrep?
+
+    /// Document the user opened from the Documents tab to read in-app (drives the reader sheet).
+    var openDocument: ReaderDocument?
     var toolMode: ToolMode = .pointer
     var showExportDialog: Bool = false
     var showGenerationPanel: Bool = false {

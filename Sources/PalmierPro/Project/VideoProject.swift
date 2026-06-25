@@ -311,6 +311,10 @@ final class VideoProject: NSDocument {
                 ProjectSettingsMismatchView(mismatch: mismatch)
                     .environment(editorViewModel)
             }
+            .sheet(item: Bindable(editorViewModel).openDocument) { [editorViewModel] doc in
+                DocumentReaderView(url: doc.url)
+                    .environment(editorViewModel)
+            }
             .overlay {
                 TourOverlay()
                     .environment(editorViewModel)

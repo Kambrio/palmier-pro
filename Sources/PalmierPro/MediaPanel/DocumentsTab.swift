@@ -80,9 +80,10 @@ struct DocumentsTab: View {
         .padding(.horizontal, AppTheme.Spacing.sm)
         .contentShape(Rectangle())
         .hoverHighlight(cornerRadius: AppTheme.Radius.sm, isActive: false)
-        .onTapGesture(count: 2) { NSWorkspace.shared.open(url) }
+        .onTapGesture(count: 2) { editor.openDocument = ReaderDocument(url) }
         .contextMenu {
-            Button("Open") { NSWorkspace.shared.open(url) }
+            Button("Read in Palmier") { editor.openDocument = ReaderDocument(url) }
+            Button("Open in Default App") { NSWorkspace.shared.open(url) }
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             Divider()
             Button("Move to Trash", role: .destructive) {

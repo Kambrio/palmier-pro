@@ -19,6 +19,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.3"),
         .package(url: "https://github.com/airbnb/lottie-ios", from: "4.6.1"),
         .package(url: "https://github.com/argmaxinc/WhisperKit", from: "1.0.0"),
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),
     ],
     targets: [
         .executableTarget(
@@ -34,6 +35,7 @@ let package = Package(
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "Lottie", package: "lottie-ios"),
                 .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
             ],
             path: "Sources/PalmierPro",
             exclude: [

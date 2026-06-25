@@ -5,6 +5,8 @@ import os
 enum ProxyService {
     struct Failure: LocalizedError { let reason: String; var errorDescription: String? { reason } }
 
+    private enum FrameOutcome { case keepGoing, finished, readerFailed, appendFailed }
+
     /// Transcodes `source` to a ProRes 422 Proxy `.mov` at `to`, scaled to `resolution`; throws `CancellationError` on cancel.
     static func transcode(
         source: URL,
@@ -68,17 +70,20 @@ enum ProxyService {
             writer.add(wa); writerAudio = wa
         }
 
+        Log.proxy.notice("tx setup \(Int(absSize.width))x\(Int(absSize.height))->\(Int(target.width))x\(Int(target.height)) dur=\(String(format: "%.1f", duration.seconds))s audio=\(readerAudio != nil)")
         guard reader.startReading() else { throw Failure(reason: reader.error?.localizedDescription ?? "reader failed") }
         if let audioReader {
             guard audioReader.startReading() else { throw Failure(reason: audioReader.error?.localizedDescription ?? "audio reader failed") }
         }
         guard writer.startWriting() else { throw Failure(reason: writer.error?.localizedDescription ?? "writer failed") }
         writer.startSession(atSourceTime: .zero)
+        Log.proxy.notice("tx reading (writer started)")
 
         let ciContext = CIContext()
         let scaleX = target.width / absSize.width
         let scaleY = target.height / absSize.height
 
+        let frames = OSAllocatedUnfairLock(initialState: 0)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
             @Sendable func finish(_ result: Result<Void, Error>) {
@@ -95,34 +100,38 @@ enum ProxyService {
                         finish(.failure(CancellationError()))
                         return
                     }
-                    guard let sample = readerVideo.copyNextSampleBuffer(),
-                          let src = CMSampleBufferGetImageBuffer(sample) else {
-                        if reader.status == .failed {
-                            finish(.failure(reader.error ?? Failure(reason: "reader failed")))
-                        } else {
-                            writerVideo.markAsFinished()
-                            finish(.success(()))
+                    // Drain per frame: a tiny ProRes output never back-pressures, so this
+                    // block loops without returning; without the pool each ~100 MB 6K
+                    // decoded buffer is held until the decoder's pool starves and stalls.
+                    let outcome: FrameOutcome = autoreleasepool {
+                        guard let sample = readerVideo.copyNextSampleBuffer(),
+                              let src = CMSampleBufferGetImageBuffer(sample) else {
+                            return reader.status == .failed ? .readerFailed : .finished
                         }
-                        return
-                    }
-                    let time = CMSampleBufferGetPresentationTimeStamp(sample)
-                    var outBuf: CVPixelBuffer?
-                    if let pool = adaptor.pixelBufferPool {
+                        let time = CMSampleBufferGetPresentationTimeStamp(sample)
+                        guard let pool = adaptor.pixelBufferPool else { return .keepGoing }
+                        var outBuf: CVPixelBuffer?
                         CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outBuf)
-                    }
-                    if let outBuf {
+                        guard let outBuf else { return .keepGoing }
                         let img = CIImage(cvPixelBuffer: src)
                             .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
                         ciContext.render(img, to: outBuf)
-                        if !adaptor.append(outBuf, withPresentationTime: time) {
-                            finish(.failure(writer.error ?? Failure(reason: "writer append failed")))
-                            return
-                        }
+                        guard adaptor.append(outBuf, withPresentationTime: time) else { return .appendFailed }
+                        let n = frames.withLock { $0 += 1; return $0 }
+                        if n == 1 { Log.proxy.notice("tx first frame appended") }
+                        if duration.seconds > 0 { progress(min(1, time.seconds / duration.seconds)) }
+                        return .keepGoing
                     }
-                    if duration.seconds > 0 { progress(min(1, time.seconds / duration.seconds)) }
+                    switch outcome {
+                    case .keepGoing: continue
+                    case .finished: writerVideo.markAsFinished(); finish(.success(())); return
+                    case .readerFailed: finish(.failure(reader.error ?? Failure(reason: "reader failed"))); return
+                    case .appendFailed: finish(.failure(writer.error ?? Failure(reason: "writer append failed"))); return
+                    }
                 }
             }
         }
+        Log.proxy.notice("tx video pass done frames=\(frames.withLock { $0 })")
 
         if let audioReader, let readerAudio, let writerAudio {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -158,7 +167,9 @@ enum ProxyService {
             }
         }
 
+        Log.proxy.notice("tx finishing")
         await writer.finishWriting()
+        Log.proxy.notice("tx finished status=\(writer.status.rawValue)")
         if writer.status != .completed {
             throw Failure(reason: writer.error?.localizedDescription ?? "writer did not complete")
         }

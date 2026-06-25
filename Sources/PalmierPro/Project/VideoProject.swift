@@ -324,7 +324,7 @@ final class VideoProject: NSDocument {
                     .environment(editorViewModel)
             }
             .animation(.default, value: editorViewModel.captionJob)
-            .overlay(alignment: .bottomLeading) {
+            .overlay(alignment: .bottomTrailing) {
                 MediaLoadHUD()
                     .environment(editorViewModel)
             }

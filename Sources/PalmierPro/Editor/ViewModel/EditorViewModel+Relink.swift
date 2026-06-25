@@ -35,6 +35,8 @@ extension EditorViewModel {
         mediaAssets[i].url = newURL
         if let j = mediaManifest.entries.firstIndex(where: { $0.id == id }) {
             mediaManifest.entries[j].source = mediaAssets[i].toManifestEntry(projectURL: projectURL).source
+            mediaManifest.entries[j].proxyPath = nil
+            mediaManifest.entries[j].proxySourceSig = nil
         }
         let asset = mediaAssets[i]
         Task { await finalizeImportedAsset(asset) }

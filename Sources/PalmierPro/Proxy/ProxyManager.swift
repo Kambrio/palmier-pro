@@ -48,6 +48,7 @@ final class ProxyManager {
             editor.mediaManifest.entries[i].proxySourceSig = nil
         }
         for asset in editor.mediaAssets where asset.proxyState != .none { asset.proxyState = .none }
+        editor.onPersistentStateChanged?()
         if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
     }
 
@@ -90,10 +91,11 @@ final class ProxyManager {
                 editor.mediaManifest.entries[i].proxyPath = rel
                 editor.mediaManifest.entries[i].proxySourceSig = sig
             }
+            editor.onPersistentStateChanged?()
             completed += 1
             if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
         } catch {
-            asset.proxyState = .failed(error.localizedDescription)
+            asset.proxyState = error is CancellationError ? .none : .failed(error.localizedDescription)
             completed += 1
         }
     }

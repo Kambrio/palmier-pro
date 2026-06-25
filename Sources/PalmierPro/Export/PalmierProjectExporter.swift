@@ -63,6 +63,8 @@ enum PalmierProjectExporter {
             if case .external = entry.source { report.collected.append(entry.id) }
             var rewritten = entry
             rewritten.source = .project(relativePath: relativePath)
+            rewritten.proxyPath = nil
+            rewritten.proxySourceSig = nil
             newEntries.append(rewritten)
         }
 

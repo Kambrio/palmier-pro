@@ -282,14 +282,21 @@ final class EditorViewModel {
 
     @ObservationIgnored lazy var proxyManager = ProxyManager(editor: self)
 
+    /// Set by VideoProject to mark the document dirty for non-undoable persistent
+    /// changes (e.g. proxy generation/toggle). nil outside a document window.
+    @ObservationIgnored var onPersistentStateChanged: (() -> Void)?
+
     var useProxies: Bool {
         get { mediaManifest.useProxies }
         set { guard newValue != mediaManifest.useProxies else { return }
-              mediaManifest.useProxies = newValue; videoEngine?.rebuild() }
+              mediaManifest.useProxies = newValue
+              onPersistentStateChanged?()
+              videoEngine?.rebuild() }
     }
     var proxyResolution: ProxyResolution {
         get { mediaManifest.proxyResolution }
-        set { mediaManifest.proxyResolution = newValue }
+        set { mediaManifest.proxyResolution = newValue
+              onPersistentStateChanged?() }
     }
 
     @ObservationIgnored

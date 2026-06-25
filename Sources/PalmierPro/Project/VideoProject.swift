@@ -299,6 +299,9 @@ final class VideoProject: NSDocument {
         editorViewModel.agentService.onSessionsChanged = { [weak self] in
             self?.updateChangeCount(.changeDone)
         }
+        editorViewModel.onPersistentStateChanged = { [weak self] in
+            self?.updateChangeCount(.changeDone)
+        }
 
         let editorView = EditorView()
             .environment(editorViewModel)

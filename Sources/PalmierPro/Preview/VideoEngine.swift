@@ -34,6 +34,23 @@ final class VideoEngine {
         setupTimeObserver()
     }
 
+    /// Preview composites at a capped resolution. A 6K canvas otherwise forces the
+    /// player to render full-canvas frames only to scale them down to the (far smaller)
+    /// preview pane — wasted decode + composite proportional to (canvas/pane)². Export
+    /// keeps the full canvas (see `TimelineRenderer`). Geometry is renderSize-independent
+    /// (stored transforms are source-space; the compositor scales per instruction), so
+    /// capping only lowers preview resolution, never changes layout.
+    static let previewMaxLongSide = 2560
+
+    private var previewRenderSize: CGSize {
+        guard let editor else { return .zero }
+        let w = editor.timeline.width, h = editor.timeline.height
+        guard w > 0, h > 0 else { return CGSize(width: w, height: h) }
+        let scale = min(1.0, Double(Self.previewMaxLongSide) / Double(max(w, h)))
+        func even(_ v: Double) -> Int { let i = Int(v.rounded()); return i - (i % 2) }
+        return CGSize(width: even(Double(w) * scale), height: even(Double(h) * scale))
+    }
+
     func teardown() {
         rebuildTask?.cancel()
         rebuildTask = nil
@@ -140,6 +157,7 @@ final class VideoEngine {
         rebuildTask?.cancel()
 
         let resolver = editor.mediaResolver
+        let renderSize = previewRenderSize
         let assetSizes: [String: CGSize] = Dictionary(
             uniqueKeysWithValues: editor.mediaAssets.compactMap { asset in
                 guard let w = asset.sourceWidth, let h = asset.sourceHeight, w > 0, h > 0 else { return nil }
@@ -154,7 +172,7 @@ final class VideoEngine {
                     timeline: editor.timeline,
                     resolveURL: { resolver.resolveURL(for: $0) },
                     resolveSourceSize: { assetSizes[$0] },
-                    renderSize: CGSize(width: editor.timeline.width, height: editor.timeline.height)
+                    renderSize: renderSize
                 )
             } catch {
                 if !Task.isCancelled {
@@ -199,7 +217,7 @@ final class VideoEngine {
             clipNaturalSizes: clipNaturalSizes,
             clipTransforms: clipTransforms,
             compositionDuration: compositionDuration,
-            renderSize: CGSize(width: editor.timeline.width, height: editor.timeline.height)
+            renderSize: previewRenderSize
         )
         currentItem.audioMix = audioMix
         currentItem.videoComposition = videoComposition

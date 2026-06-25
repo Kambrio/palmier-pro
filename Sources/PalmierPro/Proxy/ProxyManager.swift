@@ -9,7 +9,25 @@ final class ProxyManager {
     private(set) var isGenerating = false
     private(set) var completed = 0
     private(set) var total = 0
+    private(set) var startedAt: Date?
+    private(set) var totalDuration: Double = 0      // media-seconds across all targets
+    private(set) var processedDuration: Double = 0  // media-seconds finished so far
+    private(set) var bytesThisRun: Int64 = 0        // proxy bytes written so far
     private var job: Task<Void, Never>?
+
+    /// Wall-clock seconds left, extrapolated from media-seconds processed so far.
+    func eta(asOf now: Date = Date()) -> TimeInterval? {
+        guard isGenerating, let startedAt, processedDuration > 0,
+              totalDuration > processedDuration else { return nil }
+        let elapsed = now.timeIntervalSince(startedAt)
+        return max(0, elapsed / processedDuration * (totalDuration - processedDuration))
+    }
+
+    /// Projected total size of this run's proxies, from bytes-per-media-second so far.
+    var estimatedRunBytes: Int64? {
+        guard processedDuration > 0, bytesThisRun > 0, totalDuration > 0 else { return nil }
+        return Int64(Double(bytesThisRun) / processedDuration * totalDuration)
+    }
 
     init(editor: EditorViewModel) { self.editor = editor }
 
@@ -61,6 +79,9 @@ final class ProxyManager {
         let resolution = editor.mediaManifest.proxyResolution
 
         isGenerating = true; completed = 0; total = targets.count
+        startedAt = Date()
+        totalDuration = targets.reduce(0) { $0 + max(0, $1.duration) }
+        processedDuration = 0; bytesThisRun = 0
         Log.proxy.notice("createProxies begin total=\(targets.count) res=\(resolution.label) dir=\(dir.path)")
         job = Task { [weak self] in
             guard let self else { return }
@@ -101,7 +122,8 @@ final class ProxyManager {
                 editor.mediaManifest.entries[i].proxySourceSig = sig
             }
             editor.onPersistentStateChanged?()
-            completed += 1
+            bytesThisRun += (try? out.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+            completed += 1; processedDuration += max(0, asset.duration)
             if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
         } catch is CancellationError {
             asset.proxyState = .none
@@ -109,7 +131,7 @@ final class ProxyManager {
         } catch {
             Log.proxy.error("proxy failed id=\(asset.id.prefix(8)): \(Log.detail(error))")
             asset.proxyState = .failed(error.localizedDescription)
-            completed += 1
+            completed += 1; processedDuration += max(0, asset.duration)
         }
     }
 }

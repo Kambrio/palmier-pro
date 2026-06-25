@@ -122,7 +122,12 @@ final class EditorViewModel {
     }
     // MARK: - Media library (in-memory, rebuilt on project open)
 
-    var mediaAssets: [MediaAsset] = []
+    var mediaAssets: [MediaAsset] = [] {
+        didSet { mediaAssetsById = Dictionary(mediaAssets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
+    }
+    /// id → asset, rebuilt only when library membership changes. Gives O(1) lookups
+    /// in the timeline draw hot path, which previously scanned `mediaAssets` per clip.
+    @ObservationIgnored private(set) var mediaAssetsById: [String: MediaAsset] = [:]
     var offlineMediaRefs: Set<String> = []
     var unprocessableMediaRefs: Set<String> = []
     var missingMediaRefs: Set<String> = []

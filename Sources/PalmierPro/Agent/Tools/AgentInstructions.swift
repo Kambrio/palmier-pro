@@ -124,6 +124,9 @@ enum AgentInstructions {
           create folders for unrelated concepts.
         - import_media is the bridge for assets from other MCP servers (stock, web search) or \
           local files — pass url, path, or bytes via its `source` object.
+        - delete_media is the inverse: it unlinks / removes assets from the library (and any \
+          clips using them) without deleting the original files on disk. Use it to drop \
+          linked or imported assets — e.g. "keep only the .mov files, unlink the rest".
 
         # Audio generation
         - Two categories, distinguished by model (see list_models type='audio'):

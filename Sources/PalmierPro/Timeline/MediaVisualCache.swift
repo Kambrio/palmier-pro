@@ -114,18 +114,12 @@ final class MediaVisualCache {
         let editorRef = editor
         Task.detached(priority: .utility) { [weak self] in
             defer { Task { @MainActor in editorRef?.mediaPrepFinished() } }
-            do {
-                try await Self.videoThumbnailGate.wait()
-            } catch {
-                await MainActor.run { [weak self] in _ = self?.videoThumbnailInFlight.remove(key) }
-                return
-            }
-            defer { Task { await Self.videoThumbnailGate.signal() } }
-
             let cacheKey = Self.diskCacheKey(for: url)
             var results = cacheKey.flatMap(Self.loadThumbnails(key:)) ?? []
 
-            if results.isEmpty {
+            // Gate only the decode; cache hits return without waiting on the semaphore.
+            if results.isEmpty, (try? await Self.videoThumbnailGate.wait()) != nil {
+                defer { Task { await Self.videoThumbnailGate.signal() } }
                 let avAsset = AVURLAsset(url: url)
                 if (try? await avAsset.loadTracks(withMediaType: .video).first) != nil {
                     let duration = (try? await avAsset.load(.duration).seconds) ?? 0

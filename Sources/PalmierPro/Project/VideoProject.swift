@@ -192,7 +192,10 @@ final class VideoProject: NSDocument {
             try copyPreservedFile(Project.thumbnailFilename, from: sourceURL, to: packageURL, fm: fm)
         }
         try writeChatDirectory(snapshot.chatSessionFiles, to: packageURL, fm: fm)
-        try copyMediaDirectoryIfNeeded(from: sourceURL, to: packageURL, fm: fm)
+        try copyDirectoryIfNeeded(Project.mediaDirectoryName, from: sourceURL, to: packageURL, fm: fm)
+        // Preserve agent-saved documents (scripts, hooks, transcript exports) across a
+        // safe-save package swap — same as media/, or they'd be dropped on the next save.
+        try copyDirectoryIfNeeded(Project.documentsDirectoryName, from: sourceURL, to: packageURL, fm: fm)
     }
 
     private nonisolated static func createPackageDirectory(at url: URL, fm: FileManager) throws {
@@ -226,10 +229,12 @@ final class VideoProject: NSDocument {
         try fm.copyItem(at: source, to: destination)
     }
 
-    private nonisolated static func copyMediaDirectoryIfNeeded(from sourceURL: URL?, to packageURL: URL, fm: FileManager) throws {
+    /// Carries a package subdirectory (media/, documents/) over to a safe-save's new package
+    /// location. No-op for in-place saves (the directory is already present and untouched).
+    nonisolated static func copyDirectoryIfNeeded(_ name: String, from sourceURL: URL?, to packageURL: URL, fm: FileManager) throws {
         guard let sourceURL, !sameFile(sourceURL, packageURL) else { return }
-        let source = sourceURL.appendingPathComponent(Project.mediaDirectoryName, isDirectory: true)
-        let destination = packageURL.appendingPathComponent(Project.mediaDirectoryName, isDirectory: true)
+        let source = sourceURL.appendingPathComponent(name, isDirectory: true)
+        let destination = packageURL.appendingPathComponent(name, isDirectory: true)
         if fm.fileExists(atPath: destination.path) {
             try fm.removeItem(at: destination)
         }

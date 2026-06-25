@@ -23,6 +23,7 @@ final class VideoEngine {
     private var trackMappings: [TrackMapping] = []
     private var clipNaturalSizes: [String: CGSize] = [:]
     private var clipTransforms: [String: CGAffineTransform] = [:]
+    private var clipSourceSizes: [String: CGSize] = [:]
     private var compositionDuration: CMTime = .zero
 
     private var pendingInteractiveSeek: (time: CMTime, tolerance: CMTime)?
@@ -202,6 +203,7 @@ final class VideoEngine {
             trackMappings = result.trackMappings
             clipNaturalSizes = result.clipNaturalSizes
             clipTransforms = result.clipTransforms
+            clipSourceSizes = result.sourceSizes
             compositionDuration = result.composition.duration
             editor.offlineMediaRefs = result.offlineMediaRefs
             editor.unprocessableMediaRefs = result.unprocessableMediaRefs
@@ -230,6 +232,7 @@ final class VideoEngine {
             trackMappings: trackMappings,
             clipNaturalSizes: clipNaturalSizes,
             clipTransforms: clipTransforms,
+            sourceSizes: clipSourceSizes,
             compositionDuration: compositionDuration,
             renderSize: previewRenderSize
         )

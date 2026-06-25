@@ -19,6 +19,7 @@ struct CompositionResult {
     let trackMappings: [TrackMapping]
     let clipNaturalSizes: [String: CGSize]
     let clipTransforms: [String: CGAffineTransform]
+    let sourceSizes: [String: CGSize]
     let offlineMediaRefs: Set<String>
     let unprocessableMediaRefs: Set<String>
 }
@@ -47,6 +48,7 @@ enum CompositionBuilder {
         var trackMappings: [TrackMapping] = []
         var clipNaturalSizes: [String: CGSize] = [:]
         var clipTransforms: [String: CGAffineTransform] = [:]
+        var sourceSizes: [String: CGSize] = [:]
         var offlineMediaRefs: Set<String> = []
         var unprocessableMediaRefs: Set<String> = []
 
@@ -170,6 +172,9 @@ enum CompositionBuilder {
                     let box = CGRect(origin: .zero, size: natSize).applying(pt)
                     clipNaturalSizes[clip.id] = CGSize(width: abs(box.width), height: abs(box.height))
                     clipTransforms[clip.id] = pt.concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY))
+                    sourceSizes[clip.id] = resolveSourceSize(clip.mediaRef)
+                        .map { CGSize(width: abs($0.width), height: abs($0.height)) }
+                        ?? clipNaturalSizes[clip.id]
                 }
 
                 if await insertClip(
@@ -220,6 +225,7 @@ enum CompositionBuilder {
             trackMappings: trackMappings,
             clipNaturalSizes: clipNaturalSizes,
             clipTransforms: clipTransforms,
+            sourceSizes: sourceSizes,
             compositionDuration: composition.duration,
             renderSize: renderSize
         )
@@ -231,6 +237,7 @@ enum CompositionBuilder {
             trackMappings: trackMappings,
             clipNaturalSizes: clipNaturalSizes,
             clipTransforms: clipTransforms,
+            sourceSizes: sourceSizes,
             offlineMediaRefs: offlineMediaRefs,
             unprocessableMediaRefs: unprocessableMediaRefs
         )
@@ -391,6 +398,7 @@ enum CompositionBuilder {
         trackMappings: [TrackMapping],
         clipNaturalSizes: [String: CGSize] = [:],
         clipTransforms: [String: CGAffineTransform] = [:],
+        sourceSizes: [String: CGSize] = [:],
         compositionDuration: CMTime,
         renderSize: CGSize
     ) -> (audioMix: AVMutableAudioMix, videoComposition: AVVideoComposition) {
@@ -426,6 +434,7 @@ enum CompositionBuilder {
             trackMappings: trackMappings,
             clipNaturalSizes: clipNaturalSizes,
             clipTransforms: clipTransforms,
+            sourceSizes: sourceSizes,
             compositionDuration: compositionDuration,
             renderSize: renderSize
         )
@@ -439,6 +448,7 @@ enum CompositionBuilder {
         trackMappings: [TrackMapping],
         clipNaturalSizes: [String: CGSize],
         clipTransforms: [String: CGAffineTransform],
+        sourceSizes: [String: CGSize] = [:],
         compositionDuration: CMTime,
         renderSize: CGSize
     ) -> [CompositorInstruction] {
@@ -468,6 +478,7 @@ enum CompositionBuilder {
                         trackID: mapping.compositionTrack.trackID,
                         clip: clip,
                         natSize: clipNaturalSizes[clip.id] ?? mapping.naturalSize,
+                        sourceNatSize: sourceSizes[clip.id] ?? clipNaturalSizes[clip.id] ?? mapping.naturalSize,
                         preferredTransform: clipTransforms[clip.id] ?? .identity
                     )
                 ))

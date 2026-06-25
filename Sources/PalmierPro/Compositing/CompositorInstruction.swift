@@ -4,8 +4,10 @@ import AVFoundation
 struct LayerPlan: Sendable {
     let trackID: CMPersistentTrackID
     let clip: Clip
-    /// Display size (preferredTransform applied), matching `clipNaturalSizes`.
+    /// Decoded frame display size (proxy size when proxied).
     let natSize: CGSize
+    /// Original source display size; equals natSize when not proxied.
+    let sourceNatSize: CGSize
     let preferredTransform: CGAffineTransform
 }
 

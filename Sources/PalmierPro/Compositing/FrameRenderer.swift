@@ -73,9 +73,12 @@ enum FrameRenderer {
         // Effects apply in source-pixel space: after crop, before placement.
         if let effects = clip.effects, !effects.isEmpty {
             let offset = frame - clip.startFrame
+            let srcLong = max(layer.sourceNatSize.width, layer.sourceNatSize.height)
+            let decLong = max(layer.natSize.width, layer.natSize.height)
+            let pixelScale = srcLong > 0 ? min(1, decLong / srcLong) : 1
             for effect in effects where effect.enabled {
                 guard let descriptor = EffectRegistry.descriptor(id: effect.type) else { continue }
-                image = descriptor.render(image, effect: effect, atOffset: offset)
+                image = descriptor.render(image, effect: effect, atOffset: offset, pixelScale: pixelScale)
             }
         }
 

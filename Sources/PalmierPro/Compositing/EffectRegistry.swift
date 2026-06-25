@@ -59,18 +59,21 @@ struct EffectDescriptor: Identifiable, Sendable {
         return ResolvedEffectParams(values: values, strings: strings, frame: offset)
     }
 
-    /// Full application incl. optional linear-light wrapping.
-    func render(_ image: CIImage, effect: Effect, atOffset offset: Int) -> CIImage {
-        let params = resolve(effect, atOffset: offset)
+    /// Applies the effect; `pixelScale` (≤ 1 for proxies) scales px-unit params so spatial effects match the source.
+    func render(_ image: CIImage, effect: Effect, atOffset offset: Int, pixelScale: CGFloat = 1) -> CIImage {
+        var params = resolve(effect, atOffset: offset)
+        if pixelScale != 1 {
+            var values = params.values
+            for spec in self.params where spec.unit == "px" {
+                values[spec.key] = (values[spec.key] ?? spec.defaultValue) * Double(pixelScale)
+            }
+            params = ResolvedEffectParams(values: values, strings: params.strings, frame: offset)
+        }
         let extent = image.extent
         var working = image
-        if linearizes {
-            working = working.applyingFilter("CISRGBToneCurveToLinear")
-        }
+        if linearizes { working = working.applyingFilter("CISRGBToneCurveToLinear") }
         working = apply(working, params, extent)
-        if linearizes {
-            working = working.applyingFilter("CILinearToSRGBToneCurve")
-        }
+        if linearizes { working = working.applyingFilter("CILinearToSRGBToneCurve") }
         return working
     }
 }

@@ -280,6 +280,18 @@ final class EditorViewModel {
     /// Preview playback bridge.
     var videoEngine: VideoEngine?
 
+    @ObservationIgnored lazy var proxyManager = ProxyManager(editor: self)
+
+    var useProxies: Bool {
+        get { mediaManifest.useProxies }
+        set { guard newValue != mediaManifest.useProxies else { return }
+              mediaManifest.useProxies = newValue; videoEngine?.rebuild() }
+    }
+    var proxyResolution: ProxyResolution {
+        get { mediaManifest.proxyResolution }
+        set { mediaManifest.proxyResolution = newValue }
+    }
+
     @ObservationIgnored
     let playheadState = PreviewPlayheadState()
 

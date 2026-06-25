@@ -38,6 +38,9 @@ final class MediaAsset: Identifiable {
         case failed(String)
     }
 
+    enum ProxyState: Equatable { case none, generating(Double), ready, failed(String) }
+    var proxyState: ProxyState = .none
+
     var isGenerated: Bool { generationInput != nil }
     var isGenerating: Bool {
         generationStatus == .generating || generationStatus == .downloading || generationStatus == .rendering

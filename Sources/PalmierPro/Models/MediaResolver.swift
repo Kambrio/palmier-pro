@@ -55,6 +55,13 @@ final class MediaResolver: @unchecked Sendable {
         entry(for: assetId)?.name ?? "Offline"
     }
 
+    /// On-disk URL of the asset's proxy if the manifest records one and the file exists; nil otherwise.
+    func proxyURL(for assetId: String) -> URL? {
+        guard let rel = entry(for: assetId)?.proxyPath, let base = projectURL() else { return nil }
+        let url = base.appendingPathComponent(rel)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     func entry(for assetId: String) -> MediaManifestEntry? {
         manifest().entries.first(where: { $0.id == assetId })
     }

@@ -45,7 +45,6 @@ enum ToolName: String, CaseIterable, Sendable {
     case deleteFolder = "delete_folder"
     case setProjectSettings = "set_project_settings"
     case sendFeedback = "send_feedback"
-    case setProjectSettings = "set_project_settings"
 }
 
 struct AgentTool: @unchecked Sendable {

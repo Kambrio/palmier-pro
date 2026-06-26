@@ -615,16 +615,17 @@ enum CompositionBuilder {
         return keyed.values.sorted { $0.frame < $1.frame }
     }
 
-    /// Convert a normalized-coordinate correction (homography about frame center) to a natSize-pixel
-    /// affine, pre-scaled by the crop zoom about the image center. Used for similarity/position methods.
+    /// Convert a normalized-space correction homography to a natSize-pixel affine, pre-scaled by the crop zoom about center.
     static func normalizedHomographyToAffine(_ t: StabFrameTransform, natSize: CGSize, zoom: CGFloat) -> CGAffineTransform {
         let m = t.m
         // Row-major homography → CGAffineTransform (drop the projective row for similarity/position).
         let normalized = CGAffineTransform(a: m[0], b: m[3], c: m[1], d: m[4], tx: m[2], ty: m[5])
+        // Known limitation: natSize is the display (post-rotation) size; corrections on rotated/portrait sources are scaled by the wrong axis. Tracked as a follow-up.
         let toPx = CGAffineTransform(scaleX: natSize.width, y: natSize.height)
         let fromPx = CGAffineTransform(scaleX: 1 / natSize.width, y: 1 / natSize.height)
         var px = fromPx.concatenating(normalized).concatenating(toPx)
         let cx = natSize.width / 2, cy = natSize.height / 2
+        // scaledBy/translatedBy PRE-multiply (apply arg first), so this zooms about center.
         let zoomT = CGAffineTransform(translationX: cx, y: cy)
             .scaledBy(x: zoom, y: zoom)
             .translatedBy(x: -cx, y: -cy)

@@ -2,8 +2,8 @@ import AVFoundation
 
 /// Stabilization correction baked for the renderer (resolved on the main actor at build time).
 struct StabResolved: Sendable, Equatable {
-    var affines: [CGAffineTransform]   // per clip-relative frame, natSize-pixel space (incl. crop zoom)
-    var perspective: [StabFrameTransform]?   // populated only for perspective method (later task)
+    var affines: [CGAffineTransform]
+    var perspective: [StabFrameTransform]?   // populated only for the perspective method
 }
 
 /// Immutable per-clip snapshot read on the render queue — never the live timeline.

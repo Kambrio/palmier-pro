@@ -48,6 +48,7 @@ struct PathSmootherTests {
             .identity, natSize: CGSize(width: 1920, height: 1080), zoom: 1)
         #expect(abs(a.a - 1) < 1e-9 && abs(a.d - 1) < 1e-9)
         #expect(abs(a.tx) < 1e-9 && abs(a.ty) < 1e-9)
+        #expect(abs(a.b) < 1e-9 && abs(a.c) < 1e-9)
     }
 
     @Test func zoomScalesAboutCenter() {

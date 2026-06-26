@@ -6,7 +6,8 @@ import os
 @Observable
 final class ProxyManager {
     private unowned let editor: EditorViewModel
-    private static let gate = AsyncSemaphore(value: 2)
+    // Serial: concurrent 6K→ProRes transcodes cause memory pressure that corrupts finalize.
+    private static let gate = AsyncSemaphore(value: 1)
     private(set) var isGenerating = false
     private(set) var completed = 0
     private(set) var total = 0
@@ -196,14 +197,27 @@ final class ProxyManager {
         let rel = "\(Project.mediaDirectoryName)/\(Project.proxiesDirname)/\(asset.id).mov"
         Log.proxy.notice("proxy start id=\(asset.id.prefix(8)) src=\(asset.url.lastPathComponent)")
         do {
-            // Throttle to integer-percent changes; otherwise every decoded frame hops the main actor.
-            let lastPct = OSAllocatedUnfairLock(initialState: -1)
-            try await ProxyService.transcode(source: asset.url, to: out, resolution: resolution) { p in
-                let pct = Int(p * 100)
-                let changed = lastPct.withLock { v -> Bool in if v == pct { return false }; v = pct; return true }
-                guard changed else { return }
-                Task { @MainActor in asset.proxyState = .generating(p) }
+            var lastError: Error?
+            for attempt in 0..<2 {
+                do {
+                    // Throttle to integer-percent changes; otherwise every decoded frame hops the main actor.
+                    let lastPct = OSAllocatedUnfairLock(initialState: -1)
+                    try await ProxyService.transcode(source: asset.url, to: out, resolution: resolution) { p in
+                        let pct = Int(p * 100)
+                        let changed = lastPct.withLock { v -> Bool in if v == pct { return false }; v = pct; return true }
+                        guard changed else { return }
+                        Task { @MainActor in asset.proxyState = .generating(p) }
+                    }
+                    lastError = nil
+                    break
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                    Log.proxy.error("proxy attempt \(attempt + 1) failed id=\(asset.id.prefix(8)): \(Log.detail(error))")
+                }
             }
+            if let lastError { throw lastError }
             let sig = ProxySignature.of(asset.url)
             asset.proxyState = .ready
             Log.proxy.notice("proxy ok id=\(asset.id.prefix(8))")

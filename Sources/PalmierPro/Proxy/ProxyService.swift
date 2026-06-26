@@ -24,9 +24,10 @@ enum ProxyService {
         let target = resolution.targetSize(forSource: absSize)
         let duration = try await asset.load(.duration)
 
-        try? FileManager.default.removeItem(at: output)
+        let tempURL = output.deletingLastPathComponent()
+            .appendingPathComponent(".tmp-\(UUID().uuidString)-\(output.lastPathComponent)")
         let reader = try AVAssetReader(asset: asset)
-        let writer = try AVAssetWriter(outputURL: output, fileType: .mov)
+        let writer = try AVAssetWriter(outputURL: tempURL, fileType: .mov)
 
         let readerVideo = AVAssetReaderTrackOutput(
             track: videoTrack,
@@ -165,12 +166,20 @@ enum ProxyService {
             if writer.status != .completed {
                 throw Failure(reason: writer.error?.localizedDescription ?? "writer did not complete")
             }
+            // finishWriting() can report .completed under memory pressure while the moov atom
+            // never durably lands → a substantial but unopenable file. Verify before publishing.
+            guard await isOpenableVideo(tempURL) else {
+                throw Failure(reason: "proxy finalized but is not openable (moov missing)")
+            }
+            // Atomic publish: the final path only ever holds a verified, openable file.
+            try? FileManager.default.removeItem(at: output)
+            try FileManager.default.moveItem(at: tempURL, to: output)
             progress(1)
         } catch {
             // Interrupted/failed writes leave an unfinalized (moov-less) file; remove it so a
             // corrupt proxy is never left behind for the manifest to trust.
-            if writer.status == .writing { writer.cancelWriting() }   // cancelWriting() deletes the output
-            try? FileManager.default.removeItem(at: output)
+            if writer.status == .writing { writer.cancelWriting() }   // cancelWriting() deletes the temp file
+            try? FileManager.default.removeItem(at: tempURL)
             throw error
         }
     }

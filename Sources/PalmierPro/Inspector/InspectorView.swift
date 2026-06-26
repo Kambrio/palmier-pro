@@ -378,6 +378,7 @@ struct InspectorView: View {
                     transformSection(clips: clips)
                     speedSection(clips: clips + selectedAudioClips)
                         .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
+                    stabilizationSection(clips: clips)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, AppTheme.Spacing.sm)
@@ -389,6 +390,7 @@ struct InspectorView: View {
         } else {
             transformSection(clips: clips)
             speedSection(clips: clips + selectedAudioClips)
+            stabilizationSection(clips: clips)
         }
 
         keyframesToggleBar(enabled: single != nil)
@@ -417,6 +419,77 @@ struct InspectorView: View {
             .opacity(enabled ? 1 : 0.4)
             .help(enabled ? (on ? "Hide keyframe timeline" : "Show keyframe timeline") : "Select a single clip to enable")
         }
+    }
+
+    @ViewBuilder
+    func stabilizationSection(clips: [Clip]) -> some View {
+        if clips.count == 1, let clip = clips.first, clip.mediaType == .video {
+            let stab = clip.stabilization
+            let canStabilize = clip.speed == 1.0
+            let progress = editor.stabilizationManager.progressByAsset[clip.mediaRef]
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+                sectionTitleLabel(title: "Stabilization")
+                propertyRow(label: "Stabilize") {
+                    Toggle("", isOn: Binding(
+                        get: { stab?.enabled ?? false },
+                        set: { on in
+                            updateStabilization(clip: clip) { $0.enabled = on }
+                            if on { triggerStabilizationAnalysis(clip) }
+                        }))
+                    .labelsHidden()
+                    .disabled(!canStabilize)
+                }
+                if stab?.enabled == true {
+                    propertyRow(label: "Method") {
+                        Picker("", selection: Binding(
+                            get: { stab?.method ?? .similarity },
+                            set: { v in updateStabilization(clip: clip) { $0.method = v } })) {
+                            ForEach(StabMethod.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    propertyRow(label: "Smoothness") {
+                        Slider(value: Binding(
+                            get: { stab?.smoothness ?? 0.5 },
+                            set: { v in updateStabilization(clip: clip) { $0.smoothness = v } }),
+                            in: 0...1)
+                    }
+                    propertyRow(label: "Crop to fit") {
+                        Toggle("", isOn: Binding(
+                            get: { stab?.cropToFit ?? true },
+                            set: { v in updateStabilization(clip: clip) { $0.cropToFit = v } }))
+                        .labelsHidden()
+                    }
+                    if let p = progress, p < 1 {
+                        Text("Analyzing… \(Int(p * 100))%")
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    }
+                }
+                if !canStabilize {
+                    Text("Stabilization requires normal speed (1×).")
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                }
+            }
+        }
+    }
+
+    private func updateStabilization(clip: Clip, _ mutate: @escaping (inout Stabilization) -> Void) {
+        editor.mutateClips(ids: [clip.id], actionName: "Stabilization") { c in
+            var s = c.stabilization ?? Stabilization()
+            mutate(&s)
+            c.stabilization = s
+        }
+        editor.stabilizationManager.invalidateCache()
+        editor.videoEngine?.rebuild()
+    }
+
+    private func triggerStabilizationAnalysis(_ clip: Clip) {
+        guard !editor.stabilizationManager.hasAnalysis(assetId: clip.mediaRef),
+              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        editor.stabilizationManager.analyze(assetId: clip.mediaRef, url: url)
     }
 
     @ViewBuilder

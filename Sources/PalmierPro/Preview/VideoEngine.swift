@@ -189,12 +189,32 @@ final class VideoEngine {
             }
         )
 
+        // Build stabilized-file map for vidstab clips — injected first in resolveURL so the baked
+        // file replaces the source for both video decode and audio (the baked .mov keeps audio).
+        var stabilizedMut: [String: URL] = [:]
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine == .vidstab else { continue }
+                if let baked = editor.stabilizationManager.stabilizedURL(for: clip.mediaRef) {
+                    stabilizedMut[clip.mediaRef] = baked
+                }
+            }
+        }
+        let stabilized = stabilizedMut
+
+        // Self-heal: queue any missing/stale bakes and analysis passes.
+        if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
+            editor.stabilizationManager.reconcileEnabledClips()
+            editor.stabilizationManager.reconcileVidstabClips()
+        }
+
         rebuildTask = Task {
             let result: CompositionResult
             do {
                 result = try await CompositionBuilder.build(
                     timeline: editor.timeline,
-                    resolveURL: { id in proxyURLs[id] ?? mediaURLs[id] },
+                    resolveURL: { id in stabilized[id] ?? proxyURLs[id] ?? mediaURLs[id] },
                     resolveSourceSize: { assetSizes[$0] },
                     missingMediaRefs: missingMediaRefs,
                     renderSize: renderSize
@@ -224,6 +244,11 @@ final class VideoEngine {
             replacePlayerItem(item, reason: "rebuild")
             syncTextLayers()
 
+            // Re-apply native stabilization visuals for l1/smooth clips.
+            if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
+                refreshVisuals()
+            }
+
             seek(to: editor.currentFrame, mode: .exact)
             if editor.isPlaying { player.play() }
         }
@@ -237,6 +262,8 @@ final class VideoEngine {
             return
         }
 
+        let stabByClip = editor.stabilizationManager.resolveStabByClip(
+            clipNaturalSizes: clipNaturalSizes, clipTransforms: clipTransforms)
         let (audioMix, videoComposition) = CompositionBuilder.buildVisuals(
             timeline: editor.timeline,
             trackMappings: trackMappings,
@@ -244,7 +271,8 @@ final class VideoEngine {
             clipTransforms: clipTransforms,
             sourceSizes: clipSourceSizes,
             compositionDuration: compositionDuration,
-            renderSize: previewRenderSize
+            renderSize: previewRenderSize,
+            stabByClip: stabByClip
         )
         currentItem.audioMix = audioMix
         currentItem.videoComposition = videoComposition

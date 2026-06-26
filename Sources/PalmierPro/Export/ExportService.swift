@@ -36,7 +36,8 @@ final class ExportService {
         resolution: ExportResolution,
         missingMediaRefs: Set<String> = [],
         outputURL: URL,
-        acquireSlot: Bool = true
+        acquireSlot: Bool = true,
+        stabilization: StabilizationManager? = nil
     ) async {
         error = nil
         lastReport = nil
@@ -87,7 +88,8 @@ final class ExportService {
             let prepared = try await makeExportSession(
                 timeline: timeline, resolver: resolver,
                 format: format, resolution: resolution,
-                missingMediaRefs: missingMediaRefs
+                missingMediaRefs: missingMediaRefs,
+                stabilization: stabilization
             )
             let session = prepared.session
             guard let fileType = format.utType else { throw ExportError.invalidFormat }
@@ -221,15 +223,38 @@ final class ExportService {
         resolver: MediaResolver,
         format: ExportFormat,
         resolution: ExportResolution,
-        missingMediaRefs: Set<String>
+        missingMediaRefs: Set<String>,
+        stabilization: StabilizationManager? = nil
     ) async throws -> (session: AVAssetExportSession, result: CompositionResult, renderSize: CGSize) {
         let timelineCanvas = CGSize(width: timeline.width, height: timeline.height)
         let renderSize = resolution.renderSize(for: timelineCanvas)
         let mediaURLs = resolver.expectedURLMap()
 
+        // Build stabilized-file map for vidstab clips — swap baked files in before the composition.
+        var stabilizedMut: [String: URL] = [:]
+        if let stabilization {
+            // Export bakes vid.stab from the full-res SOURCE at the export resolution (the preview's
+            // proxy-res bake is too soft for final output). Generated once, cached, reused.
+            let longEdge = Int(max(renderSize.width, renderSize.height))
+            var seen = Set<String>()
+            for track in timeline.tracks {
+                for clip in track.clips where clip.mediaType == .video {
+                    guard clip.stabilization?.enabled == true,
+                          clip.stabilization?.engine == .vidstab,
+                          seen.insert(clip.mediaRef).inserted else { continue }
+                    let smoothness = clip.stabilization?.smoothness ?? 0.5
+                    if let baked = await stabilization.ensureExportBake(
+                        assetId: clip.mediaRef, smoothness: smoothness, longEdge: longEdge) {
+                        stabilizedMut[clip.mediaRef] = baked
+                    }
+                }
+            }
+        }
+        let stabilizedMap = stabilizedMut
+
         let result = try await CompositionBuilder.build(
             timeline: timeline,
-            resolveURL: { mediaURLs[$0] },
+            resolveURL: { stabilizedMap[$0] ?? mediaURLs[$0] },
             missingMediaRefs: missingMediaRefs,
             renderSize: renderSize
         )
@@ -240,13 +265,31 @@ final class ExportService {
         }
         session.audioMix = result.audioMix
 
+        var videoComposition = result.videoComposition
+        if let stabilization {
+            let stabByClip = stabilization.resolveStabByClip(
+                clipNaturalSizes: result.clipNaturalSizes, clipTransforms: result.clipTransforms)
+            if !stabByClip.isEmpty {
+                let (_, vc) = CompositionBuilder.buildVisuals(
+                    timeline: timeline,
+                    trackMappings: result.trackMappings,
+                    clipNaturalSizes: result.clipNaturalSizes,
+                    clipTransforms: result.clipTransforms,
+                    sourceSizes: result.sourceSizes,
+                    compositionDuration: result.composition.duration,
+                    renderSize: renderSize,
+                    stabByClip: stabByClip)
+                videoComposition = vc
+            }
+        }
+
         // Bake text clips into the export via AVVideoCompositionCoreAnimationTool
         let (parent, videoLayer) = TextLayerController.buildForExport(
             timeline: timeline,
             fps: timeline.fps,
             renderSize: renderSize
         )
-        let mutableVC = result.videoComposition.mutableCopy() as! AVMutableVideoComposition
+        let mutableVC = videoComposition.mutableCopy() as! AVMutableVideoComposition
         mutableVC.animationTool = AVVideoCompositionCoreAnimationTool(
             postProcessingAsVideoLayer: videoLayer,
             in: parent

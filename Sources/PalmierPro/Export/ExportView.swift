@@ -324,7 +324,8 @@ struct ExportView: View {
                     format: format,
                     resolution: resolution,
                     missingMediaRefs: editor.missingMediaRefs,
-                    outputURL: url
+                    outputURL: url,
+                    stabilization: editor.stabilizationManager
                 )
                 if service.error == nil {
                     editor.showExportDialog = false

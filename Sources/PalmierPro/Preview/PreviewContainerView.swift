@@ -125,6 +125,9 @@ struct PreviewContainerView: View {
                     }
                     Button(proxyActionLabel) { editor.proxyManager.createProxies() }
                         .disabled(editor.proxyManager.isGenerating || editor.proxyManager.assetsNeedingProxies().isEmpty)
+                    // Verifies existing proxies open; rebuilds any that are corrupt/unfinalized.
+                    Button("Verify & Repair Proxies") { editor.proxyManager.createProxies() }
+                        .disabled(editor.proxyManager.isGenerating || editor.proxyManager.proxyDiskUsage() == 0)
                     Button("Delete Unused Proxies") { editor.proxyManager.deleteUnusedProxies() }
                         .disabled(editor.proxyManager.unusedProxyAssetIds().isEmpty)
                     Button(proxyDeleteLabel) { editor.proxyManager.deleteProxies() }

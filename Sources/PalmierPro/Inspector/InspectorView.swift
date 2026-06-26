@@ -378,6 +378,7 @@ struct InspectorView: View {
                     transformSection(clips: clips)
                     speedSection(clips: clips + selectedAudioClips)
                         .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
+                    stabilizationSection(clips: clips)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, AppTheme.Spacing.sm)
@@ -389,6 +390,7 @@ struct InspectorView: View {
         } else {
             transformSection(clips: clips)
             speedSection(clips: clips + selectedAudioClips)
+            stabilizationSection(clips: clips)
         }
 
         keyframesToggleBar(enabled: single != nil)
@@ -417,6 +419,137 @@ struct InspectorView: View {
             .opacity(enabled ? 1 : 0.4)
             .help(enabled ? (on ? "Hide keyframe timeline" : "Show keyframe timeline") : "Select a single clip to enable")
         }
+    }
+
+    @ViewBuilder
+    func stabilizationSection(clips: [Clip]) -> some View {
+        if clips.count == 1, let clip = clips.first, clip.mediaType == .video {
+            let stab = clip.stabilization
+            let canStabilize = clip.speed == 1.0
+            let analyzeProgress = editor.stabilizationManager.progressByAsset[clip.mediaRef]
+            let bakeProgress = editor.stabilizationManager.bakeProgress[clip.mediaRef]
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+                sectionTitleLabel(title: "Stabilization")
+                propertyRow(label: "Stabilize") {
+                    Toggle("", isOn: Binding(
+                        get: { stab?.enabled ?? false },
+                        set: { on in
+                            updateStabilization(clip: clip) { $0.enabled = on }
+                            if on { triggerStabilization(clip) }
+                        }))
+                    .labelsHidden()
+                    .disabled(!canStabilize)
+                }
+                if stab?.enabled == true {
+                    propertyRow(label: "Engine") {
+                        Picker("", selection: Binding(
+                            get: { stab?.engine ?? .vidstab },
+                            set: { v in
+                                updateStabilization(clip: clip) { $0.engine = v }
+                                if v == .vidstab {
+                                    triggerBake(clip: clip, smoothness: stab?.smoothness ?? 0.5)
+                                }
+                            })) {
+                            ForEach(StabEngine.allCases, id: \.self) { eng in
+                                Text(engineLabel(eng))
+                                    .tag(eng)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    if stab?.engine == .vidstab {
+                        switch VidStab.capability {
+                        case .none:
+                            Text("Install ffmpeg to use this engine.")
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        case .deshake:
+                            Text("Install libvidstab-enabled ffmpeg for higher-quality vid.stab.")
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        case .vidstab:
+                            EmptyView()
+                        }
+                    }
+                    propertyRow(label: "Smoothness") {
+                        Slider(value: Binding(
+                            get: { stab?.smoothness ?? 0.5 },
+                            set: { v in
+                                updateStabilization(clip: clip) { $0.smoothness = v }
+                                if stab?.engine == .vidstab {
+                                    triggerBake(clip: clip, smoothness: v)
+                                }
+                            }),
+                            in: 0...1)
+                    }
+                    propertyRow(label: "Crop to fit") {
+                        Toggle("", isOn: Binding(
+                            get: { stab?.cropToFit ?? true },
+                            set: { v in updateStabilization(clip: clip) { $0.cropToFit = v } }))
+                        .labelsHidden()
+                    }
+                    if let p = analyzeProgress, p < 1 {
+                        Text("Analyzing… \(Int(p * 100))%")
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    }
+                    if let p = bakeProgress, p < 1 {
+                        Text("Stabilizing… \(Int(p * 100))%")
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    }
+                }
+                if !canStabilize {
+                    Text("Stabilization requires normal speed (1×).")
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                }
+            }
+            .onAppear { VidStab.detectIfNeeded() }   // probe off-main; never run ffmpeg in body
+        }
+    }
+
+    private func engineLabel(_ eng: StabEngine) -> String {
+        if eng == .vidstab {
+            switch VidStab.capability {
+            case .vidstab: return "vid.stab (FFmpeg)"
+            case .deshake: return "FFmpeg (deshake)"
+            case .none:    return "FFmpeg — needs ffmpeg"
+            }
+        }
+        return eng.displayName
+    }
+
+    private func updateStabilization(clip: Clip, _ mutate: @escaping (inout Stabilization) -> Void) {
+        editor.mutateClips(ids: [clip.id], actionName: "Stabilization") { c in
+            var s = c.stabilization ?? Stabilization()
+            mutate(&s)
+            c.stabilization = s
+        }
+        editor.stabilizationManager.invalidateCache()
+        editor.videoEngine?.refreshVisuals()
+    }
+
+    /// On enable, kick off the right work for the chosen engine: a bake for vid.stab, Vision
+    /// analysis for the native engines.
+    private func triggerStabilization(_ clip: Clip) {
+        if (clip.stabilization?.engine ?? .vidstab) == .vidstab {
+            triggerBake(clip: clip, smoothness: clip.stabilization?.smoothness ?? 0.5)
+        } else {
+            triggerStabilizationAnalysis(clip)
+        }
+    }
+
+    private func triggerStabilizationAnalysis(_ clip: Clip) {
+        guard !editor.stabilizationManager.hasAnalysis(assetId: clip.mediaRef),
+              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        editor.stabilizationManager.analyze(assetId: clip.mediaRef, url: url)
+    }
+
+    private func triggerBake(clip: Clip, smoothness: Double) {
+        guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        editor.stabilizationManager.enqueueBake(assetId: clip.mediaRef, url: url, smoothness: smoothness)
     }
 
     @ViewBuilder

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import os
 
@@ -5,7 +6,8 @@ import os
 @Observable
 final class ProxyManager {
     private unowned let editor: EditorViewModel
-    private static let gate = AsyncSemaphore(value: 2)
+    // Serial: concurrent 6K→ProRes transcodes cause memory pressure that corrupts finalize.
+    private static let gate = AsyncSemaphore(value: 1)
     private(set) var isGenerating = false
     private(set) var completed = 0
     private(set) var total = 0
@@ -99,20 +101,81 @@ final class ProxyManager {
         if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
     }
 
+    /// Checks each manifest entry with a proxy path; removes entries whose file exists but
+    /// is not an openable finalized movie. Capped to 4 concurrent openability checks.
+    func validateAndPruneProxies() async {
+        guard let base = editor.projectURL else { return }
+        var changed = false
+        // Collect indices with a non-nil proxyPath up front (manifest is mutated below).
+        let indices = editor.mediaManifest.entries.indices.filter { editor.mediaManifest.entries[$0].proxyPath != nil }
+        // Process in batches of 4 to avoid opening hundreds of files concurrently.
+        let batchSize = 4
+        var i = indices.startIndex
+        while i < indices.endIndex {
+            let batchEnd = indices.index(i, offsetBy: batchSize, limitedBy: indices.endIndex) ?? indices.endIndex
+            let batch = Array(indices[i..<batchEnd])
+            // Collect the (manifestIndex, url) pairs for this batch.
+            var toCheck: [(Int, URL)] = []
+            for idx in batch {
+                guard let rel = editor.mediaManifest.entries[idx].proxyPath else { continue }
+                let url = base.appendingPathComponent(rel)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                toCheck.append((idx, url))
+            }
+            // Check openability concurrently (suspends without blocking main actor).
+            var corruptIndices: [Int] = []
+            await withTaskGroup(of: (Int, Bool).self) { group in
+                for (idx, url) in toCheck {
+                    group.addTask { (idx, await ProxyService.isOpenableVideo(url)) }
+                }
+                for await (idx, openable) in group where !openable {
+                    corruptIndices.append(idx)
+                }
+            }
+            // Prune corrupt entries on the main actor (we're already @MainActor).
+            for idx in corruptIndices {
+                guard let rel = editor.mediaManifest.entries[idx].proxyPath else { continue }
+                let url = base.appendingPathComponent(rel)
+                let assetId = editor.mediaManifest.entries[idx].id
+                Log.proxy.notice("pruning corrupt proxy id=\(assetId.prefix(8)) path=\(rel)")
+                try? FileManager.default.removeItem(at: url)
+                editor.mediaManifest.entries[idx].proxyPath = nil
+                editor.mediaManifest.entries[idx].proxySourceSig = nil
+                editor.proxyBackedMediaRefs.remove(assetId)
+                if let asset = editor.mediaAssets.first(where: { $0.id == assetId }) {
+                    asset.proxyState = .none
+                }
+                changed = true
+            }
+            i = batchEnd
+        }
+        if changed {
+            editor.onPersistentStateChanged?()
+            if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
+        }
+    }
+
     /// Background-generate proxies for all assets that need them. No-op if running or unsaved.
     func createProxies() {
         guard !isGenerating, editor.projectURL != nil else { return }
-        let targets = assetsNeedingProxies()
-        guard !targets.isEmpty, let dir = proxiesDir else { return }
+        guard let dir = proxiesDir else { return }
         let resolution = editor.mediaManifest.proxyResolution
 
-        isGenerating = true; completed = 0; total = targets.count
-        startedAt = Date()
-        totalDuration = targets.reduce(0) { $0 + max(0, $1.duration) }
-        processedDuration = 0; bytesThisRun = 0
-        Log.proxy.notice("createProxies begin total=\(targets.count) res=\(resolution.label) dir=\(dir.path)")
+        isGenerating = true; completed = 0; total = 0
+        processedDuration = 0; bytesThisRun = 0; startedAt = nil
         job = Task { [weak self] in
             guard let self else { return }
+            // Prune corrupt proxies first so assetsNeedingProxies picks them up for regeneration.
+            await self.validateAndPruneProxies()
+            let targets = self.assetsNeedingProxies()
+            guard !targets.isEmpty else {
+                self.isGenerating = false
+                return
+            }
+            self.total = targets.count
+            self.startedAt = Date()
+            self.totalDuration = targets.reduce(0) { $0 + max(0, $1.duration) }
+            Log.proxy.notice("createProxies begin total=\(targets.count) res=\(resolution.label) dir=\(dir.path)")
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             await withTaskGroup(of: Void.self) { group in
                 for asset in targets {
@@ -134,14 +197,27 @@ final class ProxyManager {
         let rel = "\(Project.mediaDirectoryName)/\(Project.proxiesDirname)/\(asset.id).mov"
         Log.proxy.notice("proxy start id=\(asset.id.prefix(8)) src=\(asset.url.lastPathComponent)")
         do {
-            // Throttle to integer-percent changes; otherwise every decoded frame hops the main actor.
-            let lastPct = OSAllocatedUnfairLock(initialState: -1)
-            try await ProxyService.transcode(source: asset.url, to: out, resolution: resolution) { p in
-                let pct = Int(p * 100)
-                let changed = lastPct.withLock { v -> Bool in if v == pct { return false }; v = pct; return true }
-                guard changed else { return }
-                Task { @MainActor in asset.proxyState = .generating(p) }
+            var lastError: Error?
+            for attempt in 0..<2 {
+                do {
+                    // Throttle to integer-percent changes; otherwise every decoded frame hops the main actor.
+                    let lastPct = OSAllocatedUnfairLock(initialState: -1)
+                    try await ProxyService.transcode(source: asset.url, to: out, resolution: resolution) { p in
+                        let pct = Int(p * 100)
+                        let changed = lastPct.withLock { v -> Bool in if v == pct { return false }; v = pct; return true }
+                        guard changed else { return }
+                        Task { @MainActor in asset.proxyState = .generating(p) }
+                    }
+                    lastError = nil
+                    break
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                    Log.proxy.error("proxy attempt \(attempt + 1) failed id=\(asset.id.prefix(8)): \(Log.detail(error))")
+                }
             }
+            if let lastError { throw lastError }
             let sig = ProxySignature.of(asset.url)
             asset.proxyState = .ready
             Log.proxy.notice("proxy ok id=\(asset.id.prefix(8))")

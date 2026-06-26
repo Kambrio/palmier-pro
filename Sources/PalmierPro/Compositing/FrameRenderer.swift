@@ -84,9 +84,14 @@ enum FrameRenderer {
 
         // transformAt drops the flip flags, so use the static transform unless animated.
         let t = clip.hasTransformAnimation ? clip.transformAt(frame: frame) : clip.transform
-        let av = layer.preferredTransform.concatenating(
-            CompositionBuilder.affineTransform(for: t, natSize: layer.natSize, renderSize: renderSize)
-        )
+        let placement = CompositionBuilder.affineTransform(for: t, natSize: layer.natSize, renderSize: renderSize)
+        var srcSpace = layer.preferredTransform
+        if let affines = layer.stabAffines, !affines.isEmpty {
+            let rel = max(0, min(affines.count - 1, frame - clip.startFrame))
+            // Prepend the stabilization correction in source/natSize space, before placement.
+            srcSpace = affines[rel].concatenating(srcSpace)
+        }
+        let av = srcSpace.concatenating(placement)
         // Conjugate the AV top-left-origin mapping into CI's bottom-left space.
         let ci = flipY(srcHeight).concatenating(av).concatenating(flipY(renderSize.height))
         image = image.transformed(by: ci)

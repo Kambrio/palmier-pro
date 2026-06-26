@@ -42,4 +42,18 @@ struct PathSmootherTests {
         #expect(out.corrections.isEmpty)
         #expect(out.cropZoom == 1.0)
     }
+
+    @Test func identityCorrectionMapsToIdentityAffine() {
+        let a = CompositionBuilder.normalizedHomographyToAffine(
+            .identity, natSize: CGSize(width: 1920, height: 1080), zoom: 1)
+        #expect(abs(a.a - 1) < 1e-9 && abs(a.d - 1) < 1e-9)
+        #expect(abs(a.tx) < 1e-9 && abs(a.ty) < 1e-9)
+    }
+
+    @Test func zoomScalesAboutCenter() {
+        let a = CompositionBuilder.normalizedHomographyToAffine(
+            .identity, natSize: CGSize(width: 100, height: 100), zoom: 2)
+        let center = CGPoint(x: 50, y: 50).applying(a)
+        #expect(abs(center.x - 50) < 1e-6 && abs(center.y - 50) < 1e-6)
+    }
 }

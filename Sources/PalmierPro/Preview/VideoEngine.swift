@@ -227,6 +227,22 @@ final class VideoEngine {
             return
         }
 
+        var stabByClip: [String: StabResolved] = [:]
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard let stab = clip.stabilization, stab.enabled, stab.method != .perspective,
+                      let srcURL = editor.mediaResolver.resolveURL(for: clip.mediaRef),
+                      let result = editor.stabilizationManager.corrections(for: clip, assetURL: srcURL)
+                else { continue }
+                let natSize = clipNaturalSizes[clip.id] ?? .zero
+                guard natSize.width > 0, natSize.height > 0 else { continue }
+                let zoom = CGFloat(result.cropZoom)
+                let affines = result.corrections.map {
+                    CompositionBuilder.normalizedHomographyToAffine($0, natSize: natSize, zoom: zoom)
+                }
+                stabByClip[clip.id] = StabResolved(affines: affines, perspective: nil)
+            }
+        }
         let (audioMix, videoComposition) = CompositionBuilder.buildVisuals(
             timeline: editor.timeline,
             trackMappings: trackMappings,
@@ -234,7 +250,8 @@ final class VideoEngine {
             clipTransforms: clipTransforms,
             sourceSizes: clipSourceSizes,
             compositionDuration: compositionDuration,
-            renderSize: previewRenderSize
+            renderSize: previewRenderSize,
+            stabByClip: stabByClip
         )
         currentItem.audioMix = audioMix
         currentItem.videoComposition = videoComposition

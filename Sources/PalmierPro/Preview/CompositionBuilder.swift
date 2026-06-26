@@ -400,7 +400,8 @@ enum CompositionBuilder {
         clipTransforms: [String: CGAffineTransform] = [:],
         sourceSizes: [String: CGSize] = [:],
         compositionDuration: CMTime,
-        renderSize: CGSize
+        renderSize: CGSize,
+        stabByClip: [String: StabResolved] = [:]
     ) -> (audioMix: AVMutableAudioMix, videoComposition: AVVideoComposition) {
         let timescale = CMTimeScale(timeline.fps)
 
@@ -436,7 +437,8 @@ enum CompositionBuilder {
             clipTransforms: clipTransforms,
             sourceSizes: sourceSizes,
             compositionDuration: compositionDuration,
-            renderSize: renderSize
+            renderSize: renderSize,
+            stabByClip: stabByClip
         )
         return (audioMix, AVVideoComposition(configuration: vcConfig))
     }
@@ -450,7 +452,8 @@ enum CompositionBuilder {
         clipTransforms: [String: CGAffineTransform],
         sourceSizes: [String: CGSize] = [:],
         compositionDuration: CMTime,
-        renderSize: CGSize
+        renderSize: CGSize,
+        stabByClip: [String: StabResolved] = [:]
     ) -> [CompositorInstruction] {
         let timescale = CMTimeScale(timeline.fps)
         struct Entry {
@@ -479,7 +482,9 @@ enum CompositionBuilder {
                         clip: clip,
                         natSize: clipNaturalSizes[clip.id] ?? mapping.naturalSize,
                         sourceNatSize: sourceSizes[clip.id] ?? clipNaturalSizes[clip.id] ?? mapping.naturalSize,
-                        preferredTransform: clipTransforms[clip.id] ?? .identity
+                        preferredTransform: clipTransforms[clip.id] ?? .identity,
+                        stabAffines: stabByClip[clip.id]?.affines,
+                        stabPerspective: stabByClip[clip.id]?.perspective
                     )
                 ))
                 prevEndFrame = clip.endFrame
@@ -608,6 +613,23 @@ enum CompositionBuilder {
             keyed[kf.frame] = kf
         }
         return keyed.values.sorted { $0.frame < $1.frame }
+    }
+
+    /// Convert a normalized-coordinate correction (homography about frame center) to a natSize-pixel
+    /// affine, pre-scaled by the crop zoom about the image center. Used for similarity/position methods.
+    static func normalizedHomographyToAffine(_ t: StabFrameTransform, natSize: CGSize, zoom: CGFloat) -> CGAffineTransform {
+        let m = t.m
+        // Row-major homography → CGAffineTransform (drop the projective row for similarity/position).
+        let normalized = CGAffineTransform(a: m[0], b: m[3], c: m[1], d: m[4], tx: m[2], ty: m[5])
+        let toPx = CGAffineTransform(scaleX: natSize.width, y: natSize.height)
+        let fromPx = CGAffineTransform(scaleX: 1 / natSize.width, y: 1 / natSize.height)
+        var px = fromPx.concatenating(normalized).concatenating(toPx)
+        let cx = natSize.width / 2, cy = natSize.height / 2
+        let zoomT = CGAffineTransform(translationX: cx, y: cy)
+            .scaledBy(x: zoom, y: zoom)
+            .translatedBy(x: -cx, y: -cy)
+        px = px.concatenating(zoomT)
+        return px
     }
 
     /// Maps a clip's Transform (in normalized 0–1 canvas coordinates) to the

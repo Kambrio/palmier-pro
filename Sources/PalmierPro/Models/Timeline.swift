@@ -108,6 +108,9 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 
     var effects: [Effect]?
 
+    /// Non-destructive stabilization parameters; nil when disabled/never applied.
+    var stabilization: Stabilization?
+
     private enum CodingKeys: String, CodingKey {
         case id, mediaRef, mediaType, sourceClipType, startFrame, durationFrames
         case trimStartFrame, trimEndFrame, speed, volume
@@ -116,6 +119,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
         case linkGroupId, captionGroupId, textContent, textStyle
         case opacityTrack, positionTrack, scaleTrack, rotationTrack, cropTrack, volumeTrack
         case effects
+        case stabilization
     }
 
     /// Frame where this clip ends on the timeline

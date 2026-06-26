@@ -12,7 +12,7 @@ struct FFmpegStabTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let out = dir.appendingPathComponent("stab.mov")
-        try await FFmpegStabService.stabilize(source: src, to: out, smoothness: 0.5, capability: .deshake, ffmpeg: ffmpeg, progress: { _ in })
+        try await FFmpegStabService.stabilize(source: src, to: out, smoothness: 0.5, maxLongEdge: 0, capability: .deshake, ffmpeg: ffmpeg, progress: { _ in })
         #expect(await ProxyService.isOpenableVideo(out))
         // No temp leftovers.
         let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.filter { $0.hasPrefix(".tmp-") || $0.hasPrefix(".trf-") } ?? []

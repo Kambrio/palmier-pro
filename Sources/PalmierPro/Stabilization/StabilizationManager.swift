@@ -93,9 +93,14 @@ final class StabilizationManager {
         bakeProgress[assetId] = 0
         let output = dir.appendingPathComponent("\(assetId).mov")
         let sigFile = dir.appendingPathComponent("\(assetId).sig")
+        // Bake from the low-res proxy when proxies are on (seconds + a few MB vs minutes/GB on 6K
+        // source); else bake from source but cap the long edge so it stays fast and small.
+        let proxy = editor.mediaManifest.useProxies ? editor.mediaResolver.proxyURL(for: assetId) : nil
+        let input = proxy ?? url
+        let maxLongEdge = proxy == nil ? 1280 : 0
         do {
             try await FFmpegStabService.stabilize(
-                source: url, to: output, smoothness: smoothness,
+                source: input, to: output, smoothness: smoothness, maxLongEdge: maxLongEdge,
                 capability: cap, ffmpeg: ffmpeg) { p in
                     Task { @MainActor [weak self] in self?.bakeProgress[assetId] = p }
                 }

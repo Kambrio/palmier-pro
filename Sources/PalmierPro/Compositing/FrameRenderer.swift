@@ -82,6 +82,11 @@ enum FrameRenderer {
             }
         }
 
+        if let homos = layer.stabPerspective, !homos.isEmpty {
+            let rel = max(0, min(homos.count - 1, frame - clip.startFrame))
+            image = applyPerspective(image, homos[rel], natSize: layer.natSize, zoom: layer.stabZoom)
+        }
+
         // transformAt drops the flip flags, so use the static transform unless animated.
         let t = clip.hasTransformAnimation ? clip.transformAt(frame: frame) : clip.transform
         let placement = CompositionBuilder.affineTransform(for: t, natSize: layer.natSize, renderSize: renderSize)
@@ -104,6 +109,29 @@ enum FrameRenderer {
             ])
         }
         return image
+    }
+
+    /// Warp the image by a normalized correction homography via Core Image, with crop-zoom about center.
+    private static func applyPerspective(_ image: CIImage, _ t: StabFrameTransform, natSize: CGSize, zoom: CGFloat) -> CIImage {
+        let ext = image.extent
+        guard ext.width > 0, ext.height > 0 else { return image }
+        let cx = ext.midX, cy = ext.midY
+        func warp(_ p: CGPoint) -> CGPoint {
+            let nx = (p.x - ext.minX) / ext.width, ny = (p.y - ext.minY) / ext.height
+            let m = t.m
+            let w = m[6]*nx + m[7]*ny + m[8]
+            let d = (w == 0 ? 1 : w)
+            let ox = (m[0]*nx + m[1]*ny + m[2]) / d
+            let oy = (m[3]*nx + m[4]*ny + m[5]) / d
+            let px = ext.minX + ox * ext.width, py = ext.minY + oy * ext.height
+            return CGPoint(x: cx + (px - cx) * zoom, y: cy + (py - cy) * zoom)
+        }
+        return image.applyingFilter("CIPerspectiveTransform", parameters: [
+            "inputTopLeft":     CIVector(cgPoint: warp(CGPoint(x: ext.minX, y: ext.maxY))),
+            "inputTopRight":    CIVector(cgPoint: warp(CGPoint(x: ext.maxX, y: ext.maxY))),
+            "inputBottomRight": CIVector(cgPoint: warp(CGPoint(x: ext.maxX, y: ext.minY))),
+            "inputBottomLeft":  CIVector(cgPoint: warp(CGPoint(x: ext.minX, y: ext.minY))),
+        ])
     }
 
     private static func flipY(_ height: CGFloat) -> CGAffineTransform {

@@ -4,6 +4,7 @@ import AVFoundation
 struct StabResolved: Sendable, Equatable {
     var affines: [CGAffineTransform]
     var perspective: [StabFrameTransform]?   // populated only for the perspective method
+    var zoom: CGFloat = 1
 }
 
 /// Immutable per-clip snapshot read on the render queue — never the live timeline.
@@ -17,6 +18,7 @@ struct LayerPlan: Sendable {
     let preferredTransform: CGAffineTransform
     var stabAffines: [CGAffineTransform]? = nil
     var stabPerspective: [StabFrameTransform]? = nil
+    var stabZoom: CGFloat = 1
 }
 
 /// One timeline segment between clip boundaries. Layers are ordered bottom → top.

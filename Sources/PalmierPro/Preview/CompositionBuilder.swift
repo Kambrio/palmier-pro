@@ -484,7 +484,8 @@ enum CompositionBuilder {
                         sourceNatSize: sourceSizes[clip.id] ?? clipNaturalSizes[clip.id] ?? mapping.naturalSize,
                         preferredTransform: clipTransforms[clip.id] ?? .identity,
                         stabAffines: stabByClip[clip.id]?.affines,
-                        stabPerspective: stabByClip[clip.id]?.perspective
+                        stabPerspective: stabByClip[clip.id]?.perspective,
+                        stabZoom: stabByClip[clip.id]?.zoom ?? 1
                     )
                 ))
                 prevEndFrame = clip.endFrame

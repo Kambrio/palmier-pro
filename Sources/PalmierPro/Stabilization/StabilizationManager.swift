@@ -51,7 +51,7 @@ final class StabilizationManager {
             completed = 1
             progressByAsset[assetId] = 1
             editor.onPersistentStateChanged?()
-            editor.videoEngine?.rebuild()
+            editor.videoEngine?.refreshVisuals()
         } catch is CancellationError {
             progressByAsset[assetId] = nil
         } catch {
@@ -64,7 +64,7 @@ final class StabilizationManager {
     /// Returns nil when no analysis exists or stabilization is disabled.
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
         guard let stab = clip.stabilization, stab.enabled, let base = baseDir else { return nil }
-        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.durationFrames)"
+        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
         if let hit = correctionCache[key] { return hit }
         guard let sidecar = StabilizationSidecar.read(
             assetId: clip.mediaRef, baseDir: base,

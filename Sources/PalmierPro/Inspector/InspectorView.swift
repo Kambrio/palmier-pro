@@ -483,7 +483,7 @@ struct InspectorView: View {
             c.stabilization = s
         }
         editor.stabilizationManager.invalidateCache()
-        editor.videoEngine?.rebuild()
+        editor.videoEngine?.refreshVisuals()
     }
 
     private func triggerStabilizationAnalysis(_ clip: Clip) {

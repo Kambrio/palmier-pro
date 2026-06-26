@@ -214,6 +214,11 @@ final class VideoEngine {
             replacePlayerItem(item, reason: "rebuild")
             syncTextLayers()
 
+            // rebuild()'s composition has no stabilization; re-apply visuals with corrections if any clip needs it.
+            if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
+                refreshVisuals()
+            }
+
             seek(to: editor.currentFrame, mode: .exact)
             if editor.isPlaying { player.play() }
         }
@@ -230,7 +235,7 @@ final class VideoEngine {
         var stabByClip: [String: StabResolved] = [:]
         for track in editor.timeline.tracks {
             for clip in track.clips where clip.mediaType == .video {
-                guard let stab = clip.stabilization, stab.enabled,
+                guard let stab = clip.stabilization, stab.enabled, clip.speed == 1.0,
                       let srcURL = editor.mediaResolver.resolveURL(for: clip.mediaRef),
                       let result = editor.stabilizationManager.corrections(for: clip, assetURL: srcURL)
                 else { continue }

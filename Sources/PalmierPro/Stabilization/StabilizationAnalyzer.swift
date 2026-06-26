@@ -45,21 +45,18 @@ enum StabilizationAnalyzer {
                 let buffer = downscaled(rawBuffer, longEdge: analysisLongEdge, ctx: ciContext)
                 count += 1
                 if let prev = previous {
-                    let delta = registerDelta(from: prev, to: buffer)
-                    if (0..<3).allSatisfy({ r in (0..<3).allSatisfy { c in delta[c][r].isFinite } }) {
-                        let (dtx, dty, drot, dscale) = decomposeDelta(delta)
-                        // Clamp per-frame motion to sane handheld bounds; wild values are registration errors.
-                        let cdtx = dtx.clamped(to: -0.08...0.08)
-                        let cdty = dty.clamped(to: -0.08...0.08)
-                        let cdrot = drot.clamped(to: -0.087...0.087)    // ±5°
-                        let cdscale = dscale.clamped(to: 0.97...1.03)
-                        // Compose the small delta onto the absolute path; clamp absolute accumulators
-                        // so monotonic drift can never push them toward infinity → NaN in similarityTransform.
-                        accTx = (accTx + cdtx).clamped(to: -50...50)
-                        accTy = (accTy + cdty).clamped(to: -50...50)
-                        accRot = (accRot + cdrot).clamped(to: -50...50)
-                        accScale = (accScale * cdscale).clamped(to: 0.1...10.0)
-                    }
+                    let (dtx, dty, drot, dscale) = registerDelta(from: prev, to: buffer)
+                    // Clamp per-frame motion to sane handheld bounds; wild values are registration errors.
+                    let cdtx = dtx.clamped(to: -0.08...0.08)
+                    let cdty = dty.clamped(to: -0.08...0.08)
+                    let cdrot = drot.clamped(to: -0.087...0.087)    // ±5°
+                    let cdscale = dscale.clamped(to: 0.97...1.03)
+                    // Compose the small delta onto the absolute path; clamp absolute accumulators
+                    // so monotonic drift can never push them toward infinity → NaN in similarityTransform.
+                    accTx = (accTx + cdtx).clamped(to: -50...50)
+                    accTy = (accTy + cdty).clamped(to: -50...50)
+                    accRot = (accRot + cdrot).clamped(to: -50...50)
+                    accScale = (accScale * cdscale).clamped(to: 0.1...10.0)
                     frames.append(similarityTransform(tx: accTx, ty: accTy, rot: accRot, scale: accScale))
                 }
                 previous = buffer
@@ -75,17 +72,6 @@ enum StabilizationAnalyzer {
     }
 
     private static let analysisLongEdge: CGFloat = 540
-
-    /// Decompose a normalized delta homography to (tx, ty, rotation, uniform-scale).
-    private static func decomposeDelta(_ h: simd_double3x3) -> (tx: Double, ty: Double, rot: Double, scale: Double) {
-        // simd_double3x3 is column-major: h[col][row]. So:
-        //   a=h[0][0], c=h[0][1], b=h[1][0], d=h[1][1], tx=h[2][0], ty=h[2][1]
-        let a = h[0][0], b = h[1][0], c = h[0][1], d = h[1][1]
-        let tx = h[2][0], ty = h[2][1]
-        let scale = (hypot(a, c) + hypot(b, d)) / 2
-        let rot = atan2(c, a)
-        return (tx, ty, rot, scale.isFinite && scale > 0 ? scale : 1)
-    }
 
     // Perspective terms are intentionally dropped: accumulating them over many frames diverges. All methods share this bounded similarity path; .perspective currently renders equivalently to .similarity.
     /// Build a clean similarity StabFrameTransform (m[8]=1, no perspective) about frame center (0.5,0.5).
@@ -111,36 +97,42 @@ enum StabilizationAnalyzer {
         return dst
     }
 
-    /// Consecutive-frame registration as a normalized homography; homographic with translational fallback.
-    private static func registerDelta(from prev: CVPixelBuffer, to curr: CVPixelBuffer) -> simd_double3x3 {
-        // Transient per pair: a long-lived sequence handler accumulates state across the whole clip.
+    /// Per-frame motion as normalized (tx, ty, rotation, scale). Vision's warpTransform translation
+    /// is in ANALYSIS-FRAME PIXELS, so it MUST be divided by frame dimensions — the original bug was
+    /// using it as if already normalized, making a few-pixel shift read as several frame-widths.
+    /// Validated cascade: plausible homography → plausible translation → identity (reject garbage).
+    private static func registerDelta(from prev: CVPixelBuffer, to curr: CVPixelBuffer)
+        -> (tx: Double, ty: Double, rot: Double, scale: Double) {
+        let w = Double(CVPixelBufferGetWidth(curr)), h = Double(CVPixelBufferGetHeight(curr))
         let handler = VNSequenceRequestHandler()
+
         let request = VNHomographicImageRegistrationRequest(targetedCVPixelBuffer: curr)
-        do {
-            try handler.perform([request], on: prev)
-            if let obs = request.results?.first as? VNImageHomographicAlignmentObservation {
-                let m = obs.warpTransform   // matrix_float3x3, normalized coords
-                let h = simd_double3x3(
-                    SIMD3(Double(m.columns.0.x), Double(m.columns.0.y), Double(m.columns.0.z)),
-                    SIMD3(Double(m.columns.1.x), Double(m.columns.1.y), Double(m.columns.1.z)),
-                    SIMD3(Double(m.columns.2.x), Double(m.columns.2.y), Double(m.columns.2.z)))
-                let t = StabFrameTransform(h)
-                if t.m.allSatisfy(\.isFinite), abs(h.determinant) > 1e-9 { return t.matrix }
+        if (try? handler.perform([request], on: prev)) != nil,
+           let obs = request.results?.first as? VNImageHomographicAlignmentObservation {
+            let m = obs.warpTransform
+            let a = Double(m.columns.0.x), c = Double(m.columns.0.y)
+            let b = Double(m.columns.1.x), d = Double(m.columns.1.y)
+            let tx = Double(m.columns.2.x) / max(1, w)   // pixels → normalized
+            let ty = Double(m.columns.2.y) / max(1, h)
+            let scale = (hypot(a, c) + hypot(b, d)) / 2
+            let rot = atan2(c, a)
+            // Accept only physically plausible single-frame motion; else fall through.
+            if [tx, ty, rot, scale].allSatisfy(\.isFinite),
+               abs(tx) < 0.2, abs(ty) < 0.2, abs(rot) < 0.2, scale > 0.8, scale < 1.25 {
+                return (tx, ty, rot, scale)
             }
-        } catch { /* fall through to translational */ }
+        }
 
         let treq = VNTranslationalImageRegistrationRequest(targetedCVPixelBuffer: curr)
         if (try? handler.perform([treq], on: prev)) != nil,
            let obs = treq.results?.first as? VNImageTranslationAlignmentObservation {
             let a = obs.alignmentTransform
-            let w = Double(CVPixelBufferGetWidth(curr)), hgt = Double(CVPixelBufferGetHeight(curr))
-            // Translation normalized to [0,1] coords; stored in column 2 so m[2] = tx_norm.
-            return simd_double3x3(
-                SIMD3(1, 0, 0),
-                SIMD3(0, 1, 0),
-                SIMD3(Double(a.tx) / max(1, w), Double(a.ty) / max(1, hgt), 1))
+            let tx = Double(a.tx) / max(1, w), ty = Double(a.ty) / max(1, h)
+            if tx.isFinite, ty.isFinite, abs(tx) < 0.2, abs(ty) < 0.2 {
+                return (tx, ty, 0, 1)
+            }
         }
-        return matrix_identity_double3x3
+        return (0, 0, 0, 1)   // registration failed/implausible → assume no motion this frame
     }
 }
 

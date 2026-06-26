@@ -116,4 +116,25 @@ struct PathSmootherTests {
         #expect(out.cropZoom.isFinite)
         for c in out.corrections { #expect(c.m.allSatisfy { $0.isFinite }) }
     }
+
+    @Test func l1PreservesLinearTrendRemovesBob() {
+        // Intended tracking move (linear ramp) + walking bob (low-freq oscillation).
+        let n = 200
+        var x = [Double](); x.reserveCapacity(n)
+        for i in 0..<n {
+            let ramp = Double(i) * 0.004                     // steady intended pan
+            let bob = 0.03 * sin(Double(i) * 2 * .pi / 15)   // ~15-frame walking bob
+            x.append(ramp + bob)
+        }
+        let s = PathSmoother.l1Smooth(x, lambda: pow(10, 1 + 0.6 * 3.5))
+        // 1. Bob removed: second-difference energy of the smoothed path ≪ raw.
+        func d2energy(_ a: [Double]) -> Double {
+            (1..<(a.count-1)).map { let v = a[$0-1]-2*a[$0]+a[$0+1]; return v*v }.reduce(0,+)
+        }
+        #expect(d2energy(s) < d2energy(x) * 0.1)
+        // 2. Intended ramp preserved: net displacement end−start kept (not flattened to zero).
+        #expect((s.last! - s.first!) > (x.last! - x.first!) * 0.7)
+        // 3. Finite + same length.
+        #expect(s.count == n && s.allSatisfy { $0.isFinite })
+    }
 }

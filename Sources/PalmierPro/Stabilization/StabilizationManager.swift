@@ -50,14 +50,15 @@ final class StabilizationManager {
         return mov
     }
 
-    /// True if the sidecar sig matches `sourceSig|smoothness` exactly (triggers re-bake when smoothness changes).
+    /// True if the sig matches `sourceSig|smoothness|capability` (re-bakes when smoothness changes
+    /// OR the ffmpeg capability changes — e.g. deshake→vidstab after installing libvidstab).
     private func hasCurrentBake(assetId: String, smoothness: Double) -> Bool {
         guard let dir = stabilizedDir,
               let sourceURL = editor.mediaAssetsById[assetId]?.url,
               let sourceSig = ProxySignature.of(sourceURL) else { return false }
         let sig = dir.appendingPathComponent("\(assetId).sig")
         guard let stored = try? String(contentsOf: sig, encoding: .utf8) else { return false }
-        return stored == "\(sourceSig)|\(smoothness)"
+        return stored == "\(sourceSig)|\(smoothness)|\(VidStab.capability)"
     }
 
     /// Enqueue a bake if not already current, running, or pending for this asset.
@@ -104,9 +105,9 @@ final class StabilizationManager {
                 capability: cap, ffmpeg: ffmpeg) { p in
                     Task { @MainActor [weak self] in self?.bakeProgress[assetId] = p }
                 }
-            // Write sidecar sig after successful bake.
+            // Write sidecar sig (incl. capability) after successful bake.
             if let sourceSig = ProxySignature.of(url) {
-                try? "\(sourceSig)|\(smoothness)".write(to: sigFile, atomically: true, encoding: .utf8)
+                try? "\(sourceSig)|\(smoothness)|\(cap)".write(to: sigFile, atomically: true, encoding: .utf8)
             }
             bakeProgress[assetId] = 1
             editor.onPersistentStateChanged?()

@@ -54,6 +54,7 @@ enum StabilizationAnalyzer {
                 return false
             }
             if finished { break }
+            if count % 30 == 0 { await Task.yield() }
         }
         if reader.status == .failed { throw Failure(reason: reader.error?.localizedDescription ?? "read error") }
         progress(1)

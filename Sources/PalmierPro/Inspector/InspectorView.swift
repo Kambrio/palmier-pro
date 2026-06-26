@@ -482,6 +482,7 @@ struct InspectorView: View {
                         .foregroundStyle(AppTheme.Text.tertiaryColor)
                 }
             }
+            .onAppear { VidStab.detectIfNeeded() }   // probe off-main; never run ffmpeg in body
         }
     }
 

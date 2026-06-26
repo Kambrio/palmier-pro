@@ -289,6 +289,7 @@ final class EditorViewModel {
     var videoEngine: VideoEngine?
 
     @ObservationIgnored lazy var proxyManager = ProxyManager(editor: self)
+    @ObservationIgnored lazy var stabilizationManager = StabilizationManager(editor: self)
 
     /// Set by VideoProject to mark the document dirty for non-undoable persistent
     /// changes (e.g. proxy generation/toggle). nil outside a document window.

@@ -27,6 +27,22 @@ final class StabilizationManager {
             assetId: assetId, baseDir: base, requiringSig: ProxySignature.of(url)) != nil
     }
 
+    /// Re-queue analysis for any stabilization-enabled clip whose sidecar is missing or stale —
+    /// e.g. after reopening a project, importing a bundle, or bumping the analyzer version.
+    /// Idempotent: `analyze` de-dupes clips that already have a current sidecar.
+    func reconcileEnabledClips() {
+        guard baseDir != nil else { return }
+        var seen = Set<String>()
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true, seen.insert(clip.mediaRef).inserted,
+                      !hasAnalysis(assetId: clip.mediaRef),
+                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                analyze(assetId: clip.mediaRef, url: url)
+            }
+        }
+    }
+
     /// Queue an asset for analysis (serial). De-dupes already-analyzed, in-flight, or queued assets.
     func analyze(assetId: String, url: URL) {
         guard baseDir != nil else { return }

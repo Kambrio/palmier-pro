@@ -216,6 +216,8 @@ final class VideoEngine {
 
             // rebuild()'s composition has no stabilization; re-apply visuals with corrections if any clip needs it.
             if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
+                // Self-heal: a reopened project / imported bundle may have enabled clips with no sidecar yet.
+                editor.stabilizationManager.reconcileEnabledClips()
                 refreshVisuals()
             }
 

@@ -7,6 +7,19 @@ struct StabSidecar: Codable, Sendable, Equatable {
     var sourceSig: String      // ProxySignature.of(sourceURL) when analyzed
     var fps: Double            // source fps the frames were sampled at
     var frames: [StabFrameTransform]   // index = source frame
+
+    init(version: Int = StabilizationSidecar.currentVersion, sourceSig: String, fps: Double, frames: [StabFrameTransform]) {
+        self.version = version; self.sourceSig = sourceSig; self.fps = fps; self.frames = frames
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A pre-versioning sidecar (no version key) decodes to 0 → rejected as stale, not silently kept.
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 0
+        sourceSig = try c.decode(String.self, forKey: .sourceSig)
+        fps = try c.decode(Double.self, forKey: .fps)
+        frames = try c.decode([StabFrameTransform].self, forKey: .frames)
+    }
 }
 
 enum StabilizationSidecar {

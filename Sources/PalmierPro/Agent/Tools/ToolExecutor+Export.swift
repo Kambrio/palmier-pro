@@ -65,7 +65,8 @@ extension ToolExecutor {
                 format: format,
                 resolution: resolution,
                 outputURL: outputURL,
-                acquireSlot: false
+                acquireSlot: false,
+                stabilization: editor.stabilizationManager
             )
             if let error = service.error {
                 AppNotifications.exportFailed(name: name, reason: error)

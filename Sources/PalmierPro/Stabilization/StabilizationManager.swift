@@ -79,4 +79,39 @@ final class StabilizationManager {
     }
 
     func invalidateCache() { correctionCache.removeAll() }
+
+    /// Resolve per-clip stabilization corrections for the compositor, given the sizes/transforms
+    /// produced by a composition build. Shared by preview (VideoEngine) and export (ExportService).
+    func resolveStabByClip(
+        clipNaturalSizes: [String: CGSize],
+        clipTransforms: [String: CGAffineTransform]
+    ) -> [String: StabResolved] {
+        var stabByClip: [String: StabResolved] = [:]
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard let stab = clip.stabilization, stab.enabled, clip.speed == 1.0,
+                      let srcURL = editor.mediaResolver.resolveURL(for: clip.mediaRef),
+                      let result = corrections(for: clip, assetURL: srcURL)
+                else { continue }
+                let zoom = CGFloat(result.cropZoom)
+                if stab.method == .perspective {
+                    stabByClip[clip.id] = StabResolved(affines: [], perspective: result.corrections, zoom: zoom)
+                } else {
+                    let displaySize = clipNaturalSizes[clip.id] ?? .zero
+                    guard displaySize.width > 0, displaySize.height > 0 else { continue }
+                    // Corrections are in raw (pre-rotation) frame space; if preferredTransform
+                    // rotates ±90°, the raw frame has width/height swapped vs the display size.
+                    let pt = clipTransforms[clip.id] ?? .identity
+                    let rawSize = abs(pt.a) < abs(pt.b)
+                        ? CGSize(width: displaySize.height, height: displaySize.width)
+                        : displaySize
+                    let affines = result.corrections.map {
+                        CompositionBuilder.normalizedHomographyToAffine($0, natSize: rawSize, zoom: zoom)
+                    }
+                    stabByClip[clip.id] = StabResolved(affines: affines, perspective: nil, zoom: 1)
+                }
+            }
+        }
+        return stabByClip
+    }
 }

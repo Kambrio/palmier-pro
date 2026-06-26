@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import os
 
@@ -99,20 +100,81 @@ final class ProxyManager {
         if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
     }
 
+    /// Checks each manifest entry with a proxy path; removes entries whose file exists but
+    /// is not an openable finalized movie. Capped to 4 concurrent openability checks.
+    func validateAndPruneProxies() async {
+        guard let base = editor.projectURL else { return }
+        var changed = false
+        // Collect indices with a non-nil proxyPath up front (manifest is mutated below).
+        let indices = editor.mediaManifest.entries.indices.filter { editor.mediaManifest.entries[$0].proxyPath != nil }
+        // Process in batches of 4 to avoid opening hundreds of files concurrently.
+        let batchSize = 4
+        var i = indices.startIndex
+        while i < indices.endIndex {
+            let batchEnd = indices.index(i, offsetBy: batchSize, limitedBy: indices.endIndex) ?? indices.endIndex
+            let batch = Array(indices[i..<batchEnd])
+            // Collect the (manifestIndex, url) pairs for this batch.
+            var toCheck: [(Int, URL)] = []
+            for idx in batch {
+                guard let rel = editor.mediaManifest.entries[idx].proxyPath else { continue }
+                let url = base.appendingPathComponent(rel)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                toCheck.append((idx, url))
+            }
+            // Check openability concurrently (suspends without blocking main actor).
+            var corruptIndices: [Int] = []
+            await withTaskGroup(of: (Int, Bool).self) { group in
+                for (idx, url) in toCheck {
+                    group.addTask { (idx, await ProxyService.isOpenableVideo(url)) }
+                }
+                for await (idx, openable) in group where !openable {
+                    corruptIndices.append(idx)
+                }
+            }
+            // Prune corrupt entries on the main actor (we're already @MainActor).
+            for idx in corruptIndices {
+                guard let rel = editor.mediaManifest.entries[idx].proxyPath else { continue }
+                let url = base.appendingPathComponent(rel)
+                let assetId = editor.mediaManifest.entries[idx].id
+                Log.proxy.notice("pruning corrupt proxy id=\(assetId.prefix(8)) path=\(rel)")
+                try? FileManager.default.removeItem(at: url)
+                editor.mediaManifest.entries[idx].proxyPath = nil
+                editor.mediaManifest.entries[idx].proxySourceSig = nil
+                editor.proxyBackedMediaRefs.remove(assetId)
+                if let asset = editor.mediaAssets.first(where: { $0.id == assetId }) {
+                    asset.proxyState = .none
+                }
+                changed = true
+            }
+            i = batchEnd
+        }
+        if changed {
+            editor.onPersistentStateChanged?()
+            if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
+        }
+    }
+
     /// Background-generate proxies for all assets that need them. No-op if running or unsaved.
     func createProxies() {
         guard !isGenerating, editor.projectURL != nil else { return }
-        let targets = assetsNeedingProxies()
-        guard !targets.isEmpty, let dir = proxiesDir else { return }
+        guard let dir = proxiesDir else { return }
         let resolution = editor.mediaManifest.proxyResolution
 
-        isGenerating = true; completed = 0; total = targets.count
-        startedAt = Date()
-        totalDuration = targets.reduce(0) { $0 + max(0, $1.duration) }
-        processedDuration = 0; bytesThisRun = 0
-        Log.proxy.notice("createProxies begin total=\(targets.count) res=\(resolution.label) dir=\(dir.path)")
+        isGenerating = true; completed = 0; total = 0
+        processedDuration = 0; bytesThisRun = 0; startedAt = nil
         job = Task { [weak self] in
             guard let self else { return }
+            // Prune corrupt proxies first so assetsNeedingProxies picks them up for regeneration.
+            await self.validateAndPruneProxies()
+            let targets = self.assetsNeedingProxies()
+            guard !targets.isEmpty else {
+                self.isGenerating = false
+                return
+            }
+            self.total = targets.count
+            self.startedAt = Date()
+            self.totalDuration = targets.reduce(0) { $0 + max(0, $1.duration) }
+            Log.proxy.notice("createProxies begin total=\(targets.count) res=\(resolution.label) dir=\(dir.path)")
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             await withTaskGroup(of: Void.self) { group in
                 for asset in targets {
@@ -156,10 +218,12 @@ final class ProxyManager {
             if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
         } catch is CancellationError {
             asset.proxyState = .none
+            try? FileManager.default.removeItem(at: out)
             completed += 1
         } catch {
             Log.proxy.error("proxy failed id=\(asset.id.prefix(8)): \(Log.detail(error))")
             asset.proxyState = .failed(error.localizedDescription)
+            try? FileManager.default.removeItem(at: out)
             completed += 1; processedDuration += max(0, asset.duration)
         }
     }

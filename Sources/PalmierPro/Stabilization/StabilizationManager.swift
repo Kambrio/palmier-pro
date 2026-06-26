@@ -12,6 +12,8 @@ final class StabilizationManager {
     /// assetId → analyzing progress (0…1) for HUD/inspector.
     private(set) var progressByAsset: [String: Double] = [:]
     private var job: Task<Void, Never>?
+    private var pending: [(assetId: String, url: URL)] = []
+    private var running: String?
     /// In-memory cache of correction results keyed by clip + params.
     @ObservationIgnored private var correctionCache: [String: PathSmoother.Result] = [:]
 
@@ -25,17 +27,47 @@ final class StabilizationManager {
             assetId: assetId, baseDir: base, requiringSig: ProxySignature.of(url)) != nil
     }
 
-    /// Analyze the asset if not already cached; no-op if running or unsaved.
+    /// Queue an asset for analysis (serial). De-dupes already-analyzed, in-flight, or queued assets.
     func analyze(assetId: String, url: URL) {
-        guard !isAnalyzing, baseDir != nil else { return }
-        isAnalyzing = true; completed = 0; total = 1
+        guard baseDir != nil else { return }
+        if hasAnalysis(assetId: assetId) { return }
+        if running == assetId || pending.contains(where: { $0.assetId == assetId }) { return }
+        pending.append((assetId, url))
+        total += 1
+        isAnalyzing = true
+        if job == nil { startDraining() }
+    }
+
+    func cancel() {
+        job?.cancel(); job = nil
+        pending.removeAll()
+        running = nil
+        isAnalyzing = false
+        completed = 0; total = 0
+    }
+
+    private func startDraining() {
         job = Task { [weak self] in
-            await self?.run(assetId: assetId, url: url)
-            self?.isAnalyzing = false
+            while let next = self?.dequeue() {
+                self?.running = next.assetId
+                await self?.run(assetId: next.assetId, url: next.url)
+                self?.running = nil
+                self?.completed += 1
+            }
+            self?.finishDraining()
         }
     }
 
-    func cancel() { job?.cancel(); job = nil; isAnalyzing = false }
+    private func dequeue() -> (assetId: String, url: URL)? {
+        guard !pending.isEmpty else { return nil }
+        return pending.removeFirst()
+    }
+
+    private func finishDraining() {
+        job = nil
+        isAnalyzing = false
+        completed = 0; total = 0
+    }
 
     private func run(assetId: String, url: URL) async {
         guard let base = baseDir, (try? await Self.gate.wait()) != nil else { return }
@@ -48,7 +80,6 @@ final class StabilizationManager {
             let payload = StabSidecar(sourceSig: ProxySignature.of(url) ?? "", fps: fps, frames: frames)
             try StabilizationSidecar.write(payload, assetId: assetId, baseDir: base)
             correctionCache.removeAll()
-            completed = 1
             progressByAsset[assetId] = 1
             editor.onPersistentStateChanged?()
             editor.videoEngine?.refreshVisuals()

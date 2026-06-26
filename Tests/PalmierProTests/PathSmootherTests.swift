@@ -51,6 +51,25 @@ struct PathSmootherTests {
         #expect(abs(a.b) < 1e-9 && abs(a.c) < 1e-9)
     }
 
+    // A long, noisy path must never produce a correction that pushes content off-frame.
+    @Test func correctionsStayBoundedOnNoisyPath() {
+        var frames: [StabFrameTransform] = []
+        var tx = 0.0, ty = 0.0
+        for i in 0..<600 {
+            tx += (i % 2 == 0 ? 0.02 : -0.018)   // jitter + slight drift
+            ty += (i % 3 == 0 ? 0.015 : -0.01)
+            frames.append(StabFrameTransform(m: [1,0,tx, 0,1,ty, 0,0,1]))
+        }
+        let out = PathSmoother.corrections(
+            raw: frames, window: 0..<600, method: .similarity, smoothness: 0.6, cropToFit: true)
+        #expect(out.cropZoom <= 1.5)
+        for c in out.corrections {
+            #expect(abs(c.m[2]) <= 0.25 + 1e-9)   // tx clamped
+            #expect(abs(c.m[5]) <= 0.25 + 1e-9)   // ty clamped
+            #expect(c.m.allSatisfy { $0.isFinite })
+        }
+    }
+
     @Test func zoomScalesAboutCenter() {
         let a = CompositionBuilder.normalizedHomographyToAffine(
             .identity, natSize: CGSize(width: 100, height: 100), zoom: 2)

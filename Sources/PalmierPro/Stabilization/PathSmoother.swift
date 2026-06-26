@@ -51,16 +51,22 @@ enum PathSmoother {
         var corrections: [StabFrameTransform] = []
         var maxAbsTx = 0.0, maxAbsTy = 0.0
         for k in path.indices {
-            let cor = State(tx: txS[k] - path[k].tx,
+            var cor = State(tx: txS[k] - path[k].tx,
                             ty: tyS[k] - path[k].ty,
                             rot: (method == .position) ? 0 : rotS[k] - path[k].rot,
                             scale: (method == .position) ? 1 : scS[k] / max(path[k].scale, 1e-9))
+            // Defense-in-depth: clamp so stabilization can never push content fully off-frame.
+            cor.tx = min(max(cor.tx, -0.25), 0.25)
+            cor.ty = min(max(cor.ty, -0.25), 0.25)
+            cor.rot = min(max(cor.rot, -0.35), 0.35)
+            cor.scale = min(max(cor.scale, 0.5), 2.0)
             corrections.append(compose(cor))
             maxAbsTx = max(maxAbsTx, abs(cor.tx)); maxAbsTy = max(maxAbsTy, abs(cor.ty))
         }
 
         // 4. Crop zoom: enough scale-up so the largest translation never exposes an edge.
-        let cropZoom = cropToFit ? 1 + 2 * max(maxAbsTx, maxAbsTy) : 1.0
+        //    Cap at 1.5× — higher zoom signals the correction was too aggressive.
+        let cropZoom = cropToFit ? min(1.5, 1 + 2 * max(maxAbsTx, maxAbsTy)) : 1.0
         return Result(corrections: corrections, cropZoom: max(1.0, cropZoom))
     }
 

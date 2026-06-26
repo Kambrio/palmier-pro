@@ -28,7 +28,9 @@ enum StabilizationAnalyzer {
         guard reader.startReading() else { throw Failure(reason: "reader failed to start") }
 
         var frames: [StabFrameTransform] = [.identity]
-        var accumulated = matrix_identity_double3x3
+        // Absolute camera path as a bounded similarity (perspective terms cause multiplicative
+        // blow-up when accumulated over thousands of frames, so we constrain to similarity).
+        var accTx = 0.0, accTy = 0.0, accRot = 0.0, accScale = 1.0
         var previous: CVPixelBuffer?
         var count = 0
         let ciContext = CIContext()
@@ -45,9 +47,19 @@ enum StabilizationAnalyzer {
                 if let prev = previous {
                     let delta = registerDelta(from: prev, to: buffer)
                     if (0..<3).allSatisfy({ r in (0..<3).allSatisfy { c in delta[c][r].isFinite } }) {
-                        accumulated = accumulated * delta
+                        let (dtx, dty, drot, dscale) = decomposeDelta(delta)
+                        // Clamp per-frame motion to sane handheld bounds; wild values are registration errors.
+                        let cdtx = dtx.clamped(to: -0.08...0.08)
+                        let cdty = dty.clamped(to: -0.08...0.08)
+                        let cdrot = drot.clamped(to: -0.087...0.087)    // ±5°
+                        let cdscale = dscale.clamped(to: 0.97...1.03)
+                        // Compose the small delta onto the absolute path.
+                        accTx += cdtx
+                        accTy += cdty
+                        accRot += cdrot
+                        accScale *= cdscale
                     }
-                    frames.append(StabFrameTransform(accumulated))
+                    frames.append(similarityTransform(tx: accTx, ty: accTy, rot: accRot, scale: accScale))
                 }
                 previous = buffer
                 if count % 10 == 0 { progress(min(1, Double(count) / Double(estTotal))) }
@@ -62,6 +74,26 @@ enum StabilizationAnalyzer {
     }
 
     private static let analysisLongEdge: CGFloat = 540
+
+    /// Decompose a normalized delta homography to (tx, ty, rotation, uniform-scale).
+    private static func decomposeDelta(_ h: simd_double3x3) -> (tx: Double, ty: Double, rot: Double, scale: Double) {
+        // simd_double3x3 is column-major: h[col][row]. So:
+        //   a=h[0][0], c=h[0][1], b=h[1][0], d=h[1][1], tx=h[2][0], ty=h[2][1]
+        let a = h[0][0], b = h[1][0], c = h[0][1], d = h[1][1]
+        let tx = h[2][0], ty = h[2][1]
+        let scale = (hypot(a, c) + hypot(b, d)) / 2
+        let rot = atan2(c, a)
+        return (tx, ty, rot, scale.isFinite && scale > 0 ? scale : 1)
+    }
+
+    /// Build a clean similarity StabFrameTransform (m[8]=1, no perspective) about frame center (0.5,0.5).
+    private static func similarityTransform(tx: Double, ty: Double, rot: Double, scale: Double) -> StabFrameTransform {
+        let cs = cos(rot) * scale, sn = sin(rot) * scale
+        let cx = 0.5, cy = 0.5
+        let ex = tx + cx - (cs * cx - sn * cy)
+        let ey = ty + cy - (sn * cx + cs * cy)
+        return StabFrameTransform(m: [cs, -sn, ex, sn, cs, ey, 0, 0, 1])
+    }
 
     private static func downscaled(_ buffer: CVPixelBuffer, longEdge: CGFloat, ctx: CIContext) -> CVPixelBuffer {
         let w = CGFloat(CVPixelBufferGetWidth(buffer)), h = CGFloat(CVPixelBufferGetHeight(buffer))
@@ -108,4 +140,8 @@ enum StabilizationAnalyzer {
         }
         return matrix_identity_double3x3
     }
+}
+
+private extension Double {
+    func clamped(to r: ClosedRange<Double>) -> Double { min(max(self, r.lowerBound), r.upperBound) }
 }

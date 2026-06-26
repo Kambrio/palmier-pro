@@ -31,22 +31,29 @@ enum StabilizationAnalyzer {
         var accumulated = matrix_identity_double3x3
         var previous: CVPixelBuffer?
         var count = 0
-        let handler = VNSequenceRequestHandler()
         let ciContext = CIContext()
 
-        while let sample = output.copyNextSampleBuffer() {
+        // Each iteration holds a full-resolution decoded buffer (tens of MB) plus Vision/Core
+        // Image scratch; without draining per frame the whole clip's buffers pile up → OOM.
+        while true {
             try Task.checkCancellation()
-            guard let rawBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-            let buffer = downscaled(rawBuffer, longEdge: analysisLongEdge, ctx: ciContext)
-            defer { previous = buffer }
-            count += 1
-            guard let prev = previous else { continue }
-            let delta = registerDelta(from: prev, to: buffer, handler: handler)
-            if (0..<3).allSatisfy({ r in (0..<3).allSatisfy { c in delta[c][r].isFinite } }) {
-                accumulated = accumulated * delta
+            let finished = autoreleasepool { () -> Bool in
+                guard let sample = output.copyNextSampleBuffer(),
+                      let rawBuffer = CMSampleBufferGetImageBuffer(sample) else { return true }
+                let buffer = downscaled(rawBuffer, longEdge: analysisLongEdge, ctx: ciContext)
+                count += 1
+                if let prev = previous {
+                    let delta = registerDelta(from: prev, to: buffer)
+                    if (0..<3).allSatisfy({ r in (0..<3).allSatisfy { c in delta[c][r].isFinite } }) {
+                        accumulated = accumulated * delta
+                    }
+                    frames.append(StabFrameTransform(accumulated))
+                }
+                previous = buffer
+                if count % 10 == 0 { progress(min(1, Double(count) / Double(estTotal))) }
+                return false
             }
-            frames.append(StabFrameTransform(accumulated))
-            if count % 10 == 0 { progress(min(1, Double(count) / Double(estTotal))) }
+            if finished { break }
         }
         if reader.status == .failed { throw Failure(reason: reader.error?.localizedDescription ?? "read error") }
         progress(1)
@@ -70,7 +77,9 @@ enum StabilizationAnalyzer {
     }
 
     /// Consecutive-frame registration as a normalized homography; homographic with translational fallback.
-    private static func registerDelta(from prev: CVPixelBuffer, to curr: CVPixelBuffer, handler: VNSequenceRequestHandler) -> simd_double3x3 {
+    private static func registerDelta(from prev: CVPixelBuffer, to curr: CVPixelBuffer) -> simd_double3x3 {
+        // Transient per pair: a long-lived sequence handler accumulates state across the whole clip.
+        let handler = VNSequenceRequestHandler()
         let request = VNHomographicImageRegistrationRequest(targetedCVPixelBuffer: curr)
         do {
             try handler.perform([request], on: prev)

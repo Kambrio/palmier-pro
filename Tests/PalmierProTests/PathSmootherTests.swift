@@ -57,4 +57,13 @@ struct PathSmootherTests {
         let center = CGPoint(x: 50, y: 50).applying(a)
         #expect(abs(center.x - 50) < 1e-6 && abs(center.y - 50) < 1e-6)
     }
+
+    @Test func translationScalesByGivenAxis() {
+        let t = StabFrameTransform(m: [1,0,0.1, 0,1,0, 0,0,1])
+        let wide = CompositionBuilder.normalizedHomographyToAffine(t, natSize: CGSize(width: 1920, height: 1080), zoom: 1)
+        let tall = CompositionBuilder.normalizedHomographyToAffine(t, natSize: CGSize(width: 1080, height: 1920), zoom: 1)
+        // 0.1 of width: 192 vs 108 px — proves the axis length matters (the rotated-source fix).
+        #expect(abs(wide.tx - 192) < 1e-6)
+        #expect(abs(tall.tx - 108) < 1e-6)
+    }
 }

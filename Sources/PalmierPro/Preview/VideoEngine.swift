@@ -243,10 +243,16 @@ final class VideoEngine {
                 if stab.method == .perspective {
                     stabByClip[clip.id] = StabResolved(affines: [], perspective: result.corrections, zoom: zoom)
                 } else {
-                    let natSize = clipNaturalSizes[clip.id] ?? .zero
-                    guard natSize.width > 0, natSize.height > 0 else { continue }
+                    let displaySize = clipNaturalSizes[clip.id] ?? .zero
+                    guard displaySize.width > 0, displaySize.height > 0 else { continue }
+                    // Corrections are in raw (pre-rotation) frame space; if preferredTransform
+                    // rotates ±90°, the raw frame has width/height swapped vs the display size.
+                    let pt = clipTransforms[clip.id] ?? .identity
+                    let rawSize = abs(pt.a) < abs(pt.b)
+                        ? CGSize(width: displaySize.height, height: displaySize.width)
+                        : displaySize
                     let affines = result.corrections.map {
-                        CompositionBuilder.normalizedHomographyToAffine($0, natSize: natSize, zoom: zoom)
+                        CompositionBuilder.normalizedHomographyToAffine($0, natSize: rawSize, zoom: zoom)
                     }
                     stabByClip[clip.id] = StabResolved(affines: affines, perspective: nil, zoom: 1)
                 }

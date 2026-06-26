@@ -621,7 +621,7 @@ enum CompositionBuilder {
         let m = t.m
         // Row-major homography → CGAffineTransform (drop the projective row for similarity/position).
         let normalized = CGAffineTransform(a: m[0], b: m[3], c: m[1], d: m[4], tx: m[2], ty: m[5])
-        // Known limitation: natSize is the display (post-rotation) size; corrections on rotated/portrait sources are scaled by the wrong axis. Tracked as a follow-up.
+        // natSize must be the raw pre-rotation frame size; the correction is applied before preferredTransform.
         let toPx = CGAffineTransform(scaleX: natSize.width, y: natSize.height)
         let fromPx = CGAffineTransform(scaleX: 1 / natSize.width, y: 1 / natSize.height)
         var px = fromPx.concatenating(normalized).concatenating(toPx)

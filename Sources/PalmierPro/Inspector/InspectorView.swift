@@ -435,7 +435,7 @@ struct InspectorView: View {
                         get: { stab?.enabled ?? false },
                         set: { on in
                             updateStabilization(clip: clip) { $0.enabled = on }
-                            if on { triggerStabilizationAnalysis(clip) }
+                            if on { triggerStabilization(clip) }
                         }))
                     .labelsHidden()
                     .disabled(!canStabilize)
@@ -443,7 +443,7 @@ struct InspectorView: View {
                 if stab?.enabled == true {
                     propertyRow(label: "Engine") {
                         Picker("", selection: Binding(
-                            get: { stab?.engine ?? .l1 },
+                            get: { stab?.engine ?? .vidstab },
                             set: { v in
                                 updateStabilization(clip: clip) { $0.engine = v }
                                 if v == .vidstab {
@@ -529,6 +529,16 @@ struct InspectorView: View {
         }
         editor.stabilizationManager.invalidateCache()
         editor.videoEngine?.refreshVisuals()
+    }
+
+    /// On enable, kick off the right work for the chosen engine: a bake for vid.stab, Vision
+    /// analysis for the native engines.
+    private func triggerStabilization(_ clip: Clip) {
+        if (clip.stabilization?.engine ?? .vidstab) == .vidstab {
+            triggerBake(clip: clip, smoothness: clip.stabilization?.smoothness ?? 0.5)
+        } else {
+            triggerStabilizationAnalysis(clip)
+        }
     }
 
     private func triggerStabilizationAnalysis(_ clip: Clip) {

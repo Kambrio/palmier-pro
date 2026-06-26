@@ -37,14 +37,14 @@ enum StabEngine: String, Codable, Sendable, CaseIterable {
 /// path lives in a per-asset sidecar (see StabilizationSidecar).
 struct Stabilization: Codable, Sendable, Equatable {
     var enabled: Bool = true
-    var engine: StabEngine = .l1
+    var engine: StabEngine = .vidstab
     var method: StabMethod = .similarity
     /// 0…1 — drives the smoothing strength. Higher = smoother / more locked-down.
     var smoothness: Double = 0.5
     /// Auto-zoom so counter-motion never exposes the frame edges.
     var cropToFit: Bool = true
 
-    init(enabled: Bool = true, engine: StabEngine = .l1, method: StabMethod = .similarity,
+    init(enabled: Bool = true, engine: StabEngine = .vidstab, method: StabMethod = .similarity,
          smoothness: Double = 0.5, cropToFit: Bool = true) {
         self.enabled = enabled; self.engine = engine; self.method = method
         self.smoothness = smoothness; self.cropToFit = cropToFit
@@ -54,7 +54,7 @@ struct Stabilization: Codable, Sendable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
-        engine = try c.decodeIfPresent(StabEngine.self, forKey: .engine) ?? .l1
+        engine = try c.decodeIfPresent(StabEngine.self, forKey: .engine) ?? .vidstab
         method = try c.decodeIfPresent(StabMethod.self, forKey: .method) ?? .similarity
         smoothness = try c.decodeIfPresent(Double.self, forKey: .smoothness) ?? 0.5
         cropToFit = try c.decodeIfPresent(Bool.self, forKey: .cropToFit) ?? true

@@ -85,4 +85,14 @@ struct PathSmootherTests {
         #expect(abs(wide.tx - 192) < 1e-6)
         #expect(abs(tall.tx - 108) < 1e-6)
     }
+
+    @Test func nonFinitePathYieldsFiniteCorrections() {
+        // A path with an infinite/NaN entry must never yield a non-finite correction.
+        var frames: [StabFrameTransform] = []
+        for i in 0..<30 { frames.append(StabFrameTransform(m: [1,0, Double(i)*0.01, 0,1,0, 0,0,1])) }
+        frames[15] = StabFrameTransform(m: [1,0, .infinity, 0,1, .nan, 0,0,1])
+        let out = PathSmoother.corrections(raw: frames, window: 0..<30, method: .similarity, smoothness: 0.5, cropToFit: true)
+        #expect(out.cropZoom.isFinite)
+        for c in out.corrections { #expect(c.m.allSatisfy { $0.isFinite }) }
+    }
 }

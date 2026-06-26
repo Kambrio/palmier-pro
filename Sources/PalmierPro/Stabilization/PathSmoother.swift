@@ -33,6 +33,11 @@ enum PathSmoother {
         smoothness: Double,
         cropToFit: Bool
     ) -> Result {
+        // NaN-safe clamp: non-finite input yields the midpoint (or 1.0 for scale handled below).
+        func safeClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
+            guard v.isFinite else { return (lo + hi) / 2 }
+            return min(max(v, lo), hi)
+        }
         let idx = Array(window).filter { $0 >= 0 && $0 < raw.count }
         guard !idx.isEmpty else { return Result(corrections: [], cropZoom: 1.0) }
 
@@ -49,24 +54,28 @@ enum PathSmoother {
 
         // 3. Correction = smoothed − raw, expressed as a homography.
         var corrections: [StabFrameTransform] = []
-        var maxAbsTx = 0.0, maxAbsTy = 0.0
+        var maxAbsTx = 0.0, maxAbsTy = 0.0, maxAbsRot = 0.0
         for k in path.indices {
             var cor = State(tx: txS[k] - path[k].tx,
                             ty: tyS[k] - path[k].ty,
                             rot: (method == .position) ? 0 : rotS[k] - path[k].rot,
                             scale: (method == .position) ? 1 : scS[k] / max(path[k].scale, 1e-9))
-            // Defense-in-depth: clamp so stabilization can never push content fully off-frame.
-            cor.tx = min(max(cor.tx, -0.25), 0.25)
-            cor.ty = min(max(cor.ty, -0.25), 0.25)
-            cor.rot = min(max(cor.rot, -0.35), 0.35)
-            cor.scale = min(max(cor.scale, 0.5), 2.0)
+            // Defense-in-depth: NaN-safe clamp so no non-finite value can reach a correction matrix.
+            cor.tx = safeClamp(cor.tx, -0.25, 0.25)
+            cor.ty = safeClamp(cor.ty, -0.25, 0.25)
+            cor.rot = safeClamp(cor.rot, -0.35, 0.35)
+            cor.scale = cor.scale.isFinite ? min(max(cor.scale, 0.5), 2.0) : 1.0
             corrections.append(compose(cor))
-            maxAbsTx = max(maxAbsTx, abs(cor.tx)); maxAbsTy = max(maxAbsTy, abs(cor.ty))
+            maxAbsTx = max(maxAbsTx, abs(cor.tx))
+            maxAbsTy = max(maxAbsTy, abs(cor.ty))
+            maxAbsRot = max(maxAbsRot, abs(cor.rot))
         }
 
-        // 4. Crop zoom: enough scale-up so the largest translation never exposes an edge.
-        //    Cap at 1.5× — higher zoom signals the correction was too aggressive.
-        let cropZoom = cropToFit ? min(1.5, 1 + 2 * max(maxAbsTx, maxAbsTy)) : 1.0
+        // 4. Crop zoom: cover both translation and rotation-induced corner displacement.
+        //    A rotation by θ displaces frame corners; sin(θ) is a safe upper bound for the extra margin.
+        //    Cap at 1.6× to give rotation headroom while still flagging overly aggressive corrections.
+        let rotMargin = sin(min(maxAbsRot, 0.35))
+        let cropZoom = cropToFit ? min(1.6, 1 + 2 * (max(maxAbsTx, maxAbsTy) + rotMargin)) : 1.0
         return Result(corrections: corrections, cropZoom: max(1.0, cropZoom))
     }
 

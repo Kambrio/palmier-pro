@@ -53,11 +53,12 @@ enum StabilizationAnalyzer {
                         let cdty = dty.clamped(to: -0.08...0.08)
                         let cdrot = drot.clamped(to: -0.087...0.087)    // ±5°
                         let cdscale = dscale.clamped(to: 0.97...1.03)
-                        // Compose the small delta onto the absolute path.
-                        accTx += cdtx
-                        accTy += cdty
-                        accRot += cdrot
-                        accScale *= cdscale
+                        // Compose the small delta onto the absolute path; clamp absolute accumulators
+                        // so monotonic drift can never push them toward infinity → NaN in similarityTransform.
+                        accTx = (accTx + cdtx).clamped(to: -50...50)
+                        accTy = (accTy + cdty).clamped(to: -50...50)
+                        accRot = (accRot + cdrot).clamped(to: -50...50)
+                        accScale = (accScale * cdscale).clamped(to: 0.1...10.0)
                     }
                     frames.append(similarityTransform(tx: accTx, ty: accTy, rot: accRot, scale: accScale))
                 }
@@ -86,6 +87,7 @@ enum StabilizationAnalyzer {
         return (tx, ty, rot, scale.isFinite && scale > 0 ? scale : 1)
     }
 
+    // Perspective terms are intentionally dropped: accumulating them over many frames diverges. All methods share this bounded similarity path; .perspective currently renders equivalently to .similarity.
     /// Build a clean similarity StabFrameTransform (m[8]=1, no perspective) about frame center (0.5,0.5).
     private static func similarityTransform(tx: Double, ty: Double, rot: Double, scale: Double) -> StabFrameTransform {
         let cs = cos(rot) * scale, sn = sin(rot) * scale

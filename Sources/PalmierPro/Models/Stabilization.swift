@@ -10,7 +10,7 @@ enum StabMethod: String, Codable, Sendable, CaseIterable {
         switch self {
         case .position:    "Position"
         case .similarity:  "Position, Scale & Rotation"
-        case .perspective: "Perspective"
+        case .perspective: "Perspective (approx.)"
         }
     }
 }

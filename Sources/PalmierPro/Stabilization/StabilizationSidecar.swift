@@ -11,7 +11,7 @@ struct StabSidecar: Codable, Sendable, Equatable {
 
 enum StabilizationSidecar {
     /// Bump when the analyzer's output math changes (forces re-analysis of older sidecars).
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     static func dir(baseDir: URL) -> URL {
         baseDir.appendingPathComponent(

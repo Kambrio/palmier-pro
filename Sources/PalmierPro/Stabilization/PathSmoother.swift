@@ -71,11 +71,10 @@ enum PathSmoother {
             maxAbsRot = max(maxAbsRot, abs(cor.rot))
         }
 
-        // 4. Crop zoom: cover both translation and rotation-induced corner displacement.
-        //    A rotation by θ displaces frame corners; sin(θ) is a safe upper bound for the extra margin.
-        //    Cap at 1.6× to give rotation headroom while still flagging overly aggressive corrections.
+        // 4. Crop zoom: cover translation + rotation-induced corner displacement, but cap it —
+        //    an aggressive zoom is more objectionable than a sliver of exposed edge on big shakes.
         let rotMargin = sin(min(maxAbsRot, 0.35))
-        let cropZoom = cropToFit ? min(1.6, 1 + 2 * (max(maxAbsTx, maxAbsTy) + rotMargin)) : 1.0
+        let cropZoom = cropToFit ? min(1.25, 1 + 2 * (max(maxAbsTx, maxAbsTy) + rotMargin)) : 1.0
         return Result(corrections: corrections, cropZoom: max(1.0, cropZoom))
     }
 

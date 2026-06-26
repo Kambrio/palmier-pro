@@ -71,7 +71,7 @@ enum StabilizationAnalyzer {
         return (fps == 0 ? 30 : fps, frames)
     }
 
-    private static let analysisLongEdge: CGFloat = 540
+    private static let analysisLongEdge: CGFloat = 720
 
     // Perspective terms are intentionally dropped: accumulating them over many frames diverges. All methods share this bounded similarity path; .perspective currently renders equivalently to .similarity.
     /// Build a clean similarity StabFrameTransform (m[8]=1, no perspective) about frame center (0.5,0.5).

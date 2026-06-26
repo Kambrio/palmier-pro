@@ -3,6 +3,27 @@ import Foundation
 @testable import PalmierPro
 
 struct PathSmootherTests {
+    // Applying the correction to the raw path must REDUCE frame-to-frame jitter — proves the
+    // correction has the right sign (a flipped sign would double the shake → "more shaky").
+    @Test func applyingCorrectionReducesJitter() {
+        // Raw path = slow ramp + high-frequency jitter (a shaky pan).
+        var raw: [StabFrameTransform] = []
+        for i in 0..<120 {
+            let ramp = Double(i) * 0.003
+            let jitter = (i % 2 == 0 ? 0.02 : -0.02) + (i % 3 == 0 ? 0.01 : -0.005)
+            raw.append(StabFrameTransform(m: [1,0, ramp + jitter, 0,1, jitter, 0,0,1]))
+        }
+        let out = PathSmoother.corrections(
+            raw: raw, window: 0..<120, method: .similarity, smoothness: 0.6, cropToFit: false)
+        // Stabilized position = raw + correction; its frame-to-frame motion must be smaller.
+        func jitterEnergy(_ txs: [Double]) -> Double {
+            zip(txs.dropFirst(), txs).map { ($0 - $1) * ($0 - $1) }.reduce(0, +)
+        }
+        let rawTx = raw.map { $0.m[2] }
+        let stabTx = zip(raw, out.corrections).map { $0.m[2] + $1.m[2] }
+        #expect(jitterEnergy(stabTx) < jitterEnergy(rawTx) * 0.5)   // at least halved
+    }
+
     // A purely smooth pan should be left ~untouched (correction ≈ identity translation).
     @Test func smoothMotionNeedsLittleCorrection() {
         let frames = (0..<60).map { i -> StabFrameTransform in

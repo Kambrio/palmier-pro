@@ -74,10 +74,9 @@ final class StabilizationManager {
         defer { Task { await Self.gate.signal() } }
         progressByAsset[assetId] = 0
         do {
-            // Analyze the cheap proxy when available; homographies are resolution-independent.
-            // Sidecar is keyed by the SOURCE signature so corrections() lookup always matches.
-            let analysisURL = editor.mediaResolver.proxyURL(for: assetId) ?? url
-            let (fps, frames) = try await StabilizationAnalyzer.analyze(url: analysisURL) { p in
+            // Analyze the SOURCE (downscaled internally): low-res proxy registration is too noisy
+            // and the noise, applied as a correction, makes footage shakier instead of steadier.
+            let (fps, frames) = try await StabilizationAnalyzer.analyze(url: url) { p in
                 Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
             }
             let payload = StabSidecar(sourceSig: ProxySignature.of(url) ?? "", fps: fps, frames: frames)

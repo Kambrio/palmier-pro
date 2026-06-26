@@ -364,7 +364,8 @@ extension Clip {
             rotationTrack: try? c.decode(KeyframeTrack<Double>.self, forKey: .rotationTrack),
             cropTrack: try? c.decode(KeyframeTrack<Crop>.self, forKey: .cropTrack),
             volumeTrack: try? c.decode(KeyframeTrack<Double>.self, forKey: .volumeTrack),
-            effects: try? c.decode([Effect].self, forKey: .effects)
+            effects: try? c.decode([Effect].self, forKey: .effects),
+            stabilization: try? c.decode(Stabilization.self, forKey: .stabilization)
         )
     }
 }

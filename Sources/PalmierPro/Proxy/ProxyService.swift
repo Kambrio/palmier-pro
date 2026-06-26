@@ -168,6 +168,7 @@ enum ProxyService {
             }
             // finishWriting() can report .completed under memory pressure while the moov atom
             // never durably lands → a substantial but unopenable file. Verify before publishing.
+            try Task.checkCancellation()
             guard await isOpenableVideo(tempURL) else {
                 throw Failure(reason: "proxy finalized but is not openable (moov missing)")
             }

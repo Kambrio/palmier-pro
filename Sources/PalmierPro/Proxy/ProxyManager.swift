@@ -232,12 +232,10 @@ final class ProxyManager {
             if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
         } catch is CancellationError {
             asset.proxyState = .none
-            try? FileManager.default.removeItem(at: out)
             completed += 1
         } catch {
             Log.proxy.error("proxy failed id=\(asset.id.prefix(8)): \(Log.detail(error))")
             asset.proxyState = .failed(error.localizedDescription)
-            try? FileManager.default.removeItem(at: out)
             completed += 1; processedDuration += max(0, asset.duration)
         }
     }

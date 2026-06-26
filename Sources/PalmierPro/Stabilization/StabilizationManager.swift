@@ -37,7 +37,12 @@ final class StabilizationManager {
     // MARK: - Bake helpers
 
     /// Returns the path of a baked stabilized movie if it exists and matches the source identity.
-    /// Resolution ignores smoothness so scrubbing always finds a bake; re-bakes are triggered by `enqueueBake`.
+    /// Preview bake resolution context: proxy-res when proxies are on, else source. Part of the sig
+    /// so toggling proxies (or preview quality) invalidates a mismatched-resolution bake.
+    private var previewResTag: String { editor.mediaManifest.useProxies ? "proxy" : "src" }
+
+    /// The preview bake URL, but only if it matches the CURRENT proxy state — otherwise nil so the
+    /// renderer falls back to source (and reconcile re-bakes at the right resolution).
     func stabilizedURL(for assetId: String) -> URL? {
         guard let dir = stabilizedDir,
               let sourceURL = editor.mediaAssetsById[assetId]?.url,
@@ -46,19 +51,19 @@ final class StabilizationManager {
         let sig = dir.appendingPathComponent("\(assetId).sig")
         guard FileManager.default.fileExists(atPath: mov.path),
               let stored = try? String(contentsOf: sig, encoding: .utf8),
-              stored.hasPrefix(sourceSig + "|") else { return nil }
+              stored.hasPrefix(sourceSig + "|"), stored.hasSuffix("|\(previewResTag)") else { return nil }
         return mov
     }
 
-    /// True if the sig matches `sourceSig|smoothness|capability` (re-bakes when smoothness changes
-    /// OR the ffmpeg capability changes — e.g. deshake→vidstab after installing libvidstab).
+    /// True if the sig matches `sourceSig|smoothness|capability|resTag` — re-bakes when smoothness,
+    /// the ffmpeg capability (deshake→vidstab), OR the proxy state (proxy-res↔source-res) changes.
     private func hasCurrentBake(assetId: String, smoothness: Double) -> Bool {
         guard let dir = stabilizedDir,
               let sourceURL = editor.mediaAssetsById[assetId]?.url,
               let sourceSig = ProxySignature.of(sourceURL) else { return false }
         let sig = dir.appendingPathComponent("\(assetId).sig")
         guard let stored = try? String(contentsOf: sig, encoding: .utf8) else { return false }
-        return stored == "\(sourceSig)|\(smoothness)|\(VidStab.capability)"
+        return stored == "\(sourceSig)|\(smoothness)|\(VidStab.capability)|\(previewResTag)"
     }
 
     /// Enqueue a bake if not already current, running, or pending for this asset.
@@ -99,15 +104,16 @@ final class StabilizationManager {
         let proxy = editor.mediaManifest.useProxies ? editor.mediaResolver.proxyURL(for: assetId) : nil
         let input = proxy ?? url
         let maxLongEdge = proxy == nil ? 1280 : 0
+        let resTag = proxy != nil ? "proxy" : "src"
         do {
             try await FFmpegStabService.stabilize(
                 source: input, to: output, smoothness: smoothness, maxLongEdge: maxLongEdge,
                 capability: cap, ffmpeg: ffmpeg) { p in
                     Task { @MainActor [weak self] in self?.bakeProgress[assetId] = p }
                 }
-            // Write sidecar sig (incl. capability) after successful bake.
+            // Write sidecar sig (sourceSig|smoothness|capability|resTag) after successful bake.
             if let sourceSig = ProxySignature.of(url) {
-                try? "\(sourceSig)|\(smoothness)|\(cap)".write(to: sigFile, atomically: true, encoding: .utf8)
+                try? "\(sourceSig)|\(smoothness)|\(cap)|\(resTag)".write(to: sigFile, atomically: true, encoding: .utf8)
             }
             bakeProgress[assetId] = 1
             editor.onPersistentStateChanged?()

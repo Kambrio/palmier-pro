@@ -71,7 +71,9 @@ enum AgentInstructions {
             existing keyframes on that property.
           • set_keyframes: replace the keyframe track for one (clipId, property) pair. Empty \
             array clears. Frames are clip-relative.
-          • split_clip: atFrame must be strictly inside the clip.
+          • split_clips: pass one or more cut points (each atFrame strictly inside its clip) in \
+            one call — multiple cuts on the same clip are fine. Splits only insert boundaries; \
+            nothing shifts. Use ripple_delete_ranges instead when you need to remove a span.
           • sync_audio: align one or more clips to a reference (usually the camera) clip by \
             waveform — referenceClipId stays, the target(s) move. Use for dual-system sound \
             or multicam (pass targetClipIds); it returns per-clip confidence and refuses \
@@ -89,6 +91,13 @@ enum AgentInstructions {
           remove_words. The transcript summary is lossy — it hides reworded retakes ("in one state" \
           vs "in one place") and sub-frame seam fragments (a word whose start == end rounds to zero \
           frames); verify a suspected dangling fragment against the words, not the summary.
+        - On-device transcription is language-specific. When the spoken language is not English \
+          (or differs from the user's system locale), always pass language as a BCP-47 tag \
+          (e.g. language='es', language='fr', language='ja') to get_transcript and inspect_media. \
+          Without it, the wrong model is used and the output will be garbled or empty. If the user \
+          says transcription looks wrong, ask for the spoken language and retry with language set. \
+          When you then cut with remove_words, pass the SAME language — the indices are only valid \
+          against the transcription that produced them, so a mismatch cuts the wrong words.
 
         # Export
         - When the user asks to export/render/save, call export_project. It matches the Export \

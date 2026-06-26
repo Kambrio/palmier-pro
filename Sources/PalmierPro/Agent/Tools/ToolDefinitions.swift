@@ -11,7 +11,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case moveClips = "move_clips"
     case setClipProperties = "set_clip_properties"
     case setKeyframes = "set_keyframes"
-    case splitClip = "split_clip"
+    case splitClips = "split_clips"
     case rippleDeleteRanges = "ripple_delete_ranges"
     case removeWords = "remove_words"
     case syncAudio = "sync_audio"
@@ -45,6 +45,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case deleteFolder = "delete_folder"
     case setProjectSettings = "set_project_settings"
     case sendFeedback = "send_feedback"
+    case setProjectSettings = "set_project_settings"
 }
 
 struct AgentTool: @unchecked Sendable {
@@ -82,6 +83,7 @@ enum ToolDefinitions {
                     "endSeconds": ["type": "number", "description": "Video/audio. Window end (default: asset duration)."],
                     "wordTimestamps": ["type": "boolean", "description": "Video/audio. Add word-level [text, start, end] tuples (capped at 10000 — most clips return all words at once; narrow with startSeconds/endSeconds only for very long media). Use for word-boundary edits like filler-word removal."],
                     "overview": ["type": "boolean", "description": "Video only. One storyboard grid of visually distinct, timestamped moments instead of frames — far more coverage per token; few tiles means static footage. maxFrames ignored."],
+                    "language": ["type": "string", "description": "Optional BCP-47 language tag of the spoken audio (e.g. 'es', 'fr', 'ja', 'zh-Hans'). Defaults to the system language. Specify when the spoken language differs from the system locale — on-device models are language-specific and will produce garbled output if the wrong language is used."],
                 ],
                 required: ["mediaRef"]
             )
@@ -94,6 +96,7 @@ enum ToolDefinitions {
                     "startFrame": ["type": "integer", "description": "Optional. Only return words ending after this project frame. Use with the returned nextStartFrame to page a long timeline."],
                     "endFrame": ["type": "integer", "description": "Optional. Only return words starting before this project frame."],
                     "clipId": ["type": "string", "description": "Scope the transcript to a single clip — returns only what that clip says, in project frames. Answers \"what's in clip X?\" without scanning the whole timeline."],
+                    "language": ["type": "string", "description": "Optional BCP-47 language tag of the spoken audio (e.g. 'es', 'fr', 'ja', 'zh-Hans'). Defaults to the system language. Specify when the spoken language differs from the system locale — on-device models are language-specific and will produce garbled output if the wrong language is used."],
                 ]
             )
         ),
@@ -279,19 +282,34 @@ enum ToolDefinitions {
             )
         ),
         AgentTool(
-            name: .splitClip,
-            description: "Splits a clip into two at atFrame. The frame must be strictly between the clip's start and end — use get_timeline to confirm the range.",
+            name: .splitClips,
+            description: "Splits clips into two at one or more cut points, all in a single undoable action. A split only inserts a boundary — it never trims media or moves clips, so unlike ripple_delete_ranges nothing shifts and there's no gap to close.\n\nTwo modes — pass exactly one:\n• splits: an array of {clipId, atFrame} (project frames). Use when you know the clip IDs.\n• trackIndex + frames: cut one track at the given project frames; each frame is matched to whichever clip on that track contains it. Pairs naturally with get_transcript / get_timeline project frames.\n\nEvery frame must fall strictly between a clip's start and end. Multiple cuts on the SAME clip are allowed — pass all the frames at once and each is resolved against the current sub-clips. Duplicate cut points are ignored. Linked audio/video partners are split at the same frame so A/V stays in sync, and the right halves are regrouped into their own link pair. One bad cut point rejects the whole call with no partial state.",
             inputSchema: objectSchema(
                 properties: [
-                    "clipId": ["type": "string", "description": "The clip ID to split"],
-                    "atFrame": ["type": "integer", "description": "Frame position to split at (must be between clip start and end)"],
+                    "splits": [
+                        "type": "array",
+                        "description": "Explicit cuts. Each item is {clipId, atFrame}.",
+                        "items": objectSchema(
+                            properties: [
+                                "clipId": ["type": "string", "description": "The clip ID to split"],
+                                "atFrame": ["type": "integer", "description": "Project frame to split at (strictly between clip start and end)"],
+                            ],
+                            required: ["clipId", "atFrame"]
+                        ),
+                    ],
+                    "trackIndex": ["type": "integer", "description": "Track to cut (use with 'frames')"],
+                    "frames": [
+                        "type": "array",
+                        "description": "Project frames to cut on trackIndex; each is matched to the clip containing it.",
+                        "items": ["type": "integer"],
+                    ],
                 ],
-                required: ["clipId", "atFrame"]
+                required: []
             )
         ),
         AgentTool(
             name: .rippleDeleteRanges,
-            description: "Cuts one or more ranges out and closes the gaps in one undoable action — the fast path for filler-word/dead-air removal. Replaces hand-cranked split_clip → split_clip → remove_clips → move_clips loops: pass every range at once.\n\nTwo modes — pass exactly one of clipId or trackIndex:\n• trackIndex (preferred for transcript-driven cuts): ranges are PROJECT frames and may span any number of clips on that track. get_transcript returns a clips array with nested words in project frames — collect every cut across the whole timeline and pass them in ONE call, no per-clip splitting and no re-reading the timeline between cuts. units must be 'frames'.\n• clipId: ranges are cut within that single clip only, clamped to its visible span. Allows units 'seconds' (source-media seconds, e.g. inspect_media WITHOUT a clipId or search_media hits); 'frames' = project frames. Use when you already have one clip's per-word timestamps.\n\nOverlapping ranges merge. Linked audio/video partners of every touched clip are cut on the same span so A/V stays in sync. Remaining clips shift left to close every gap; sync-locked tracks shift along to preserve alignment (their content isn't cut). Refuses without changing anything if a sync-locked track can't absorb the shift (e.g. it would move past frame 0). Returns the anchor track's post-cut layout (clip ids/frames) so you don't need to re-read.",
+            description: "Cuts one or more ranges out and closes the gaps in one undoable action — the fast path for filler-word/dead-air removal. Replaces hand-cranked split_clips → remove_clips → move_clips loops: pass every range at once.\n\nTwo modes — pass exactly one of clipId or trackIndex:\n• trackIndex (preferred for transcript-driven cuts): ranges are PROJECT frames and may span any number of clips on that track. get_transcript returns a clips array with nested words in project frames — collect every cut across the whole timeline and pass them in ONE call, no per-clip splitting and no re-reading the timeline between cuts. units must be 'frames'.\n• clipId: ranges are cut within that single clip only, clamped to its visible span. Allows units 'seconds' (source-media seconds, e.g. inspect_media WITHOUT a clipId or search_media hits); 'frames' = project frames. Use when you already have one clip's per-word timestamps.\n\nOverlapping ranges merge. Linked audio/video partners of every touched clip are cut on the same span so A/V stays in sync. Remaining clips shift left to close every gap; sync-locked tracks shift along to preserve alignment (their content isn't cut). Refuses without changing anything if a sync-locked track can't absorb the shift (e.g. it would move past frame 0). Returns the anchor track's post-cut layout (clip ids/frames) so you don't need to re-read.",
             inputSchema: objectSchema(
                 properties: [
                     "trackIndex": ["type": "integer", "description": "Cut project-frame ranges spanning every clip they cross on this track, in one call. From get_transcript's clips array. Mutually exclusive with clipId; requires units 'frames'."],
@@ -321,6 +339,7 @@ enum ToolDefinitions {
                         "enum": ["tight", "balanced", "loose"],
                         "description": "How much silence to leave between the words on either side of a cut. 'tight' butts them close (snappy, can feel clipped), 'balanced' (default) keeps a natural beat, 'loose' leaves more breathing room. The removed words' own frames always go regardless.",
                     ],
+                    "language": ["type": "string", "description": "BCP-47 language tag of the spoken audio. Must match the language passed to the get_transcript call the indices came from — word indices are only valid against the same transcription, so a localed transcript requires the same tag here or the wrong words are cut."],
                 ],
                 required: ["words"]
             )
@@ -792,12 +811,14 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .setProjectSettings,
-            description: "Sets the project's canvas resolution and/or frame rate (the timeline settings in Project Settings). Pass any of width, height, fps — omitted fields keep their current value, so set width+height together to change resolution or aspect ratio (e.g. match the source clips instead of 16:9). Changing resolution refits auto-fitted clips to the new canvas; changing fps rescales all existing clip timing. Undoable. Read current values and source dimensions from get_timeline / inspect_media first.",
+            description: "Change the project's frame rate, resolution, or aspect ratio. Pass any combination of fps, explicit width+height, aspectRatio, and quality. aspectRatio and explicit width/height are mutually exclusive; quality scales the current aspect ratio (or the selected preset when combined with aspectRatio). The timeline's existing clips are re-fitted automatically: auto-fit transforms recalculate for the new canvas size, and all frame positions/durations rescale when fps changes. Undoable.",
             inputSchema: objectSchema(
                 properties: [
-                    "width": ["type": "integer", "description": "Canvas width in pixels. Even number, 16–8192. Omit to keep current."],
-                    "height": ["type": "integer", "description": "Canvas height in pixels. Even number, 16–8192. Omit to keep current."],
-                    "fps": ["type": "integer", "description": "Frames per second, 1–240. Changing this rescales all existing clip timing. Omit to keep current."],
+                    "fps": ["type": "integer", "description": "Frame rate in frames per second. Common values: 24, 25, 30, 48, 50, 60."],
+                    "width": ["type": "integer", "description": "Canvas width in pixels. Use with height for an exact resolution. Mutually exclusive with aspectRatio."],
+                    "height": ["type": "integer", "description": "Canvas height in pixels. Use with width for an exact resolution. Mutually exclusive with aspectRatio."],
+                    "aspectRatio": ["type": "string", "enum": ["16:9", "9:16", "1:1", "4:3", "2.4:1", "9:14"], "description": "Preset aspect ratio — sets both width and height from the preset, or combined with quality to pick a specific size. Mutually exclusive with width/height."],
+                    "quality": ["type": "string", "enum": ["720p", "1080p", "2K", "4K"], "description": "Resolution quality preset — scales the short edge to the target while preserving the current (or specified) aspect ratio."],
                 ]
             )
         ),

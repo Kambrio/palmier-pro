@@ -36,6 +36,7 @@ enum CompositionBuilder {
         timeline: Timeline,
         resolveURL: @Sendable (String) -> URL?,
         resolveSourceSize: @Sendable (String) -> CGSize? = { _ in nil },
+        missingMediaRefs: Set<String> = [],
         renderSize: CGSize
     ) async throws -> CompositionResult {
         Log.preview.info("build fps=\(timeline.fps) size=\(timeline.width)x\(timeline.height) tracks=\(timeline.tracks.count)")
@@ -73,6 +74,7 @@ enum CompositionBuilder {
                         mediaType: mediaType,
                         resolveURL: resolveURL,
                         resolveSourceSize: resolveSourceSize,
+                        missingMediaRefs: missingMediaRefs,
                         renderSize: renderSize
                     ) {
                     case .loaded(let asset, let track): source = (asset, track)
@@ -158,6 +160,7 @@ enum CompositionBuilder {
                     mediaType: mediaType,
                     resolveURL: resolveURL,
                     resolveSourceSize: resolveSourceSize,
+                    missingMediaRefs: missingMediaRefs,
                     renderSize: renderSize
                 ) {
                 case .loaded(let asset, let track): source = (asset, track)
@@ -254,12 +257,12 @@ enum CompositionBuilder {
         mediaType: AVMediaType,
         resolveURL: @Sendable (String) -> URL?,
         resolveSourceSize: @Sendable (String) -> CGSize?,
+        missingMediaRefs: Set<String>,
         renderSize: CGSize
     ) async throws -> LoadOutcome {
         let mediaURL: URL
+        guard !missingMediaRefs.contains(clip.mediaRef) else { return .offline }
         guard let resolved = resolveURL(clip.mediaRef) else { return .offline }
-        // A failed generation on a present file is unprocessable; on a missing file it's offline.
-        let sourceExists = FileManager.default.fileExists(atPath: resolved.path)
         if clip.mediaType == .image {
             let imageSize = resolveSourceSize(clip.mediaRef)
                 ?? ImageVideoGenerator.imageNativeSize(url: resolved)
@@ -272,7 +275,7 @@ enum CompositionBuilder {
                 )
             } catch {
                 Log.preview.error("stillVideo failed mediaRef=\(clip.mediaRef) size=\(Int(imageSize.width))x\(Int(imageSize.height)): \(Log.detail(error))")
-                return sourceExists ? .unprocessable : .offline
+                return FileManager.default.fileExists(atPath: resolved.path) ? .unprocessable : .offline
             }
         } else if clip.mediaType == .lottie {
             let lottieSize = resolveSourceSize(clip.mediaRef) ?? renderSize
@@ -284,7 +287,7 @@ enum CompositionBuilder {
                 )
             } catch {
                 Log.preview.error("lottieVideo failed mediaRef=\(clip.mediaRef) size=\(Int(lottieSize.width))x\(Int(lottieSize.height)): \(Log.detail(error))")
-                return sourceExists ? .unprocessable : .offline
+                return FileManager.default.fileExists(atPath: resolved.path) ? .unprocessable : .offline
             }
         } else if mediaType == .video {
             mediaURL = (try? await AlphaVideoNormalizer.premultipliedVideo(for: resolved, mediaRef: clip.mediaRef)) ?? resolved

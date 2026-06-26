@@ -168,8 +168,19 @@ final class VideoEngine {
         guard let editor, editor.activePreviewTab == .timeline else { return }
         rebuildTask?.cancel()
 
-        let resolver = editor.mediaResolver
         let useProxies = editor.mediaManifest.useProxies
+        let mediaURLs = editor.mediaResolver.expectedURLMap()
+        // Overlay proxy URLs (precomputed — no per-call FileManager) when proxies are on.
+        let proxyURLs: [String: URL] = useProxies
+            ? Dictionary(uniqueKeysWithValues: editor.mediaManifest.entries.compactMap { e -> (String, URL)? in
+                guard let rel = e.proxyPath, let base = editor.projectURL else { return nil }
+                return (e.id, base.appendingPathComponent(rel))
+              })
+            : [:]
+        // Proxy-backed clips play via the proxy, so they aren't offline even if the source is.
+        let missingMediaRefs = useProxies
+            ? editor.missingMediaRefs.subtracting(proxyURLs.keys)
+            : editor.missingMediaRefs
         let renderSize = previewRenderSize
         let assetSizes: [String: CGSize] = Dictionary(
             uniqueKeysWithValues: editor.mediaAssets.compactMap { asset in
@@ -183,10 +194,9 @@ final class VideoEngine {
             do {
                 result = try await CompositionBuilder.build(
                     timeline: editor.timeline,
-                    resolveURL: { id in
-                        (useProxies ? resolver.proxyURL(for: id) : nil) ?? resolver.resolveURL(for: id)
-                    },
+                    resolveURL: { id in proxyURLs[id] ?? mediaURLs[id] },
                     resolveSourceSize: { assetSizes[$0] },
+                    missingMediaRefs: missingMediaRefs,
                     renderSize: renderSize
                 )
             } catch {

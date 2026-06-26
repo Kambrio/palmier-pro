@@ -5,7 +5,7 @@ import AVFoundation
 struct StabilizationAnalyzerTests {
     // A clip that pans steadily should yield a monotonic, non-zero horizontal camera path.
     @Test func recoversHorizontalPan() async throws {
-        let url = try await TestClip.makePanningClip(frames: 20, pxPerFrame: 6)
+        let url = try await TestClip.makePanningClip(frames: 20, pxPerFrame: 18, size: 640)
         defer { try? FileManager.default.removeItem(at: url) }
         let (_, frames) = try await StabilizationAnalyzer.analyze(url: url, progress: { _ in })
         #expect(frames.count >= 18)

@@ -218,11 +218,18 @@ final class ExportService {
         // Build stabilized-file map for vidstab clips — swap baked files in before the composition.
         var stabilizedMut: [String: URL] = [:]
         if let stabilization {
+            // Export bakes vid.stab from the full-res SOURCE at the export resolution (the preview's
+            // proxy-res bake is too soft for final output). Generated once, cached, reused.
+            let longEdge = Int(max(renderSize.width, renderSize.height))
+            var seen = Set<String>()
             for track in timeline.tracks {
                 for clip in track.clips where clip.mediaType == .video {
                     guard clip.stabilization?.enabled == true,
-                          clip.stabilization?.engine == .vidstab else { continue }
-                    if let baked = stabilization.stabilizedURL(for: clip.mediaRef) {
+                          clip.stabilization?.engine == .vidstab,
+                          seen.insert(clip.mediaRef).inserted else { continue }
+                    let smoothness = clip.stabilization?.smoothness ?? 0.5
+                    if let baked = await stabilization.ensureExportBake(
+                        assetId: clip.mediaRef, smoothness: smoothness, longEdge: longEdge) {
                         stabilizedMut[clip.mediaRef] = baked
                     }
                 }

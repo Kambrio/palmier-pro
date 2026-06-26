@@ -120,6 +120,39 @@ final class StabilizationManager {
         }
     }
 
+    /// Ensure a FULL-quality stabilized file baked from the SOURCE (not the proxy) at `longEdge`
+    /// exists for export, generating it synchronously if missing. The preview bake is proxy-res and
+    /// too soft for final output; this is the correct full-res pass. Returns the file URL or nil.
+    func ensureExportBake(assetId: String, smoothness: Double, longEdge: Int) async -> URL? {
+        guard let dir = stabilizedDir,
+              let source = editor.mediaAssetsById[assetId]?.url,
+              let ffmpeg = VidStab.ffmpegPath() else { return nil }
+        let cap = VidStab.capability
+        guard cap != .none else { return nil }
+        let output = dir.appendingPathComponent("\(assetId).full.mov")
+        let sigFile = dir.appendingPathComponent("\(assetId).full.sig")
+        let wantSig = "\(ProxySignature.of(source) ?? "")|\(smoothness)|\(cap)|\(longEdge)"
+        if FileManager.default.fileExists(atPath: output.path),
+           let stored = try? String(contentsOf: sigFile, encoding: .utf8), stored == wantSig {
+            return output
+        }
+        do {
+            bakeProgress[assetId] = 0
+            try await FFmpegStabService.stabilize(
+                source: source, to: output, smoothness: smoothness, maxLongEdge: longEdge,
+                capability: cap, ffmpeg: ffmpeg) { p in
+                    Task { @MainActor [weak self] in self?.bakeProgress[assetId] = p }
+                }
+            try? wantSig.write(to: sigFile, atomically: true, encoding: .utf8)
+            bakeProgress[assetId] = nil
+            return output
+        } catch {
+            bakeProgress[assetId] = nil
+            Log.proxy.error("export stab bake failed id=\(assetId.prefix(8)): \(Log.detail(error))")
+            return nil
+        }
+    }
+
     /// Re-queue bakes for any enabled vidstab clip whose bake is missing or stale.
     func reconcileVidstabClips() {
         guard stabilizedDir != nil else { return }

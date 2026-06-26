@@ -116,6 +116,8 @@ enum Project {
     static let proxiesDirname = "proxies"
     /// Subdirectory of `media/` holding per-asset stabilization analysis sidecars.
     static let stabilizationDirname = "stabilization"
+    /// Subdirectory of `media/` holding ffmpeg-baked stabilized movies.
+    static let stabilizedDirname = "stabilized"
     /// Subfolder inside a .palmier package for agent-saved documents (scripts, hooks,
     /// transcript/caption exports, notes). Extra subdirs are tolerated by the package format.
     static let documentsDirectoryName = "documents"

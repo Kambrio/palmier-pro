@@ -426,7 +426,8 @@ struct InspectorView: View {
         if clips.count == 1, let clip = clips.first, clip.mediaType == .video {
             let stab = clip.stabilization
             let canStabilize = clip.speed == 1.0
-            let progress = editor.stabilizationManager.progressByAsset[clip.mediaRef]
+            let analyzeProgress = editor.stabilizationManager.progressByAsset[clip.mediaRef]
+            let bakeProgress = editor.stabilizationManager.bakeProgress[clip.mediaRef]
             VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
                 sectionTitleLabel(title: "Stabilization")
                 propertyRow(label: "Stabilize") {
@@ -443,25 +444,43 @@ struct InspectorView: View {
                     propertyRow(label: "Engine") {
                         Picker("", selection: Binding(
                             get: { stab?.engine ?? .l1 },
-                            set: { v in updateStabilization(clip: clip) { $0.engine = v } })) {
+                            set: { v in
+                                updateStabilization(clip: clip) { $0.engine = v }
+                                if v == .vidstab {
+                                    triggerBake(clip: clip, smoothness: stab?.smoothness ?? 0.5)
+                                }
+                            })) {
                             ForEach(StabEngine.allCases, id: \.self) { eng in
-                                Text(eng == .vidstab && !VidStab.isAvailable
-                                     ? "vid.stab — needs ffmpeg+vidstab" : eng.displayName)
+                                Text(engineLabel(eng))
                                     .tag(eng)
                             }
                         }
                         .labelsHidden()
                         .fixedSize()
                     }
-                    if stab?.engine == .vidstab && !VidStab.isAvailable {
-                        Text("Install an ffmpeg built with libvidstab to use this engine.")
-                            .font(.system(size: AppTheme.FontSize.xs))
-                            .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    if stab?.engine == .vidstab {
+                        switch VidStab.capability {
+                        case .none:
+                            Text("Install ffmpeg to use this engine.")
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        case .deshake:
+                            Text("Install libvidstab-enabled ffmpeg for higher-quality vid.stab.")
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        case .vidstab:
+                            EmptyView()
+                        }
                     }
                     propertyRow(label: "Smoothness") {
                         Slider(value: Binding(
                             get: { stab?.smoothness ?? 0.5 },
-                            set: { v in updateStabilization(clip: clip) { $0.smoothness = v } }),
+                            set: { v in
+                                updateStabilization(clip: clip) { $0.smoothness = v }
+                                if stab?.engine == .vidstab {
+                                    triggerBake(clip: clip, smoothness: v)
+                                }
+                            }),
                             in: 0...1)
                     }
                     propertyRow(label: "Crop to fit") {
@@ -470,8 +489,13 @@ struct InspectorView: View {
                             set: { v in updateStabilization(clip: clip) { $0.cropToFit = v } }))
                         .labelsHidden()
                     }
-                    if let p = progress, p < 1 {
+                    if let p = analyzeProgress, p < 1 {
                         Text("Analyzing… \(Int(p * 100))%")
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    }
+                    if let p = bakeProgress, p < 1 {
+                        Text("Stabilizing… \(Int(p * 100))%")
                             .font(.system(size: AppTheme.FontSize.xs))
                             .foregroundStyle(AppTheme.Text.tertiaryColor)
                     }
@@ -484,6 +508,17 @@ struct InspectorView: View {
             }
             .onAppear { VidStab.detectIfNeeded() }   // probe off-main; never run ffmpeg in body
         }
+    }
+
+    private func engineLabel(_ eng: StabEngine) -> String {
+        if eng == .vidstab {
+            switch VidStab.capability {
+            case .vidstab: return "vid.stab (FFmpeg)"
+            case .deshake: return "FFmpeg (deshake)"
+            case .none:    return "FFmpeg — needs ffmpeg"
+            }
+        }
+        return eng.displayName
     }
 
     private func updateStabilization(clip: Clip, _ mutate: @escaping (inout Stabilization) -> Void) {
@@ -500,6 +535,11 @@ struct InspectorView: View {
         guard !editor.stabilizationManager.hasAnalysis(assetId: clip.mediaRef),
               let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.analyze(assetId: clip.mediaRef, url: url)
+    }
+
+    private func triggerBake(clip: Clip, smoothness: Double) {
+        guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        editor.stabilizationManager.enqueueBake(assetId: clip.mediaRef, url: url, smoothness: smoothness)
     }
 
     @ViewBuilder

@@ -178,13 +178,33 @@ final class VideoEngine {
             }
         )
 
+        // Build stabilized-file map for vidstab clips — injected first in resolveURL so the baked
+        // file replaces the source for both video decode and audio (the baked .mov keeps audio).
+        var stabilizedMut: [String: URL] = [:]
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine == .vidstab else { continue }
+                if let baked = editor.stabilizationManager.stabilizedURL(for: clip.mediaRef) {
+                    stabilizedMut[clip.mediaRef] = baked
+                }
+            }
+        }
+        let stabilized = stabilizedMut
+
+        // Self-heal: queue any missing/stale bakes and analysis passes.
+        if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
+            editor.stabilizationManager.reconcileEnabledClips()
+            editor.stabilizationManager.reconcileVidstabClips()
+        }
+
         rebuildTask = Task {
             let result: CompositionResult
             do {
                 result = try await CompositionBuilder.build(
                     timeline: editor.timeline,
                     resolveURL: { id in
-                        (useProxies ? resolver.proxyURL(for: id) : nil) ?? resolver.resolveURL(for: id)
+                        stabilized[id] ?? (useProxies ? resolver.proxyURL(for: id) : nil) ?? resolver.resolveURL(for: id)
                     },
                     resolveSourceSize: { assetSizes[$0] },
                     renderSize: renderSize
@@ -214,10 +234,8 @@ final class VideoEngine {
             replacePlayerItem(item, reason: "rebuild")
             syncTextLayers()
 
-            // rebuild()'s composition has no stabilization; re-apply visuals with corrections if any clip needs it.
+            // Re-apply native stabilization visuals for l1/smooth clips.
             if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
-                // Self-heal: a reopened project / imported bundle may have enabled clips with no sidecar yet.
-                editor.stabilizationManager.reconcileEnabledClips()
                 refreshVisuals()
             }
 

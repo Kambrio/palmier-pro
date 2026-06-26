@@ -17,9 +17,118 @@ final class StabilizationManager {
     /// In-memory cache of correction results keyed by clip + params.
     @ObservationIgnored private var correctionCache: [String: PathSmoother.Result] = [:]
 
+    // MARK: - Bake queue (ffmpeg engine)
+
+    /// assetId → bake progress (0…1).
+    private(set) var bakeProgress: [String: Double] = [:]
+    private var pendingBakes: [(assetId: String, url: URL, smoothness: Double)] = []
+    private var runningBake: String?
+    private var bakeJob: Task<Void, Never>?
+
     init(editor: EditorViewModel) { self.editor = editor }
 
     private var baseDir: URL? { editor.projectURL }
+
+    private var stabilizedDir: URL? {
+        editor.projectURL?.appendingPathComponent(
+            "\(Project.mediaDirectoryName)/\(Project.stabilizedDirname)", isDirectory: true)
+    }
+
+    // MARK: - Bake helpers
+
+    /// Returns the path of a baked stabilized movie if it exists and matches the source identity.
+    /// Resolution ignores smoothness so scrubbing always finds a bake; re-bakes are triggered by `enqueueBake`.
+    func stabilizedURL(for assetId: String) -> URL? {
+        guard let dir = stabilizedDir,
+              let sourceURL = editor.mediaAssetsById[assetId]?.url,
+              let sourceSig = ProxySignature.of(sourceURL) else { return nil }
+        let mov = dir.appendingPathComponent("\(assetId).mov")
+        let sig = dir.appendingPathComponent("\(assetId).sig")
+        guard FileManager.default.fileExists(atPath: mov.path),
+              let stored = try? String(contentsOf: sig, encoding: .utf8),
+              stored.hasPrefix(sourceSig + "|") else { return nil }
+        return mov
+    }
+
+    /// True if the sidecar sig matches `sourceSig|smoothness` exactly (triggers re-bake when smoothness changes).
+    private func hasCurrentBake(assetId: String, smoothness: Double) -> Bool {
+        guard let dir = stabilizedDir,
+              let sourceURL = editor.mediaAssetsById[assetId]?.url,
+              let sourceSig = ProxySignature.of(sourceURL) else { return false }
+        let sig = dir.appendingPathComponent("\(assetId).sig")
+        guard let stored = try? String(contentsOf: sig, encoding: .utf8) else { return false }
+        return stored == "\(sourceSig)|\(smoothness)"
+    }
+
+    /// Enqueue a bake if not already current, running, or pending for this asset.
+    func enqueueBake(assetId: String, url: URL, smoothness: Double) {
+        guard stabilizedDir != nil else { return }
+        if hasCurrentBake(assetId: assetId, smoothness: smoothness) { return }
+        if runningBake == assetId || pendingBakes.contains(where: { $0.assetId == assetId }) { return }
+        pendingBakes.append((assetId, url, smoothness))
+        if bakeJob == nil { startBakeDraining() }
+    }
+
+    private func startBakeDraining() {
+        bakeJob = Task { [weak self] in
+            while let next = self?.dequeueBake() {
+                self?.runningBake = next.assetId
+                await self?.runBake(assetId: next.assetId, url: next.url, smoothness: next.smoothness)
+                self?.runningBake = nil
+            }
+            self?.bakeJob = nil
+        }
+    }
+
+    private func dequeueBake() -> (assetId: String, url: URL, smoothness: Double)? {
+        guard !pendingBakes.isEmpty else { return nil }
+        return pendingBakes.removeFirst()
+    }
+
+    private func runBake(assetId: String, url: URL, smoothness: Double) async {
+        guard let dir = stabilizedDir,
+              let ffmpeg = VidStab.ffmpegPath() else { return }
+        let cap = VidStab.capability
+        guard cap != .none else { return }
+        bakeProgress[assetId] = 0
+        let output = dir.appendingPathComponent("\(assetId).mov")
+        let sigFile = dir.appendingPathComponent("\(assetId).sig")
+        do {
+            try await FFmpegStabService.stabilize(
+                source: url, to: output, smoothness: smoothness,
+                capability: cap, ffmpeg: ffmpeg) { p in
+                    Task { @MainActor [weak self] in self?.bakeProgress[assetId] = p }
+                }
+            // Write sidecar sig after successful bake.
+            if let sourceSig = ProxySignature.of(url) {
+                try? "\(sourceSig)|\(smoothness)".write(to: sigFile, atomically: true, encoding: .utf8)
+            }
+            bakeProgress[assetId] = 1
+            editor.onPersistentStateChanged?()
+            editor.videoEngine?.rebuild()
+        } catch is CancellationError {
+            bakeProgress[assetId] = nil
+        } catch {
+            Log.proxy.error("ffmpeg stab bake failed id=\(assetId.prefix(8)): \(Log.detail(error))")
+            bakeProgress[assetId] = nil
+        }
+    }
+
+    /// Re-queue bakes for any enabled vidstab clip whose bake is missing or stale.
+    func reconcileVidstabClips() {
+        guard stabilizedDir != nil else { return }
+        var seen = Set<String>()
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine == .vidstab,
+                      seen.insert(clip.mediaRef).inserted,
+                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                let smoothness = clip.stabilization?.smoothness ?? 0.5
+                enqueueBake(assetId: clip.mediaRef, url: url, smoothness: smoothness)
+            }
+        }
+    }
 
     func hasAnalysis(assetId: String) -> Bool {
         guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
@@ -35,7 +144,10 @@ final class StabilizationManager {
         var seen = Set<String>()
         for track in editor.timeline.tracks {
             for clip in track.clips where clip.mediaType == .video {
-                guard clip.stabilization?.enabled == true, seen.insert(clip.mediaRef).inserted,
+                // vidstab clips don't need Vision analysis — they use the bake queue.
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine.isNative == true,
+                      seen.insert(clip.mediaRef).inserted,
                       !hasAnalysis(assetId: clip.mediaRef),
                       let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
                 analyze(assetId: clip.mediaRef, url: url)

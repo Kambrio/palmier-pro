@@ -215,9 +215,24 @@ final class ExportService {
         let timelineCanvas = CGSize(width: timeline.width, height: timeline.height)
         let renderSize = resolution.renderSize(for: timelineCanvas)
 
+        // Build stabilized-file map for vidstab clips — swap baked files in before the composition.
+        var stabilizedMut: [String: URL] = [:]
+        if let stabilization {
+            for track in timeline.tracks {
+                for clip in track.clips where clip.mediaType == .video {
+                    guard clip.stabilization?.enabled == true,
+                          clip.stabilization?.engine == .vidstab else { continue }
+                    if let baked = stabilization.stabilizedURL(for: clip.mediaRef) {
+                        stabilizedMut[clip.mediaRef] = baked
+                    }
+                }
+            }
+        }
+        let stabilizedMap = stabilizedMut
+
         let result = try await CompositionBuilder.build(
             timeline: timeline,
-            resolveURL: { resolver.resolveURL(for: $0) },
+            resolveURL: { stabilizedMap[$0] ?? resolver.resolveURL(for: $0) },
             renderSize: renderSize
         )
 

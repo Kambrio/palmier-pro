@@ -1,34 +1,42 @@
 import Foundation
 
-/// Detects whether a vid.stab-capable ffmpeg is available (the engine requires it).
-/// Detection shells out to ffmpeg, so it MUST run off-main — never during a SwiftUI body
-/// (a blocking subprocess inside the view update aborts the AttributeGraph).
+/// Detects the available ffmpeg stabilization capability. Probe runs off-main (a subprocess in a
+/// SwiftUI body aborts the AttributeGraph), result cached for pure main-thread reads.
 @MainActor
 enum VidStab {
-    private static var cached: Bool?
+    enum Capability { case none, deshake, vidstab }   // none = no ffmpeg
 
-    /// Pure, non-blocking read for views. False until detection resolves (gated UI default).
-    static var isAvailable: Bool { cached ?? false }
+    private static var cached: Capability?
+
+    /// True if ANY ffmpeg stabilization is usable (deshake is built into stock ffmpeg).
+    static var isAvailable: Bool { (cached ?? .none) != .none }
+    /// The capability the engine will use (vidstab preferred, else deshake).
+    static var capability: Capability { cached ?? .none }
 
     /// Kick off detection once, off the main thread; result is cached on main.
     static func detectIfNeeded() {
         guard cached == nil else { return }
-        cached = false   // definite default until the probe answers, and de-dupes re-entry
+        cached = .none as Capability   // definite default until the probe answers, and de-dupes re-entry
         Task.detached(priority: .utility) {
-            let ok = detect()
-            await MainActor.run { cached = ok }
+            let cap = detect()
+            await MainActor.run { cached = cap }
         }
     }
 
-    private nonisolated static func detect() -> Bool {
-        guard let ffmpeg = CLILocator.loginShellWhich("ffmpeg") else { return false }
+    private nonisolated static func detect() -> Capability {
+        guard let ffmpeg = CLILocator.loginShellWhich("ffmpeg") else { return .none }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: ffmpeg)
         proc.arguments = ["-hide_banner", "-filters"]
         let pipe = Pipe(); proc.standardOutput = pipe; proc.standardError = Pipe()
-        do { try proc.run() } catch { return false }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        do { try proc.run() } catch { return .none }
+        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         proc.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).contains("vidstabtransform")
+        if out.contains("vidstabtransform") { return .vidstab }
+        if out.contains("deshake") { return .deshake }
+        return .none
     }
+
+    /// Located ffmpeg path (nil if none). For the generation service.
+    nonisolated static func ffmpegPath() -> String? { CLILocator.loginShellWhich("ffmpeg") }
 }

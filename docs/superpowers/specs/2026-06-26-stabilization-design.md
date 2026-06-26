@@ -62,6 +62,12 @@ in normalized coordinates so analysis resolution is irrelevant to application).
 Analysis is per *source asset* (camera motion is intrinsic to the footage), cached
 once and shared by every clip referencing that asset.
 
+**Path convention (pipeline contract):** the sidecar stores **absolute cumulative**
+transforms — `frames[i]` is the camera pose at source frame `i` relative to frame 0
+(frame 0 = identity). The analyzer composes its consecutive-frame registrations into
+this absolute path before storing; `PathSmoother` smooths the absolute path directly
+(no accumulation in the smoother).
+
 ### 2. `PathSmoother` (new, pure value → fully unit-testable)
 
 No I/O. Input: the raw per-frame path + a `smoothness` parameter + the clip's

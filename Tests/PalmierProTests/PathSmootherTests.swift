@@ -14,7 +14,7 @@ struct PathSmootherTests {
             raw.append(StabFrameTransform(m: [1,0, ramp + jitter, 0,1, jitter, 0,0,1]))
         }
         let out = PathSmoother.corrections(
-            raw: raw, window: 0..<120, method: .similarity, smoothness: 0.6, cropToFit: false)
+            raw: raw, window: 0..<120, method: .similarity, engine: .l1, smoothness: 0.6, cropToFit: false)
         // Stabilized position = raw + correction; its frame-to-frame motion must be smaller.
         func jitterEnergy(_ txs: [Double]) -> Double {
             zip(txs.dropFirst(), txs).map { ($0 - $1) * ($0 - $1) }.reduce(0, +)
@@ -30,7 +30,7 @@ struct PathSmootherTests {
             StabFrameTransform(m: [1,0, Double(i) * 0.001, 0,1,0, 0,0,1])  // steady drift
         }
         let out = PathSmoother.corrections(
-            raw: frames, window: 0..<60, method: .similarity, smoothness: 0.5, cropToFit: false)
+            raw: frames, window: 0..<60, method: .similarity, engine: .l1, smoothness: 0.5, cropToFit: false)
         let maxTx = out.corrections.map { abs($0.m[2]) }.max() ?? 1
         #expect(maxTx < 0.01)
     }
@@ -42,7 +42,7 @@ struct PathSmootherTests {
             return StabFrameTransform(m: [1,0, jitter, 0,1,0, 0,0,1])
         }
         let out = PathSmoother.corrections(
-            raw: frames, window: 0..<60, method: .position, smoothness: 0.8, cropToFit: false)
+            raw: frames, window: 0..<60, method: .position, engine: .l1, smoothness: 0.8, cropToFit: false)
         // Residual jitter after applying corrections is smaller than the input jitter.
         let residual = zip(frames, out.corrections).map { abs($0.m[2] + $1.m[2]) }.max() ?? 1
         #expect(residual < 0.05)
@@ -53,13 +53,13 @@ struct PathSmootherTests {
             StabFrameTransform(m: [1,0, Double(i % 3) * 0.04, 0,1,0, 0,0,1])
         }
         let out = PathSmoother.corrections(
-            raw: frames, window: 0..<30, method: .similarity, smoothness: 0.5, cropToFit: true)
+            raw: frames, window: 0..<30, method: .similarity, engine: .l1, smoothness: 0.5, cropToFit: true)
         #expect(out.cropZoom >= 1.0)
     }
 
     @Test func emptyWindowIsSafe() {
         let out = PathSmoother.corrections(
-            raw: [], window: 0..<0, method: .similarity, smoothness: 0.5, cropToFit: true)
+            raw: [], window: 0..<0, method: .similarity, engine: .l1, smoothness: 0.5, cropToFit: true)
         #expect(out.corrections.isEmpty)
         #expect(out.cropZoom == 1.0)
     }
@@ -82,7 +82,7 @@ struct PathSmootherTests {
             frames.append(StabFrameTransform(m: [1,0,tx, 0,1,ty, 0,0,1]))
         }
         let out = PathSmoother.corrections(
-            raw: frames, window: 0..<600, method: .similarity, smoothness: 0.6, cropToFit: true)
+            raw: frames, window: 0..<600, method: .similarity, engine: .l1, smoothness: 0.6, cropToFit: true)
         #expect(out.cropZoom <= 1.5)
         for c in out.corrections {
             #expect(abs(c.m[2]) <= 0.25 + 1e-9)   // tx clamped
@@ -112,7 +112,7 @@ struct PathSmootherTests {
         var frames: [StabFrameTransform] = []
         for i in 0..<30 { frames.append(StabFrameTransform(m: [1,0, Double(i)*0.01, 0,1,0, 0,0,1])) }
         frames[15] = StabFrameTransform(m: [1,0, .infinity, 0,1, .nan, 0,0,1])
-        let out = PathSmoother.corrections(raw: frames, window: 0..<30, method: .similarity, smoothness: 0.5, cropToFit: true)
+        let out = PathSmoother.corrections(raw: frames, window: 0..<30, method: .similarity, engine: .l1, smoothness: 0.5, cropToFit: true)
         #expect(out.cropZoom.isFinite)
         for c in out.corrections { #expect(c.m.allSatisfy { $0.isFinite }) }
     }
@@ -136,5 +136,26 @@ struct PathSmootherTests {
         #expect((s.last! - s.first!) > (x.last! - x.first!) * 0.7)
         // 3. Finite + same length.
         #expect(s.count == n && s.allSatisfy { $0.isFinite })
+    }
+
+    @Test func smoothEngineDiffersFromL1AndReducesJitter() {
+        var raw: [StabFrameTransform] = []
+        for i in 0..<120 {
+            let ramp = Double(i) * 0.003
+            let bob = 0.025 * sin(Double(i) * 2 * .pi / 14)
+            raw.append(StabFrameTransform(m: [1,0, ramp + bob, 0,1, bob, 0,0,1]))
+        }
+        let l1 = PathSmoother.corrections(raw: raw, window: 0..<120, method: .similarity, engine: .l1, smoothness: 0.6, cropToFit: false)
+        let sm = PathSmoother.corrections(raw: raw, window: 0..<120, method: .similarity, engine: .smooth, smoothness: 0.6, cropToFit: false)
+        // The two engines produce different corrections.
+        let differ = zip(l1.corrections, sm.corrections).contains { abs($0.m[2] - $1.m[2]) > 1e-4 }
+        #expect(differ)
+        // Both reduce frame-to-frame jitter vs the raw path.
+        func jit(_ txs: [Double]) -> Double { zip(txs.dropFirst(), txs).map { ($0-$1)*($0-$1) }.reduce(0,+) }
+        let rawTx = raw.map { $0.m[2] }
+        for out in [l1, sm] {
+            let stab = zip(raw, out.corrections).map { $0.m[2] + $1.m[2] }
+            #expect(jit(stab) < jit(rawTx))
+        }
     }
 }

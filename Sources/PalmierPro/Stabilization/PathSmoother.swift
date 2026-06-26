@@ -26,10 +26,27 @@ enum PathSmoother {
         return StabFrameTransform(m: [cs, -sn, tx, sn, cs, ty, 0, 0, 1])
     }
 
+    /// Gaussian low-pass — organic smoothing that follows the camera more loosely than L1.
+    static func gaussianSmooth(_ xs: [Double], sigma: Double) -> [Double] {
+        guard xs.count > 1, sigma > 0 else { return xs }
+        let radius = max(1, Int((sigma * 3).rounded()))
+        var kernel = (-radius...radius).map { exp(-Double($0 * $0) / (2 * sigma * sigma)) }
+        let sum = kernel.reduce(0, +); kernel = kernel.map { $0 / sum }
+        return xs.indices.map { i in
+            var acc = 0.0
+            for (k, w) in kernel.enumerated() {
+                let j = min(max(i + k - radius, 0), xs.count - 1)
+                acc += xs[j] * w
+            }
+            return acc
+        }
+    }
+
     static func corrections(
         raw: [StabFrameTransform],
         window: Range<Int>,
         method: StabMethod,
+        engine: StabEngine,
         smoothness: Double,
         cropToFit: Bool
     ) -> Result {
@@ -44,14 +61,17 @@ enum PathSmoother {
         // 1. Decompose each raw frame into the camera path (already absolute/cumulative).
         let path = idx.map { decompose(raw[$0]) }
 
-        // 2. L1 trend-filter each channel → piecewise-linear (constant-velocity) path.
-        //    smoothness 0…1 → lambda ~10…~5600; higher = flatter, removes more low-freq bob.
-        let lambda = pow(10.0, 1.0 + smoothness * 3.5)
-        let txS = l1Smooth(path.map(\.tx), lambda: lambda)
-        let tyS = l1Smooth(path.map(\.ty), lambda: lambda)
-        let rotS = method == .position ? path.map { _ in 0.0 } : l1Smooth(path.map(\.rot), lambda: lambda)
-        let scS  = method == .position ? path.map { _ in path.first!.scale }
-                                       : l1Smooth(path.map(\.scale), lambda: lambda)
+        // Native engine selects the smoother. L1 = locked/cinematic (piecewise-linear);
+        // Gaussian = organic (follows the camera). smoothness maps to each one's strength.
+        let lambda = pow(10.0, 1.0 + smoothness * 3.5)        // L1 penalty
+        let sigma  = 1 + smoothness * 59                       // Gaussian window (wider than before for low-freq bob)
+        func smoothChannel(_ xs: [Double]) -> [Double] {
+            engine == .smooth ? gaussianSmooth(xs, sigma: sigma) : l1Smooth(xs, lambda: lambda)
+        }
+        let txS = smoothChannel(path.map(\.tx))
+        let tyS = smoothChannel(path.map(\.ty))
+        let rotS = method == .position ? path.map { _ in 0.0 } : smoothChannel(path.map(\.rot))
+        let scS  = method == .position ? path.map { _ in path.first!.scale } : smoothChannel(path.map(\.scale))
 
         // 3. Correction = smoothed − raw, expressed as a homography.
         var corrections: [StabFrameTransform] = []

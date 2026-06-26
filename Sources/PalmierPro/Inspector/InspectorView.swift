@@ -440,14 +440,23 @@ struct InspectorView: View {
                     .disabled(!canStabilize)
                 }
                 if stab?.enabled == true {
-                    propertyRow(label: "Method") {
+                    propertyRow(label: "Engine") {
                         Picker("", selection: Binding(
-                            get: { stab?.method ?? .similarity },
-                            set: { v in updateStabilization(clip: clip) { $0.method = v } })) {
-                            ForEach(StabMethod.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                            get: { stab?.engine ?? .l1 },
+                            set: { v in updateStabilization(clip: clip) { $0.engine = v } })) {
+                            ForEach(StabEngine.allCases, id: \.self) { eng in
+                                Text(eng == .vidstab && !VidStab.isAvailable
+                                     ? "vid.stab — needs ffmpeg+vidstab" : eng.displayName)
+                                    .tag(eng)
+                            }
                         }
                         .labelsHidden()
                         .fixedSize()
+                    }
+                    if stab?.engine == .vidstab && !VidStab.isAvailable {
+                        Text("Install an ffmpeg built with libvidstab to use this engine.")
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
                     }
                     propertyRow(label: "Smoothness") {
                         Slider(value: Binding(

@@ -113,7 +113,7 @@ final class StabilizationManager {
     /// Returns nil when no analysis exists or stabilization is disabled.
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
         guard let stab = clip.stabilization, stab.enabled, let base = baseDir else { return nil }
-        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
+        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
         if let hit = correctionCache[key] { return hit }
         guard let sidecar = StabilizationSidecar.read(
             assetId: clip.mediaRef, baseDir: base,
@@ -122,7 +122,7 @@ final class StabilizationManager {
         let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
         let result = PathSmoother.corrections(
             raw: sidecar.frames, window: start..<max(start, end),
-            method: stab.method, smoothness: stab.smoothness, cropToFit: stab.cropToFit)
+            method: stab.method, engine: stab.engine, smoothness: stab.smoothness, cropToFit: stab.cropToFit)
         correctionCache[key] = result
         return result
     }
@@ -138,7 +138,7 @@ final class StabilizationManager {
         var stabByClip: [String: StabResolved] = [:]
         for track in editor.timeline.tracks {
             for clip in track.clips where clip.mediaType == .video {
-                guard let stab = clip.stabilization, stab.enabled, clip.speed == 1.0,
+                guard let stab = clip.stabilization, stab.enabled, stab.engine.isNative, clip.speed == 1.0,
                       let srcURL = editor.mediaResolver.resolveURL(for: clip.mediaRef),
                       let result = corrections(for: clip, assetURL: srcURL)
                 else { continue }

@@ -203,10 +203,11 @@ final class VideoEngine {
         }
         let stabilized = stabilizedMut
 
-        // Self-heal: queue any missing/stale bakes and analysis passes.
+        // Self-heal: queue any missing/stale bakes, analysis, and subject-tracking passes.
         if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
             editor.stabilizationManager.reconcileEnabledClips()
             editor.stabilizationManager.reconcileVidstabClips()
+            editor.stabilizationManager.reconcileSubjectClips()
         }
 
         rebuildTask = Task {

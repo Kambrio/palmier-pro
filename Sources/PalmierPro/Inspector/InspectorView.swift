@@ -446,8 +446,13 @@ struct InspectorView: View {
                             get: { stab?.engine ?? .vidstab },
                             set: { v in
                                 updateStabilization(clip: clip) { $0.engine = v }
-                                if v == .vidstab {
+                                switch v {
+                                case .vidstab:
                                     triggerBake(clip: clip, smoothness: stab?.smoothness ?? 0.5)
+                                case .subject:
+                                    triggerSubjectTrack(clip)
+                                default:
+                                    break
                                 }
                             })) {
                             ForEach(StabEngine.allCases, id: \.self) { eng in
@@ -531,12 +536,14 @@ struct InspectorView: View {
         editor.videoEngine?.refreshVisuals()
     }
 
-    /// On enable, kick off the right work for the chosen engine: a bake for vid.stab, Vision
-    /// analysis for the native engines.
+    /// On enable, kick off the right work for the chosen engine.
     private func triggerStabilization(_ clip: Clip) {
-        if (clip.stabilization?.engine ?? .vidstab) == .vidstab {
+        switch clip.stabilization?.engine ?? .vidstab {
+        case .vidstab:
             triggerBake(clip: clip, smoothness: clip.stabilization?.smoothness ?? 0.5)
-        } else {
+        case .subject:
+            triggerSubjectTrack(clip)
+        default:
             triggerStabilizationAnalysis(clip)
         }
     }
@@ -545,6 +552,12 @@ struct InspectorView: View {
         guard !editor.stabilizationManager.hasAnalysis(assetId: clip.mediaRef),
               let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.analyze(assetId: clip.mediaRef, url: url)
+    }
+
+    private func triggerSubjectTrack(_ clip: Clip) {
+        guard !editor.stabilizationManager.hasSubjectTrack(assetId: clip.mediaRef),
+              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        editor.stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url)
     }
 
     private func triggerBake(clip: Clip, smoothness: Double) {

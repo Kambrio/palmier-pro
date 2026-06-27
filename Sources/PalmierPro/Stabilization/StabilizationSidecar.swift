@@ -22,6 +22,39 @@ struct StabSidecar: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Subject sidecar
+
+struct SubjectSidecar: Codable, Sendable, Equatable {
+    var version: Int = SubjectSidecarStore.currentVersion
+    var sourceSig: String
+    var fps: Double
+    var frames: [StabFrameTransform]   // per frame: tx=subjectCenterX, ty=subjectCenterY
+}
+
+enum SubjectSidecarStore {
+    static let currentVersion = 1
+
+    static func fileURL(assetId: String, baseDir: URL) -> URL {
+        StabilizationSidecar.dir(baseDir: baseDir).appendingPathComponent("\(assetId).subject.json")
+    }
+
+    static func read(assetId: String, baseDir: URL, sourceSig: String) -> SubjectSidecar? {
+        guard let data = try? Data(contentsOf: fileURL(assetId: assetId, baseDir: baseDir)),
+              let s = try? JSONDecoder().decode(SubjectSidecar.self, from: data),
+              s.version == currentVersion, s.sourceSig == sourceSig else { return nil }
+        return s
+    }
+
+    static func write(_ s: SubjectSidecar, assetId: String, baseDir: URL) throws {
+        let url = fileURL(assetId: assetId, baseDir: baseDir)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(s).write(to: url, options: .atomic)
+    }
+}
+
+// MARK: -
+
 enum StabilizationSidecar {
     /// Bump when the analyzer's output math changes (forces re-analysis of older sidecars).
     static let currentVersion = 3

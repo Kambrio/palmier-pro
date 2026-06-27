@@ -25,6 +25,12 @@ final class StabilizationManager {
     private var runningBake: String?
     private var bakeJob: Task<Void, Never>?
 
+    // MARK: - Subject-tracking queue
+
+    private var pendingSubject: [(assetId: String, url: URL)] = []
+    private var runningSubject: String?
+    private var subjectJob: Task<Void, Never>?
+
     init(editor: EditorViewModel) { self.editor = editor }
 
     private var baseDir: URL? { editor.projectURL }
@@ -175,6 +181,78 @@ final class StabilizationManager {
         }
     }
 
+    // MARK: - Subject tracking
+
+    func hasSubjectTrack(assetId: String) -> Bool {
+        guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
+        return SubjectSidecarStore.read(
+            assetId: assetId, baseDir: base, sourceSig: ProxySignature.of(url) ?? "") != nil
+    }
+
+    func enqueueSubjectTrack(assetId: String, url: URL) {
+        guard baseDir != nil else { return }
+        if hasSubjectTrack(assetId: assetId) { return }
+        if runningSubject == assetId || pendingSubject.contains(where: { $0.assetId == assetId }) { return }
+        pendingSubject.append((assetId, url))
+        if subjectJob == nil { startSubjectDraining() }
+    }
+
+    private func startSubjectDraining() {
+        subjectJob = Task { [weak self] in
+            while let next = self?.dequeueSubject() {
+                self?.runningSubject = next.assetId
+                await self?.runSubjectTrack(assetId: next.assetId, url: next.url)
+                self?.runningSubject = nil
+            }
+            self?.subjectJob = nil
+        }
+    }
+
+    private func dequeueSubject() -> (assetId: String, url: URL)? {
+        guard !pendingSubject.isEmpty else { return nil }
+        return pendingSubject.removeFirst()
+    }
+
+    private func runSubjectTrack(assetId: String, url: URL) async {
+        guard let base = baseDir, (try? await Self.gate.wait()) != nil else { return }
+        defer { Task { await Self.gate.signal() } }
+        progressByAsset[assetId] = 0
+        let proxy = editor.mediaManifest.useProxies ? editor.mediaResolver.proxyURL(for: assetId) : nil
+        let inputURL = proxy ?? url
+        do {
+            let (fps, frames) = try await SubjectTracker.track(input: inputURL) { p in
+                Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
+            }
+            let sidecar = SubjectSidecar(sourceSig: ProxySignature.of(url) ?? "", fps: fps, frames: frames)
+            try SubjectSidecarStore.write(sidecar, assetId: assetId, baseDir: base)
+            correctionCache.removeAll()
+            progressByAsset[assetId] = 1
+            editor.onPersistentStateChanged?()
+            editor.videoEngine?.refreshVisuals()
+        } catch is CancellationError {
+            progressByAsset[assetId] = nil
+        } catch {
+            Log.proxy.error("subject tracking failed id=\(assetId.prefix(8)): \(Log.detail(error))")
+            progressByAsset[assetId] = nil
+        }
+    }
+
+    /// Re-queue subject tracking for any enabled subject-engine clip whose sidecar is missing.
+    func reconcileSubjectClips() {
+        guard baseDir != nil else { return }
+        var seen = Set<String>()
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine == .subject,
+                      seen.insert(clip.mediaRef).inserted,
+                      !hasSubjectTrack(assetId: clip.mediaRef),
+                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                enqueueSubjectTrack(assetId: clip.mediaRef, url: url)
+            }
+        }
+    }
+
     func hasAnalysis(assetId: String) -> Bool {
         guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
         return StabilizationSidecar.read(
@@ -189,9 +267,10 @@ final class StabilizationManager {
         var seen = Set<String>()
         for track in editor.timeline.tracks {
             for clip in track.clips where clip.mediaType == .video {
-                // vidstab clips don't need Vision analysis — they use the bake queue.
+                // vidstab and subject clips don't use the Vision-global analysis queue.
                 guard clip.stabilization?.enabled == true,
                       clip.stabilization?.engine.isNative == true,
+                      clip.stabilization?.engine != .subject,
                       seen.insert(clip.mediaRef).inserted,
                       !hasAnalysis(assetId: clip.mediaRef),
                       let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
@@ -267,11 +346,29 @@ final class StabilizationManager {
     }
 
     /// Per-frame corrections for a clip, from the cached sidecar + clip params.
-    /// Returns nil when no analysis exists or stabilization is disabled.
+    /// Returns nil when no analysis/tracking exists or stabilization is disabled.
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
         guard let stab = clip.stabilization, stab.enabled, let base = baseDir else { return nil }
         let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
         if let hit = correctionCache[key] { return hit }
+
+        // Subject engine: read the subject sidecar and run position-only L1 smoothing.
+        if stab.engine == .subject {
+            guard let sourceSig = ProxySignature.of(assetURL),
+                  let sidecar = SubjectSidecarStore.read(
+                      assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig)
+            else { return nil }
+            let start = clip.trimStartFrame
+            let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
+            guard end > start else { return nil }
+            let result = PathSmoother.corrections(
+                raw: sidecar.frames, window: start..<end,
+                method: .position, engine: .l1,
+                smoothness: stab.smoothness, cropToFit: stab.cropToFit)
+            correctionCache[key] = result
+            return result
+        }
+
         guard let sidecar = StabilizationSidecar.read(
             assetId: clip.mediaRef, baseDir: base,
             requiringSig: ProxySignature.of(assetURL)) else { return nil }

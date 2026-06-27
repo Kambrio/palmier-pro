@@ -20,12 +20,14 @@ enum StabEngine: String, Codable, Sendable, CaseIterable {
     case l1        // native L1-optimal path: locked / cinematic segments
     case smooth    // native Gaussian path: organic, follows the camera more loosely
     case vidstab   // FFmpeg + vid.stab (requires a vidstab-enabled ffmpeg on PATH)
+    case subject   // Vision subject-tracking: keeps a detected person/face steady
 
     var displayName: String {
         switch self {
         case .l1:      "L1 — locked / cinematic"
         case .smooth:  "Smooth — organic"
         case .vidstab: "vid.stab (FFmpeg)"
+        case .subject: "Subject Lock"
         }
     }
 

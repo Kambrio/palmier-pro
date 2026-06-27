@@ -527,10 +527,13 @@ struct InspectorView: View {
                             .labelsHidden()
                             .fixedSize()
                         }
-                        propertyRow(label: "Show tracking") {
+                        propertyRow(label: "Preview tracking") {
                             Toggle("", isOn: Binding(
                                 get: { editor.subjectTrackingPreview },
-                                set: { editor.subjectTrackingPreview = $0 }))
+                                set: { v in
+                                    editor.subjectTrackingPreview = v
+                                    editor.videoEngine?.refreshVisuals()   // raw ↔ stabilized preview
+                                }))
                             .labelsHidden()
                         }
                     }
@@ -590,10 +593,13 @@ struct InspectorView: View {
                             .labelsHidden()
                             .fixedSize()
                         }
-                        propertyRow(label: "Show tracking") {
+                        propertyRow(label: "Preview tracking") {
                             Toggle("", isOn: Binding(
                                 get: { editor.subjectTrackingPreview },
-                                set: { editor.subjectTrackingPreview = $0 }))
+                                set: { v in
+                                    editor.subjectTrackingPreview = v
+                                    editor.videoEngine?.refreshVisuals()   // raw ↔ stabilized preview
+                                }))
                             .labelsHidden()
                         }
                     }

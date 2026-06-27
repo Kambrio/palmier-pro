@@ -448,21 +448,12 @@ final class StabilizationManager {
               let sidecar = SubjectSidecarStore.read(
                   assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
               sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
+        // Raw tracked center/size in source space — drawn over the raw (tracking-preview) frame so it
+        // sits exactly where the tracker found the subject. No correction mapping (which would only be
+        // exact for a full homography apply), so it can't drift off the feature.
         let raw = sidecar.frames[sourceFrame]
-        var cx = raw.m[2], cy = raw.m[5]   // tracked center, source TOP-LEFT normalized
-        var size = CGSize(width: seed.box.width, height: seed.box.height)
-        if stab.enabled, let result = corrections(for: clip, assetURL: url) {
-            let idx = sourceFrame - clip.trimStartFrame
-            if idx >= 0, idx < result.corrections.count {
-                cx += result.corrections[idx].m[2]
-                cy += result.corrections[idx].m[5]
-            }
-            let z = result.cropZoom
-            cx = 0.5 + (cx - 0.5) * z
-            cy = 0.5 + (cy - 0.5) * z
-            size = CGSize(width: size.width * z, height: size.height * z)
-        }
-        return (CGPoint(x: cx, y: cy), size)
+        return (CGPoint(x: raw.m[2], y: raw.m[5]),
+                CGSize(width: seed.box.width, height: seed.box.height))
     }
 
     /// The tracked point positions for `sourceFrame`, in DISPLAY-normalized TOP-LEFT space (offset by
@@ -474,9 +465,9 @@ final class StabilizationManager {
               let sidecar = PointSidecarStore.read(
                   assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
               sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
-        let url = asset.url
-        // Per-frame similarity transform maps each seed point (about its centroid) to its tracked pos.
-        // M is applied in pixel-proportional space (aspect = H/W) to match the tracker's fit convention.
+        // Raw per-frame tracked positions in source space (drawn over the raw tracking-preview frame),
+        // so each dot sits exactly where the tracker placed it — no correction mapping that could drift.
+        // Map each seed point about the seed centroid by the frame's fitted similarity, in pixel space.
         let f = sidecar.frames[sourceFrame]
         let a = f.m[0], b = f.m[3], cx = f.m[2], cy = f.m[5]   // a=s·cosθ, b=s·sinθ, centroid TOP-LEFT
         let aspect = (asset.sourceWidth ?? 0) > 0 && (asset.sourceHeight ?? 0) > 0
@@ -484,23 +475,10 @@ final class StabilizationManager {
         let muP = seed.points.reduce(CGPoint.zero) {
             CGPoint(x: $0.x + $1.x / CGFloat(seed.points.count), y: $0.y + $1.y / CGFloat(seed.points.count))
         }
-        var pts = seed.points.map { p -> CGPoint in
+        return seed.points.map { p -> CGPoint in
             let dx = Double(p.x - muP.x), dy = Double(p.y - muP.y)
             return CGPoint(x: cx + a * dx - b * dy * aspect, y: cy + b * dx / aspect + a * dy)
         }
-        if stab.enabled, let result = corrections(for: clip, assetURL: url) {
-            let idx = sourceFrame - clip.trimStartFrame
-            let z = result.cropZoom
-            pts = pts.map { pt in
-                var x = pt.x, y = pt.y
-                if idx >= 0, idx < result.corrections.count {
-                    x += result.corrections[idx].m[2]
-                    y += result.corrections[idx].m[5]
-                }
-                return CGPoint(x: 0.5 + (x - 0.5) * z, y: 0.5 + (y - 0.5) * z)
-            }
-        }
-        return pts
     }
 
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
@@ -584,11 +562,14 @@ final class StabilizationManager {
     /// produced by a composition build. Shared by preview (VideoEngine) and export (ExportService).
     func resolveStabByClip(
         clipNaturalSizes: [String: CGSize],
-        clipTransforms: [String: CGAffineTransform]
+        clipTransforms: [String: CGAffineTransform],
+        bypassClipId: String? = nil
     ) -> [String: StabResolved] {
         var stabByClip: [String: StabResolved] = [:]
         for track in editor.timeline.tracks {
             for clip in track.clips where clip.mediaType == .video {
+                // Tracking-preview shows this clip raw so the tracked points visibly ride the object.
+                if clip.id == bypassClipId { continue }
                 guard let stab = clip.stabilization, stab.enabled, stab.engine.isNative, clip.speed == 1.0,
                       let srcURL = editor.mediaResolver.resolveURL(for: clip.mediaRef),
                       let result = corrections(for: clip, assetURL: srcURL)

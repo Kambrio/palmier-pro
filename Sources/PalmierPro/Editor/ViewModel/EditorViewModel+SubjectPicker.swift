@@ -10,6 +10,19 @@ struct SubjectPickerSession: Equatable {
 }
 
 extension EditorViewModel {
+    /// While tracking-preview is on, the single selected object-tracking clip (with a seed) to render
+    /// RAW so its tracked points/box ride the object. Nil otherwise (normal stabilized render).
+    var trackingPreviewClipId: String? {
+        guard subjectTrackingPreview, subjectPicker == nil, pointPick == nil,
+              activePreviewTab == .timeline else { return nil }
+        let sel = timeline.tracks.flatMap(\.clips)
+            .filter { selectedClipIds.contains($0.id) && $0.mediaType == .video }
+        guard sel.count == 1, let clip = sel.first, let stab = clip.stabilization, stab.enabled,
+              (stab.engine == .points && stab.pointsSeed != nil)
+              || (stab.engine == .subject && stab.subjectSeed != nil) else { return nil }
+        return clip.id
+    }
+
     /// The source-frame index under the playhead for `clip` (speed-aware, clamped to the clip).
     func sourceFrame(for clip: Clip) -> Int {
         let rel = max(0, currentFrame - clip.startFrame)

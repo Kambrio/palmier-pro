@@ -115,8 +115,9 @@ final class EditorViewModel {
     var subjectPicker: SubjectPickerSession?
     /// Active Point Track pick session (nil unless the user is placing tracking points).
     var pointPick: PointPickSession?
-    /// Live overlay of the tracked subject box on the preview (ephemeral view aid, not persisted).
-    var subjectTrackingPreview: Bool = true
+    /// Tracking-preview mode: show the selected object-tracking clip RAW (unstabilized) with the
+    /// tracked points/box drawn on it, so the user can verify the track follows the object. Ephemeral.
+    var subjectTrackingPreview: Bool = false
     /// Bumped on every begin/cancel so a superseded async detection result is discarded.
     @ObservationIgnored var subjectPickToken = 0
     var previewTabs: [PreviewTab] = [.timeline]

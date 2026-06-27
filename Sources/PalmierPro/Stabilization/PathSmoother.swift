@@ -17,10 +17,11 @@ enum PathSmoother {
         return State(tx: t.m[2], ty: t.m[5], rot: rot, scale: scale == 0 ? 1 : scale)
     }
 
-    /// Build a homography that applies (tx,ty,rot,scale) about the frame center (0.5,0.5).
-    private static func compose(_ s: State) -> StabFrameTransform {
+    /// Build a homography that applies (tx,ty,rot,scale) about the pivot (cx,cy).
+    /// Camera stabilization pivots about the frame center; object tracking pivots about the object's
+    /// centroid, otherwise rotation/scale correction swings the off-center object in a big arc.
+    private static func compose(_ s: State, cx: Double = 0.5, cy: Double = 0.5) -> StabFrameTransform {
         let cs = cos(s.rot) * s.scale, sn = sin(s.rot) * s.scale
-        let cx = 0.5, cy = 0.5
         let tx = s.tx + cx - (cs * cx - sn * cy)
         let ty = s.ty + cy - (sn * cx + cs * cy)
         return StabFrameTransform(m: [cs, -sn, tx, sn, cs, ty, 0, 0, 1])
@@ -48,7 +49,8 @@ enum PathSmoother {
         method: StabMethod,
         engine: StabEngine,
         smoothness: Double,
-        cropToFit: Bool
+        cropToFit: Bool,
+        objectPivot: Bool = false
     ) -> Result {
         // NaN-safe clamp: non-finite input yields the midpoint (or 1.0 for scale handled below).
         func safeClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
@@ -86,7 +88,9 @@ enum PathSmoother {
             cor.ty = safeClamp(cor.ty, -0.25, 0.25)
             cor.rot = safeClamp(cor.rot, -0.35, 0.35)
             cor.scale = cor.scale.isFinite ? min(max(cor.scale, 0.5), 2.0) : 1.0
-            corrections.append(compose(cor))
+            // Object tracking pivots rotation/scale about the object's own centroid (its raw position).
+            let (px, py) = objectPivot ? (path[k].tx, path[k].ty) : (0.5, 0.5)
+            corrections.append(compose(cor, cx: px, cy: py))
             maxAbsTx = max(maxAbsTx, abs(cor.tx))
             maxAbsTy = max(maxAbsTy, abs(cor.ty))
             maxAbsRot = max(maxAbsRot, abs(cor.rot))

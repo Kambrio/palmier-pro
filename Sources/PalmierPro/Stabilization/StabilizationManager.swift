@@ -550,7 +550,8 @@ final class StabilizationManager {
                 raw: sidecar.frames, window: start..<end,
                 method: .similarity,
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
-                smoothness: stab.smoothness, cropToFit: stab.cropToFit)
+                smoothness: stab.smoothness, cropToFit: stab.cropToFit,
+                objectPivot: true)   // rotate/scale about the tracked object, not the frame center
             correctionCache[key] = result
             return result
         }

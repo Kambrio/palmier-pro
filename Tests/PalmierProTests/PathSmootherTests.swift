@@ -161,6 +161,32 @@ struct PathSmootherTests {
         #expect(jitterEnergy(stabRot) < jitterEnergy(rawRot) * 0.5)   // at least halved, not amplified
     }
 
+    // An off-center object with rotation jitter must stay put after stabilization. With the correction
+    // pivoted at the frame center the off-center object swings in a big arc ("crazy wobble"); pivoting
+    // at the object centroid keeps it locked. Proves objectPivot fixes Point Track rotation.
+    @Test func objectPivotKeepsOffCenterObjectSteadyUnderRotation() {
+        let cx = 0.85, cy = 0.5   // object far from the frame center
+        var raw: [StabFrameTransform] = []
+        for i in 0..<120 {
+            let r = 0.12 * sin(Double(i) * 2 * .pi / 7)   // rotation jitter, no real motion
+            raw.append(StabFrameTransform(m: [cos(r), -sin(r), cx, sin(r), cos(r), cy, 0, 0, 1]))
+        }
+        func mappedCentroidJitter(objectPivot: Bool) -> Double {
+            let out = PathSmoother.corrections(
+                raw: raw, window: 0..<120, method: .similarity, engine: .l1,
+                smoothness: 0.8, cropToFit: false, objectPivot: objectPivot)
+            // Apply each correction to the (constant) object centroid; a locked object barely moves.
+            let pts = out.corrections.map { c -> (Double, Double) in
+                (c.m[0]*cx + c.m[1]*cy + c.m[2], c.m[3]*cx + c.m[4]*cy + c.m[5])
+            }
+            return zip(pts.dropFirst(), pts).map { hypot($0.0 - $1.0, $0.1 - $1.1) }.max() ?? 0
+        }
+        let pivoted = mappedCentroidJitter(objectPivot: true)
+        let centered = mappedCentroidJitter(objectPivot: false)
+        #expect(pivoted < centered * 0.25)   // object pivot dramatically reduces the swing
+        #expect(pivoted < 0.01)              // and the object is held nearly still
+    }
+
     @Test func smoothEngineDiffersFromL1AndReducesJitter() {
         var raw: [StabFrameTransform] = []
         for i in 0..<120 {

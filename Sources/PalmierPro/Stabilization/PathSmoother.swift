@@ -52,9 +52,7 @@ enum PathSmoother {
         cropToFit: Bool,
         objectPivot: Bool = false,
         denoiseRaw: Double = 0,
-        pinTarget: StabFrameTransform? = nil,
-        maxShift: Double = 0.25,
-        maxCropZoom: Double = 1.25
+        pinTarget: StabFrameTransform? = nil
     ) -> Result {
         // NaN-safe clamp: non-finite input yields the midpoint (or 1.0 for scale handled below).
         func safeClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
@@ -112,8 +110,8 @@ enum PathSmoother {
                             rot: (method == .position) ? 0 : rotS[k] - path[k].rot,
                             scale: (method == .position) ? 1 : scS[k] / max(path[k].scale, 1e-9))
             // Defense-in-depth: NaN-safe clamp so no non-finite value can reach a correction matrix.
-            cor.tx = safeClamp(cor.tx, -maxShift, maxShift)
-            cor.ty = safeClamp(cor.ty, -maxShift, maxShift)
+            cor.tx = safeClamp(cor.tx, -0.25, 0.25)
+            cor.ty = safeClamp(cor.ty, -0.25, 0.25)
             cor.rot = safeClamp(cor.rot, -0.35, 0.35)
             cor.scale = cor.scale.isFinite ? min(max(cor.scale, 0.5), 2.0) : 1.0
             // Object tracking pivots rotation/scale about the object's own centroid (its raw position).
@@ -127,7 +125,7 @@ enum PathSmoother {
         // 4. Crop zoom: cover translation + rotation-induced corner displacement, but cap it —
         //    an aggressive zoom is more objectionable than a sliver of exposed edge on big shakes.
         let rotMargin = sin(min(maxAbsRot, 0.35))
-        let cropZoom = cropToFit ? min(maxCropZoom, 1 + 2 * (max(maxAbsTx, maxAbsTy) + rotMargin)) : 1.0
+        let cropZoom = cropToFit ? min(1.25, 1 + 2 * (max(maxAbsTx, maxAbsTy) + rotMargin)) : 1.0
         return Result(corrections: corrections, cropZoom: max(1.0, cropZoom))
     }
 

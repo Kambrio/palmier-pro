@@ -27,7 +27,7 @@ final class StabilizationManager {
 
     // MARK: - Subject-tracking queue
 
-    private var pendingSubject: [(assetId: String, url: URL)] = []
+    private var pendingSubject: [(assetId: String, url: URL, seed: SubjectSeed)] = []
     private var runningSubject: String?
     private var subjectJob: Task<Void, Never>?
 
@@ -183,17 +183,20 @@ final class StabilizationManager {
 
     // MARK: - Subject tracking
 
-    func hasSubjectTrack(assetId: String) -> Bool {
+    func hasSubjectTrack(assetId: String, seed: SubjectSeed) -> Bool {
         guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
         return SubjectSidecarStore.read(
-            assetId: assetId, baseDir: base, sourceSig: ProxySignature.of(url) ?? "") != nil
+            assetId: assetId, baseDir: base,
+            sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey) != nil
     }
 
-    func enqueueSubjectTrack(assetId: String, url: URL) {
+    func enqueueSubjectTrack(assetId: String, url: URL, seed: SubjectSeed) {
         guard baseDir != nil else { return }
-        if hasSubjectTrack(assetId: assetId) { return }
-        if runningSubject == assetId || pendingSubject.contains(where: { $0.assetId == assetId }) { return }
-        pendingSubject.append((assetId, url))
+        if hasSubjectTrack(assetId: assetId, seed: seed) { return }
+        // De-dupe per asset+seed: a different pick of the same asset is a distinct job.
+        if runningSubject == assetId
+            || pendingSubject.contains(where: { $0.assetId == assetId && $0.seed.seedKey == seed.seedKey }) { return }
+        pendingSubject.append((assetId, url, seed))
         if subjectJob == nil { startSubjectDraining() }
     }
 
@@ -201,29 +204,31 @@ final class StabilizationManager {
         subjectJob = Task { [weak self] in
             while let next = self?.dequeueSubject() {
                 self?.runningSubject = next.assetId
-                await self?.runSubjectTrack(assetId: next.assetId, url: next.url)
+                await self?.runSubjectTrack(assetId: next.assetId, url: next.url, seed: next.seed)
                 self?.runningSubject = nil
             }
             self?.subjectJob = nil
         }
     }
 
-    private func dequeueSubject() -> (assetId: String, url: URL)? {
+    private func dequeueSubject() -> (assetId: String, url: URL, seed: SubjectSeed)? {
         guard !pendingSubject.isEmpty else { return nil }
         return pendingSubject.removeFirst()
     }
 
-    private func runSubjectTrack(assetId: String, url: URL) async {
+    private func runSubjectTrack(assetId: String, url: URL, seed: SubjectSeed) async {
         guard let base = baseDir, (try? await Self.gate.wait()) != nil else { return }
         defer { Task { await Self.gate.signal() } }
         progressByAsset[assetId] = 0
         let proxy = editor.mediaManifest.useProxies ? editor.mediaResolver.proxyURL(for: assetId) : nil
         let inputURL = proxy ?? url
         do {
-            let (fps, frames) = try await SubjectTracker.track(input: inputURL) { p in
-                Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
-            }
-            let sidecar = SubjectSidecar(sourceSig: ProxySignature.of(url) ?? "", fps: fps, frames: frames)
+            let (fps, frames) = try await SubjectTracker.track(
+                input: inputURL, seedFrame: seed.frame, seedBoxTopLeft: seed.box) { p in
+                    Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
+                }
+            let sidecar = SubjectSidecar(
+                sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey, fps: fps, frames: frames)
             try SubjectSidecarStore.write(sidecar, assetId: assetId, baseDir: base)
             correctionCache.removeAll()
             progressByAsset[assetId] = 1
@@ -237,7 +242,7 @@ final class StabilizationManager {
         }
     }
 
-    /// Re-queue subject tracking for any enabled subject-engine clip whose sidecar is missing.
+    /// Re-queue subject tracking for any enabled subject clip that HAS a seed and lacks a sidecar.
     func reconcileSubjectClips() {
         guard baseDir != nil else { return }
         var seen = Set<String>()
@@ -245,10 +250,11 @@ final class StabilizationManager {
             for clip in track.clips where clip.mediaType == .video {
                 guard clip.stabilization?.enabled == true,
                       clip.stabilization?.engine == .subject,
-                      seen.insert(clip.mediaRef).inserted,
-                      !hasSubjectTrack(assetId: clip.mediaRef),
+                      let seed = clip.stabilization?.subjectSeed,
+                      seen.insert("\(clip.mediaRef)|\(seed.seedKey)").inserted,
+                      !hasSubjectTrack(assetId: clip.mediaRef, seed: seed),
                       let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
-                enqueueSubjectTrack(assetId: clip.mediaRef, url: url)
+                enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
             }
         }
     }
@@ -349,14 +355,15 @@ final class StabilizationManager {
     /// Returns nil when no analysis/tracking exists or stabilization is disabled.
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
         guard let stab = clip.stabilization, stab.enabled, let base = baseDir else { return nil }
-        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
+        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.subjectSeed?.seedKey ?? "")|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
         if let hit = correctionCache[key] { return hit }
 
-        // Subject engine: read the subject sidecar and run position-only L1 smoothing.
+        // Subject engine: read the seed-keyed sidecar and run position-only L1 smoothing.
         if stab.engine == .subject {
-            guard let sourceSig = ProxySignature.of(assetURL),
+            guard let seed = stab.subjectSeed,
+                  let sourceSig = ProxySignature.of(assetURL),
                   let sidecar = SubjectSidecarStore.read(
-                      assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig)
+                      assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig, seedKey: seed.seedKey)
             else { return nil }
             let start = clip.trimStartFrame
             let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)

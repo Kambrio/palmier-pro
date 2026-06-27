@@ -555,9 +555,11 @@ struct InspectorView: View {
     }
 
     private func triggerSubjectTrack(_ clip: Clip) {
-        guard !editor.stabilizationManager.hasSubjectTrack(assetId: clip.mediaRef),
+        // Subject Lock no longer auto-tracks; it needs a user-picked seed (set by the picker UI).
+        guard let seed = clip.stabilization?.subjectSeed,
+              !editor.stabilizationManager.hasSubjectTrack(assetId: clip.mediaRef, seed: seed),
               let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
-        editor.stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url)
+        editor.stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
     }
 
     private func triggerBake(clip: Clip, smoothness: Double) {

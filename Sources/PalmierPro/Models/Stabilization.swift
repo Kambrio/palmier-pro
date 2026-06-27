@@ -13,6 +13,19 @@ struct SubjectSeed: Codable, Equatable, Sendable {
     }
 }
 
+/// A user-placed set of points to track: normalized TOP-LEFT positions on a chosen source frame.
+struct PointsSeed: Codable, Equatable, Sendable {
+    var frame: Int            // source-frame index the points were placed on
+    var points: [CGPoint]     // normalized, TOP-LEFT origin
+
+    /// Stable identity string used to key the per-pick sidecar.
+    var seedKey: String {
+        func r(_ v: CGFloat) -> String { String(format: "%.4f", v) }
+        let pts = points.map { "\(r($0.x)),\(r($0.y))" }.joined(separator: ";")
+        return "\(frame)|\(pts)"
+    }
+}
+
 /// How aggressively the correction is allowed to transform each frame.
 enum StabMethod: String, Codable, Sendable, CaseIterable {
     case position       // translation only
@@ -34,6 +47,7 @@ enum StabEngine: String, Codable, Sendable, CaseIterable {
     case smooth    // native Gaussian path: organic, follows the camera more loosely
     case vidstab   // FFmpeg + vid.stab (requires a vidstab-enabled ffmpeg on PATH)
     case subject   // Vision subject-tracking: keeps a detected person/face steady
+    case points    // Vision multi-point tracking: holds an object steady (position+rotation+scale)
 
     var displayName: String {
         switch self {
@@ -41,6 +55,7 @@ enum StabEngine: String, Codable, Sendable, CaseIterable {
         case .smooth:  "Smooth — organic"
         case .vidstab: "vid.stab (FFmpeg)"
         case .subject: "Subject Lock"
+        case .points:  "Point Track"
         }
     }
 
@@ -87,6 +102,8 @@ struct Stabilization: Codable, Sendable, Equatable {
     var cropToFit: Bool = true
     /// Subject Lock pick (engine == .subject). Nil until the user chooses a subject.
     var subjectSeed: SubjectSeed? = nil
+    /// Point Track pick (engine == .points). Nil until the user places points.
+    var pointsSeed: PointsSeed? = nil
     /// Subject Lock: how the subject path is smoothed.
     var subjectSmoothing: SubjectSmoothing = .cinematic
     /// Subject Lock: which axes to hold steady.
@@ -94,9 +111,11 @@ struct Stabilization: Codable, Sendable, Equatable {
 
     init(enabled: Bool = true, engine: StabEngine = .vidstab, method: StabMethod = .similarity,
          smoothness: Double = 0.5, cropToFit: Bool = true, subjectSeed: SubjectSeed? = nil,
+         pointsSeed: PointsSeed? = nil,
          subjectSmoothing: SubjectSmoothing = .cinematic, subjectLockAxis: SubjectLockAxis = .both) {
         self.enabled = enabled; self.engine = engine; self.method = method
         self.smoothness = smoothness; self.cropToFit = cropToFit; self.subjectSeed = subjectSeed
+        self.pointsSeed = pointsSeed
         self.subjectSmoothing = subjectSmoothing; self.subjectLockAxis = subjectLockAxis
     }
 
@@ -109,6 +128,7 @@ struct Stabilization: Codable, Sendable, Equatable {
         smoothness = try c.decodeIfPresent(Double.self, forKey: .smoothness) ?? 0.5
         cropToFit = try c.decodeIfPresent(Bool.self, forKey: .cropToFit) ?? true
         subjectSeed = try c.decodeIfPresent(SubjectSeed.self, forKey: .subjectSeed) ?? nil
+        pointsSeed = try c.decodeIfPresent(PointsSeed.self, forKey: .pointsSeed) ?? nil
         subjectSmoothing = try c.decodeIfPresent(SubjectSmoothing.self, forKey: .subjectSmoothing) ?? .cinematic
         subjectLockAxis = try c.decodeIfPresent(SubjectLockAxis.self, forKey: .subjectLockAxis) ?? .both
     }

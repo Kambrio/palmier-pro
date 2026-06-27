@@ -31,6 +31,12 @@ final class StabilizationManager {
     private var runningSubject: String?
     private var subjectJob: Task<Void, Never>?
 
+    // MARK: - Point-tracking queue
+
+    private var pendingPoints: [(assetId: String, url: URL, seed: PointsSeed)] = []
+    private var runningPoints: String?
+    private var pointsJob: Task<Void, Never>?
+
     init(editor: EditorViewModel) { self.editor = editor }
 
     private var baseDir: URL? { editor.projectURL }
@@ -259,6 +265,83 @@ final class StabilizationManager {
         }
     }
 
+    // MARK: - Point tracking
+
+    func hasPointsTrack(assetId: String, seed: PointsSeed) -> Bool {
+        guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
+        return PointSidecarStore.read(
+            assetId: assetId, baseDir: base,
+            sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey) != nil
+    }
+
+    func enqueuePointsTrack(assetId: String, url: URL, seed: PointsSeed) {
+        guard baseDir != nil else { return }
+        if hasPointsTrack(assetId: assetId, seed: seed) { return }
+        if runningPoints == assetId
+            || pendingPoints.contains(where: { $0.assetId == assetId && $0.seed.seedKey == seed.seedKey }) { return }
+        pendingPoints.append((assetId, url, seed))
+        if pointsJob == nil { startPointsDraining() }
+    }
+
+    private func startPointsDraining() {
+        pointsJob = Task { [weak self] in
+            while let next = self?.dequeuePoints() {
+                self?.runningPoints = next.assetId
+                await self?.runPointsTrack(assetId: next.assetId, url: next.url, seed: next.seed)
+                self?.runningPoints = nil
+            }
+            self?.pointsJob = nil
+        }
+    }
+
+    private func dequeuePoints() -> (assetId: String, url: URL, seed: PointsSeed)? {
+        guard !pendingPoints.isEmpty else { return nil }
+        return pendingPoints.removeFirst()
+    }
+
+    private func runPointsTrack(assetId: String, url: URL, seed: PointsSeed) async {
+        guard let base = baseDir, (try? await Self.gate.wait()) != nil else { return }
+        defer { Task { await Self.gate.signal() } }
+        progressByAsset[assetId] = 0
+        let proxy = editor.mediaManifest.useProxies ? editor.mediaResolver.proxyURL(for: assetId) : nil
+        let inputURL = proxy ?? url
+        do {
+            let (fps, frames) = try await PointSetTracker.track(
+                input: inputURL, seedFrame: seed.frame, seedPointsTopLeft: seed.points) { p in
+                    Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
+                }
+            let sidecar = PointSidecar(
+                sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey, fps: fps, frames: frames)
+            try PointSidecarStore.write(sidecar, assetId: assetId, baseDir: base)
+            correctionCache.removeAll()
+            progressByAsset[assetId] = 1
+            editor.onPersistentStateChanged?()
+            editor.videoEngine?.refreshVisuals()
+        } catch is CancellationError {
+            progressByAsset[assetId] = nil
+        } catch {
+            Log.proxy.error("point tracking failed id=\(assetId.prefix(8)): \(Log.detail(error))")
+            progressByAsset[assetId] = nil
+        }
+    }
+
+    /// Re-queue point tracking for any enabled .points clip that HAS a seed and lacks a sidecar.
+    func reconcilePointsClips() {
+        guard baseDir != nil else { return }
+        var seen = Set<String>()
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine == .points,
+                      let seed = clip.stabilization?.pointsSeed,
+                      seen.insert("\(clip.mediaRef)|\(seed.seedKey)").inserted,
+                      !hasPointsTrack(assetId: clip.mediaRef, seed: seed),
+                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
+            }
+        }
+    }
+
     func hasAnalysis(assetId: String) -> Bool {
         guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
         return StabilizationSidecar.read(
@@ -273,10 +356,11 @@ final class StabilizationManager {
         var seen = Set<String>()
         for track in editor.timeline.tracks {
             for clip in track.clips where clip.mediaType == .video {
-                // vidstab and subject clips don't use the Vision-global analysis queue.
+                // vidstab, subject, and points clips don't use the Vision-global analysis queue.
                 guard clip.stabilization?.enabled == true,
                       clip.stabilization?.engine.isNative == true,
                       clip.stabilization?.engine != .subject,
+                      clip.stabilization?.engine != .points,
                       seen.insert(clip.mediaRef).inserted,
                       !hasAnalysis(assetId: clip.mediaRef),
                       let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
@@ -380,9 +464,43 @@ final class StabilizationManager {
         return (CGPoint(x: cx, y: cy), size)
     }
 
+    /// The tracked point positions for `sourceFrame`, in DISPLAY-normalized TOP-LEFT space (offset by
+    /// the active correction + crop zoom). For the live Point Track overlay. Nil without a sidecar.
+    func pointMarks(for clip: Clip, sourceFrame: Int) -> [CGPoint]? {
+        guard let stab = clip.stabilization, stab.engine == .points, let seed = stab.pointsSeed,
+              let base = baseDir, let url = editor.mediaAssetsById[clip.mediaRef]?.url,
+              let sig = ProxySignature.of(url),
+              let sidecar = PointSidecarStore.read(
+                  assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
+              sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
+        // Per-frame similarity transform maps each seed point (about its centroid) to its tracked pos.
+        let f = sidecar.frames[sourceFrame]
+        let a = f.m[0], b = f.m[3], cx = f.m[2], cy = f.m[5]   // a=s·cosθ, b=s·sinθ, centroid TOP-LEFT
+        let muP = seed.points.reduce(CGPoint.zero) {
+            CGPoint(x: $0.x + $1.x / CGFloat(seed.points.count), y: $0.y + $1.y / CGFloat(seed.points.count))
+        }
+        var pts = seed.points.map { p -> CGPoint in
+            let dx = Double(p.x - muP.x), dy = Double(p.y - muP.y)
+            return CGPoint(x: cx + a * dx - b * dy, y: cy + b * dx + a * dy)
+        }
+        if stab.enabled, let result = corrections(for: clip, assetURL: url) {
+            let idx = sourceFrame - clip.trimStartFrame
+            let z = result.cropZoom
+            pts = pts.map { pt in
+                var x = pt.x, y = pt.y
+                if idx >= 0, idx < result.corrections.count {
+                    x += result.corrections[idx].m[2]
+                    y += result.corrections[idx].m[5]
+                }
+                return CGPoint(x: 0.5 + (x - 0.5) * z, y: 0.5 + (y - 0.5) * z)
+            }
+        }
+        return pts
+    }
+
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
         guard let stab = clip.stabilization, stab.enabled, let base = baseDir else { return nil }
-        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.subjectSeed?.seedKey ?? "")|\(stab.subjectSmoothing.rawValue)|\(stab.subjectLockAxis.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
+        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.subjectSeed?.seedKey ?? "")|\(stab.pointsSeed?.seedKey ?? "")|\(stab.subjectSmoothing.rawValue)|\(stab.subjectLockAxis.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
         if let hit = correctionCache[key] { return hit }
 
         // Subject engine: read the seed-keyed sidecar and smooth the subject path (position-only).
@@ -410,6 +528,25 @@ final class StabilizationManager {
                     return StabFrameTransform(m: m)
                 }
             }
+            correctionCache[key] = result
+            return result
+        }
+
+        // Point Track engine: read the seed-keyed sidecar and smooth the fitted similarity path.
+        if stab.engine == .points {
+            guard let seed = stab.pointsSeed,
+                  let sourceSig = ProxySignature.of(assetURL),
+                  let sidecar = PointSidecarStore.read(
+                      assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig, seedKey: seed.seedKey)
+            else { return nil }
+            let start = clip.trimStartFrame
+            let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
+            guard end > start else { return nil }
+            let result = PathSmoother.corrections(
+                raw: sidecar.frames, window: start..<end,
+                method: .similarity,
+                engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
+                smoothness: stab.smoothness, cropToFit: stab.cropToFit)
             correctionCache[key] = result
             return result
         }
@@ -442,9 +579,9 @@ final class StabilizationManager {
                       let result = corrections(for: clip, assetURL: srcURL)
                 else { continue }
                 let zoom = CGFloat(result.cropZoom)
-                // Subject engine always smooths position-only; branch on .position so a .subject clip
-                // carrying method == .perspective can't fall into the homography branch.
-                if stab.engine != .subject && stab.method == .perspective {
+                // Subject/Point engines smooth into 2D affines; keep them out of the homography branch
+                // even if the clip carries method == .perspective.
+                if stab.engine != .subject && stab.engine != .points && stab.method == .perspective {
                     stabByClip[clip.id] = StabResolved(affines: [], perspective: result.corrections, zoom: zoom)
                 } else {
                     let displaySize = clipNaturalSizes[clip.id] ?? .zero

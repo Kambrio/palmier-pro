@@ -208,6 +208,7 @@ final class VideoEngine {
             editor.stabilizationManager.reconcileEnabledClips()
             editor.stabilizationManager.reconcileVidstabClips()
             editor.stabilizationManager.reconcileSubjectClips()
+            editor.stabilizationManager.reconcilePointsClips()
         }
 
         rebuildTask = Task {

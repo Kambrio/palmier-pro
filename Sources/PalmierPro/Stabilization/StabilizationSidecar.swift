@@ -63,6 +63,44 @@ enum SubjectSidecarStore {
     }
 }
 
+// MARK: - Point-track sidecar
+
+struct PointSidecar: Codable, Sendable, Equatable {
+    var version: Int = PointSidecarStore.currentVersion
+    var sourceSig: String
+    var seedKey: String                // PointsSeed.seedKey this track was produced for
+    var fps: Double
+    var frames: [StabFrameTransform]   // per frame: similarity fit [a,-b,cx, b,a,cy]
+}
+
+enum PointSidecarStore {
+    static let currentVersion = 1
+
+    static func seedHash(_ seedKey: String) -> String {
+        let digest = SHA256.hash(data: Data(seedKey.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined().prefix(16).description
+    }
+
+    static func fileURL(assetId: String, baseDir: URL, seedKey: String) -> URL {
+        StabilizationSidecar.dir(baseDir: baseDir)
+            .appendingPathComponent("\(assetId).\(seedHash(seedKey)).points.json")
+    }
+
+    static func read(assetId: String, baseDir: URL, sourceSig: String, seedKey: String) -> PointSidecar? {
+        guard let data = try? Data(contentsOf: fileURL(assetId: assetId, baseDir: baseDir, seedKey: seedKey)),
+              let s = try? JSONDecoder().decode(PointSidecar.self, from: data),
+              s.version == currentVersion, s.sourceSig == sourceSig, s.seedKey == seedKey else { return nil }
+        return s
+    }
+
+    static func write(_ s: PointSidecar, assetId: String, baseDir: URL) throws {
+        let url = fileURL(assetId: assetId, baseDir: baseDir, seedKey: s.seedKey)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(s).write(to: url, options: .atomic)
+    }
+}
+
 // MARK: -
 
 enum StabilizationSidecar {

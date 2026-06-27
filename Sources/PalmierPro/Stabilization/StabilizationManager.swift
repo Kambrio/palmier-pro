@@ -307,7 +307,8 @@ final class StabilizationManager {
         let inputURL = proxy ?? url
         do {
             let (fps, frames) = try await PointSetTracker.track(
-                input: inputURL, seedFrame: seed.frame, seedPointsTopLeft: seed.points) { p in
+                input: inputURL, seedFrame: seed.frame, seedPointsTopLeft: seed.points,
+                direction: seed.direction) { p in
                     Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
                 }
             let sidecar = PointSidecar(

@@ -109,6 +109,7 @@ enum PointSetTracker {
         input: URL,
         seedFrame: Int,
         seedPointsTopLeft: [CGPoint],
+        direction: TrackDirection = .both,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> (fps: Double, frames: [StabFrameTransform]) {
         guard !seedPointsTopLeft.isEmpty else { throw Failure(reason: "no seed points") }
@@ -192,7 +193,8 @@ enum PointSetTracker {
                 guard let sample = output.copyNextSampleBuffer(),
                       let buffer = CMSampleBufferGetImageBuffer(sample) else { return true }
                 if index < seedFrame {
-                    if index >= backwardStart, let copy = copyPixelBuffer(buffer) {
+                    // Buffer only when tracking backward (skipped for forward-only → saves memory).
+                    if direction != .forward, index >= backwardStart, let copy = copyPixelBuffer(buffer) {
                         backward.append(copy)
                     }
                 } else if index == seedFrame {
@@ -200,6 +202,8 @@ enum PointSetTracker {
                     forwardLast = seedTransform
                     forwardObs = seedObservations.map { Optional($0) }
                     forwardSeq = VNSequenceRequestHandler()
+                } else if direction == .backward {
+                    forwardTransforms.append(seedTransform)   // hold; not tracking forward
                 } else {
                     let centers = step(forwardSeq, &forwardObs, buffer)
                     forwardLast = transform(

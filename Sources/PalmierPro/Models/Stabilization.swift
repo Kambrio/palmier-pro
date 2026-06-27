@@ -13,16 +13,42 @@ struct SubjectSeed: Codable, Equatable, Sendable {
     }
 }
 
+/// Which way Point Track propagates from the seed frame in time.
+enum TrackDirection: String, Codable, Sendable, CaseIterable {
+    case both, forward, backward
+
+    var displayName: String {
+        switch self {
+        case .both:     "Both"
+        case .forward:  "Forward (after)"
+        case .backward: "Backward (before)"
+        }
+    }
+}
+
 /// A user-placed set of points to track: normalized TOP-LEFT positions on a chosen source frame.
 struct PointsSeed: Codable, Equatable, Sendable {
     var frame: Int            // source-frame index the points were placed on
     var points: [CGPoint]     // normalized, TOP-LEFT origin
+    var direction: TrackDirection = .both
 
-    /// Stable identity string used to key the per-pick sidecar.
+    init(frame: Int, points: [CGPoint], direction: TrackDirection = .both) {
+        self.frame = frame; self.points = points; self.direction = direction
+    }
+
+    // Tolerate seeds saved before `direction` existed.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        frame = try c.decode(Int.self, forKey: .frame)
+        points = try c.decode([CGPoint].self, forKey: .points)
+        direction = try c.decodeIfPresent(TrackDirection.self, forKey: .direction) ?? .both
+    }
+
+    /// Stable identity string used to key the per-pick sidecar (direction changes the tracked path).
     var seedKey: String {
         func r(_ v: CGFloat) -> String { String(format: "%.4f", v) }
         let pts = points.map { "\(r($0.x)),\(r($0.y))" }.joined(separator: ";")
-        return "\(frame)|\(pts)"
+        return "\(frame)|\(pts)|\(direction.rawValue)"
     }
 }
 

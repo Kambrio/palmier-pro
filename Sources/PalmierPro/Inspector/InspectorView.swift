@@ -549,6 +549,29 @@ struct InspectorView: View {
                                 .font(.system(size: AppTheme.FontSize.xs))
                                 .foregroundStyle(AppTheme.Text.tertiaryColor)
                         }
+                        if stab?.pointsSeed != nil {
+                            propertyRow(label: "Track from seed") {
+                                Picker("", selection: Binding(
+                                    get: { stab?.pointsSeed?.direction ?? .both },
+                                    set: { v in
+                                        updateStabilization(clip: clip) { $0.pointsSeed?.direction = v }
+                                        // Direction changes the tracked path → re-track. The captured
+                                        // `clip` is stale, so build the seed with the new direction here.
+                                        if var seed = clip.stabilization?.pointsSeed,
+                                           let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) {
+                                            seed.direction = v
+                                            if !editor.stabilizationManager.hasPointsTrack(assetId: clip.mediaRef, seed: seed) {
+                                                editor.stabilizationManager.enqueuePointsTrack(
+                                                    assetId: clip.mediaRef, url: url, seed: seed)
+                                            }
+                                        }
+                                    })) {
+                                    ForEach(TrackDirection.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                                }
+                                .labelsHidden()
+                                .fixedSize()
+                            }
+                        }
                         propertyRow(label: "Smoothing") {
                             Picker("", selection: Binding(
                                 get: { stab?.subjectSmoothing ?? .cinematic },

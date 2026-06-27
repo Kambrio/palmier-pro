@@ -187,6 +187,23 @@ struct PathSmootherTests {
         #expect(pivoted < 0.01)              // and the object is held nearly still
     }
 
+    // A hard pin must hold the object at the pin pose even as it drifts (Cinematic "lock to start").
+    @Test func pinTargetHoldsObjectAtSeedPose() {
+        // Object centroid drifts 0.50 → 0.58 over the clip (within the ±0.25 correction clamp).
+        var raw: [StabFrameTransform] = []
+        for i in 0..<100 {
+            let tx = 0.5 + Double(i) * 0.0008
+            raw.append(StabFrameTransform(m: [1, 0, tx, 0, 1, 0.5, 0, 0, 1]))
+        }
+        let pin = raw[0]   // pose where tracking started
+        let out = PathSmoother.corrections(
+            raw: raw, window: 0..<100, method: .position, engine: .l1,
+            smoothness: 0.5, cropToFit: false, objectPivot: true, denoiseRaw: 4, pinTarget: pin)
+        // Stabilized centroid = raw + correction should stay pinned near 0.5, not drift to 0.58.
+        let stabTx = zip(raw, out.corrections).map { $0.m[2] + $1.m[2] }
+        for tx in stabTx { #expect(abs(tx - 0.5) < 0.02) }
+    }
+
     @Test func smoothEngineDiffersFromL1AndReducesJitter() {
         var raw: [StabFrameTransform] = []
         for i in 0..<120 {

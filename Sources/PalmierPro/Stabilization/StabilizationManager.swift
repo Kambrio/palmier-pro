@@ -498,11 +498,15 @@ final class StabilizationManager {
             let start = clip.trimStartFrame
             let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
             guard end > start else { return nil }
+            // Cinematic = hard-lock the subject at the pose where tracking started; Organic = follow.
+            let subjPin = stab.subjectSmoothing == .cinematic && !sidecar.frames.isEmpty
+                ? sidecar.frames[min(max(seed.frame, 0), sidecar.frames.count - 1)] : nil
             var result = PathSmoother.corrections(
                 raw: sidecar.frames, window: start..<end,
                 method: .position,
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
-                smoothness: stab.smoothness, cropToFit: stab.cropToFit)
+                smoothness: stab.smoothness, cropToFit: stab.cropToFit,
+                denoiseRaw: 2 + stab.smoothness * 8, pinTarget: subjPin)
             // Axis lock: drop the correction on the freed axis so the subject can move there.
             if stab.subjectLockAxis != .both {
                 result.corrections = result.corrections.map { c in
@@ -525,13 +529,17 @@ final class StabilizationManager {
             let start = clip.trimStartFrame
             let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
             guard end > start else { return nil }
+            // Cinematic = hard-lock the object at the pose where tracking started; Organic = follow.
+            let ptPin = stab.subjectSmoothing == .cinematic && !sidecar.frames.isEmpty
+                ? sidecar.frames[min(max(seed.frame, 0), sidecar.frames.count - 1)] : nil
             var result = PathSmoother.corrections(
                 raw: sidecar.frames, window: start..<end,
                 method: .similarity,
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit,
                 objectPivot: true,   // rotate/scale about the tracked object, not the frame center
-                denoiseRaw: 2 + stab.smoothness * 8)   // lock strength also controls anti-jitter
+                denoiseRaw: 2 + stab.smoothness * 8,   // lock strength also controls anti-jitter
+                pinTarget: ptPin)
             // Direction lock: drop the correction on the freed axis so the object can move there.
             if stab.subjectLockAxis != .both {
                 result.corrections = result.corrections.map { c in

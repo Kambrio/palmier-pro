@@ -51,7 +51,8 @@ enum PathSmoother {
         smoothness: Double,
         cropToFit: Bool,
         objectPivot: Bool = false,
-        denoiseRaw: Double = 0
+        denoiseRaw: Double = 0,
+        pinTarget: StabFrameTransform? = nil
     ) -> Result {
         // NaN-safe clamp: non-finite input yields the midpoint (or 1.0 for scale handled below).
         func safeClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
@@ -82,10 +83,23 @@ enum PathSmoother {
         func smoothChannel(_ xs: [Double]) -> [Double] {
             engine == .smooth ? gaussianSmooth(xs, sigma: sigma) : l1Smooth(xs, lambda: lambda)
         }
-        let txS = smoothChannel(path.map(\.tx))
-        let tyS = smoothChannel(path.map(\.ty))
-        let rotS = method == .position ? path.map { _ in 0.0 } : smoothChannel(path.map(\.rot))
-        let scS  = method == .position ? path.map { _ in path.first!.scale } : smoothChannel(path.map(\.scale))
+        var txS = smoothChannel(path.map(\.tx))
+        var tyS = smoothChannel(path.map(\.ty))
+        var rotS = method == .position ? path.map { _ in 0.0 } : smoothChannel(path.map(\.rot))
+        var scS  = method == .position ? path.map { _ in path.first!.scale } : smoothChannel(path.map(\.scale))
+
+        // Hard lock: pin the target to a fixed pose (e.g. the seed-frame pose) so the object is held in
+        // place rather than following a smoothed version of its motion. The denoised raw above still
+        // removes tracking jitter, so the pin stays smooth.
+        if let pin = pinTarget {
+            let p = decompose(pin)
+            txS = Array(repeating: p.tx, count: path.count)
+            tyS = Array(repeating: p.ty, count: path.count)
+            if method != .position {
+                rotS = Array(repeating: p.rot, count: path.count)
+                scS = Array(repeating: p.scale, count: path.count)
+            }
+        }
 
         // 3. Correction = smoothed − raw, expressed as a homography.
         var corrections: [StabFrameTransform] = []

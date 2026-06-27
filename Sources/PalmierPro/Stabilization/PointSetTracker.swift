@@ -17,10 +17,12 @@ enum PointSetTracker {
     /// Closed-form 2D similarity fit P→Q (matched indices). Returns `a = s·cosθ`, `b = s·sinθ`, and
     /// the current centroid `μQ`. ≥2 points → full fit; 1 point → translation only; 0 → nil.
     /// Rejects outliers (residual > 2.5× median) once when there are > 2 points.
-    static func fitSimilarity(reference P: [CGPoint], current Q: [CGPoint])
+    /// `aspect = outH/outW`: the fit runs in pixel-proportional space (y scaled by aspect) so a real
+    /// pixel-space rotation stays a true similarity on non-square frames; the centroid stays normalized.
+    static func fitSimilarity(reference P: [CGPoint], current Q: [CGPoint], aspect: Double = 1)
         -> (a: Double, b: Double, centroid: CGPoint)? {
         guard P.count == Q.count else { return nil }
-        return fit(P, Q, rejectOutliers: true)
+        return fit(P, Q, aspect: aspect, rejectOutliers: true)
     }
 
     private static func mean(_ pts: [CGPoint]) -> CGPoint {
@@ -38,17 +40,18 @@ enum PointSetTracker {
         return s.count % 2 == 0 ? (s[m - 1] + s[m]) / 2 : s[m]
     }
 
-    private static func fit(_ P: [CGPoint], _ Q: [CGPoint], rejectOutliers: Bool)
+    private static func fit(_ P: [CGPoint], _ Q: [CGPoint], aspect: Double, rejectOutliers: Bool)
         -> (a: Double, b: Double, centroid: CGPoint)? {
         let n = P.count
         guard n >= 1 else { return nil }
-        let muQ = mean(Q)
+        let muQ = mean(Q)            // normalized centroid, returned as-is
         if n == 1 { return (1, 0, muQ) }
         let muP = mean(P)
+        // Accumulate in pixel-proportional space: y scaled by aspect (x by 1). a,b are dimensionless.
         var den = 0.0, sa = 0.0, sb = 0.0
         for i in 0..<n {
-            let px = Double(P[i].x - muP.x), py = Double(P[i].y - muP.y)
-            let qx = Double(Q[i].x - muQ.x), qy = Double(Q[i].y - muQ.y)
+            let px = Double(P[i].x - muP.x), py = Double(P[i].y - muP.y) * aspect
+            let qx = Double(Q[i].x - muQ.x), qy = Double(Q[i].y - muQ.y) * aspect
             den += px * px + py * py
             sa += px * qx + py * qy
             sb += px * qy - py * qx
@@ -60,16 +63,15 @@ enum PointSetTracker {
         if rejectOutliers, n > 2 {
             var residuals = [Double](repeating: 0, count: n)
             for i in 0..<n {
-                let px = Double(P[i].x - muP.x), py = Double(P[i].y - muP.y)
-                let qhx = Double(muQ.x) + a * px - b * py
-                let qhy = Double(muQ.y) + b * px + a * py
-                residuals[i] = hypot(qhx - Double(Q[i].x), qhy - Double(Q[i].y))
+                let px = Double(P[i].x - muP.x), py = Double(P[i].y - muP.y) * aspect
+                let qx = Double(Q[i].x - muQ.x), qy = Double(Q[i].y - muQ.y) * aspect
+                residuals[i] = hypot(a * px - b * py - qx, b * px + a * py - qy)
             }
             let med = median(residuals)
             if med > eps {
                 let keep = (0..<n).filter { residuals[$0] <= 2.5 * med }
                 if keep.count >= 2, keep.count < n {
-                    return fit(keep.map { P[$0] }, keep.map { Q[$0] }, rejectOutliers: false)
+                    return fit(keep.map { P[$0] }, keep.map { Q[$0] }, aspect: aspect, rejectOutliers: false)
                 }
             }
         }
@@ -86,15 +88,19 @@ enum PointSetTracker {
     }
 
     /// Encode a similarity fit as `[a,-b,cx, b,a,cy, 0,0,1]` (decomposes correctly in PathSmoother).
+    /// Anchors the emitted centroid to the image of the FULL seed centroid under the fit, so losing a
+    /// tracked point doesn't pop the path: `pos = μQ_subset + M·(μP_full − μP_subset)` (pixel space).
     private static func transform(
-        from centers: [CGPoint?], reference P: [CGPoint], last: StabFrameTransform
+        from centers: [CGPoint?], reference P: [CGPoint], last: StabFrameTransform, aspect: Double
     ) -> StabFrameTransform {
         var rp: [CGPoint] = [], cq: [CGPoint] = []
         for i in centers.indices where centers[i] != nil { rp.append(P[i]); cq.append(centers[i]!) }
-        guard let f = fitSimilarity(reference: rp, current: cq) else { return last }
-        return StabFrameTransform(m: [f.a, -f.b, Double(f.centroid.x),
-                                     f.b, f.a, Double(f.centroid.y),
-                                     0, 0, 1])
+        guard let f = fitSimilarity(reference: rp, current: cq, aspect: aspect) else { return last }
+        let a = f.a, b = f.b
+        let dPx = Double(mean(P).x - mean(rp).x), dPy = Double(mean(P).y - mean(rp).y)
+        let cx = Double(f.centroid.x) + a * dPx - b * dPy * aspect
+        let cy = Double(f.centroid.y) + b * dPx / aspect + a * dPy
+        return StabFrameTransform(m: [a, -b, cx, b, a, cy, 0, 0, 1])
     }
 
     /// Track a user-placed point set from `seedFrame` both forward (to end) and backward (to 0).
@@ -114,6 +120,7 @@ enum PointSetTracker {
         let duration = try await asset.load(.duration).seconds
         let estTotal = max(1, Int((duration * max(1, fps)).rounded()))
         let (outW, outH) = downscaledDims(try await track.load(.naturalSize))
+        let aspect = Double(outH) / Double(outW)   // fit in pixel-proportional space
         let orientation = orientation(from: try await track.load(.preferredTransform))
 
         // Square patch ~6% of the min frame dimension; normalized w/h differ on non-square frames.
@@ -126,7 +133,7 @@ enum PointSetTracker {
             seedPointsTopLeft.map { VNDetectedObjectObservation(boundingBox: visionBox($0)) }
         let seedTransform = transform(
             from: seedPointsTopLeft.map { Optional($0) }, reference: seedPointsTopLeft,
-            last: .identity)
+            last: .identity, aspect: aspect)
 
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(
@@ -195,12 +202,14 @@ enum PointSetTracker {
                     forwardSeq = VNSequenceRequestHandler()
                 } else {
                     let centers = step(forwardSeq, &forwardObs, buffer)
-                    forwardLast = transform(from: centers, reference: seedPointsTopLeft, last: forwardLast)
+                    forwardLast = transform(
+                        from: centers, reference: seedPointsTopLeft, last: forwardLast, aspect: aspect)
                     forwardTransforms.append(forwardLast)
                 }
                 index += 1
                 processed += 1
-                if processed % 10 == 0 { progress(min(1, Double(processed) / Double(estTotal))) }
+                // Read/forward pass fills 0→0.6; the backward pass fills 0.6→1.0.
+                if processed % 10 == 0 { progress(min(0.6, 0.6 * Double(processed) / Double(estTotal))) }
                 return false
             }
             if finished { break }
@@ -222,12 +231,18 @@ enum PointSetTracker {
         var backSeq = VNSequenceRequestHandler()
         var backObs: [VNDetectedObjectObservation?] = seedObservations.map { Optional($0) }
         var backLast = seedTransform
-        for j in stride(from: backward.count - 1, through: 0, by: -1) {
+        let backCount = backward.count
+        for (done, j) in stride(from: backCount - 1, through: 0, by: -1).enumerated() {
             try Task.checkCancellation()
             autoreleasepool {
                 let centers = step(backSeq, &backObs, backward[j])
-                backLast = transform(from: centers, reference: seedPointsTopLeft, last: backLast)
+                backLast = transform(
+                    from: centers, reference: seedPointsTopLeft, last: backLast, aspect: aspect)
                 frames[backwardStart + j] = backLast
+            }
+            if (done + 1) % 30 == 0 {
+                progress(min(1, 0.6 + 0.4 * Double(done + 1) / Double(max(1, backCount))))
+                await Task.yield()
             }
         }
 

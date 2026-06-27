@@ -138,6 +138,29 @@ struct PathSmootherTests {
         #expect(s.count == n && s.allSatisfy { $0.isFinite })
     }
 
+    // A rotating, shaky path must have its rotation jitter REDUCED after applying corrections —
+    // a flipped rotation sign would amplify shake instead. Guards the similarity correction direction.
+    @Test func rotationCorrectionReducesRotationJitter() {
+        func rot(_ t: StabFrameTransform) -> Double { atan2(t.m[3], t.m[0]) }
+        // Raw path: a slow rotation ramp + high-frequency rotation jitter.
+        var raw: [StabFrameTransform] = []
+        for i in 0..<120 {
+            let ramp = Double(i) * 0.004
+            let jitter = (i % 2 == 0 ? 0.03 : -0.03) + (i % 3 == 0 ? 0.015 : -0.008)
+            let theta = ramp + jitter
+            raw.append(StabFrameTransform(m: [cos(theta), -sin(theta), 0, sin(theta), cos(theta), 0, 0, 0, 1]))
+        }
+        let out = PathSmoother.corrections(
+            raw: raw, window: 0..<120, method: .similarity, engine: .l1, smoothness: 0.6, cropToFit: false)
+        // Stabilized rotation = raw.rot + correction.rot; its frame-to-frame variation must shrink.
+        func jitterEnergy(_ xs: [Double]) -> Double {
+            zip(xs.dropFirst(), xs).map { ($0 - $1) * ($0 - $1) }.reduce(0, +)
+        }
+        let rawRot = raw.map(rot)
+        let stabRot = zip(raw, out.corrections).map { rot($0) + rot($1) }
+        #expect(jitterEnergy(stabRot) < jitterEnergy(rawRot) * 0.5)   // at least halved, not amplified
+    }
+
     @Test func smoothEngineDiffersFromL1AndReducesJitter() {
         var raw: [StabFrameTransform] = []
         for i in 0..<120 {

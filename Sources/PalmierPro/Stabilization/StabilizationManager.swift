@@ -468,20 +468,24 @@ final class StabilizationManager {
     /// the active correction + crop zoom). For the live Point Track overlay. Nil without a sidecar.
     func pointMarks(for clip: Clip, sourceFrame: Int) -> [CGPoint]? {
         guard let stab = clip.stabilization, stab.engine == .points, let seed = stab.pointsSeed,
-              let base = baseDir, let url = editor.mediaAssetsById[clip.mediaRef]?.url,
-              let sig = ProxySignature.of(url),
+              let base = baseDir, let asset = editor.mediaAssetsById[clip.mediaRef],
+              let sig = ProxySignature.of(asset.url),
               let sidecar = PointSidecarStore.read(
                   assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
               sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
+        let url = asset.url
         // Per-frame similarity transform maps each seed point (about its centroid) to its tracked pos.
+        // M is applied in pixel-proportional space (aspect = H/W) to match the tracker's fit convention.
         let f = sidecar.frames[sourceFrame]
         let a = f.m[0], b = f.m[3], cx = f.m[2], cy = f.m[5]   // a=s·cosθ, b=s·sinθ, centroid TOP-LEFT
+        let aspect = (asset.sourceWidth ?? 0) > 0 && (asset.sourceHeight ?? 0) > 0
+            ? Double(asset.sourceHeight!) / Double(asset.sourceWidth!) : 1
         let muP = seed.points.reduce(CGPoint.zero) {
             CGPoint(x: $0.x + $1.x / CGFloat(seed.points.count), y: $0.y + $1.y / CGFloat(seed.points.count))
         }
         var pts = seed.points.map { p -> CGPoint in
             let dx = Double(p.x - muP.x), dy = Double(p.y - muP.y)
-            return CGPoint(x: cx + a * dx - b * dy, y: cy + b * dx + a * dy)
+            return CGPoint(x: cx + a * dx - b * dy * aspect, y: cy + b * dx / aspect + a * dy)
         }
         if stab.enabled, let result = corrections(for: clip, assetURL: url) {
             let idx = sourceFrame - clip.trimStartFrame

@@ -48,6 +48,34 @@ struct PointSetTrackerSeededTests {
         #expect(abs(d[0].rot) > abs(d[K - 1].rot))
     }
 
+    /// On a NON-square (8:3) clip of rigid dots that rotate with NO scale change, the recovered scale
+    /// must stay ≈ 1 and the rotation must track the true pixel-space angle. The old normalized-space
+    /// fit invents a spurious scale > 1 AND over-counts rotation on non-square footage (here ~6% scale
+    /// error / ~50% rotation over-count); the pixel-proportional fit removes both. A square clip can't
+    /// catch this — only a non-square frame exposes the aspect bias.
+    @Test func nonSquareRotationRecoversUnitScale() async throws {
+        let frames = 24, degPerFrame = 1.2
+        let dots = [CGPoint(x: 0.32, y: 0.38), CGPoint(x: 0.64, y: 0.42),
+                    CGPoint(x: 0.50, y: 0.66)]
+        let (url, seedPoints) = try await TestClip.makeRigidDotsClip(
+            frames: frames, dots: dots, pxPerFrame: 2, degPerFrame: degPerFrame, seedFrame: 0,
+            width: 768, height: 288)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let (_, out) = try await PointSetTracker.track(
+            input: url, seedFrame: 0, seedPointsTopLeft: seedPoints, progress: { _ in })
+
+        let d = out.map(decompose)
+        // Scale stays ≈ 1 everywhere despite ~28° of rotation on an 8:3 frame (within ~3%).
+        let maxScaleErr = d.map { abs($0.scale - 1) }.max() ?? 1
+        #expect(maxScaleErr < 0.03)
+        // Rotation tracks the true pixel-space angle at a strongly rotated frame. The CI clip rotates
+        // CCW in bottom-left space → CW (negative) in the tracker's top-left space.
+        let f = frames - 1
+        let expected = -Double(f) * degPerFrame * .pi / 180
+        #expect(abs(d[f].rot - expected) < 0.08)
+    }
+
     @Test func rejectsEmptySeed() async {
         let bad = URL(fileURLWithPath: "/tmp/nope-\(UUID().uuidString).mov")
         await #expect(throws: (any Error).self) {

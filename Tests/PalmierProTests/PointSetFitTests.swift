@@ -67,6 +67,32 @@ struct PointSetFitTests {
         #expect(abs(clean.b) < 0.05)
     }
 
+    /// A rigid set rotated by a known angle in PIXEL space on a non-square (16:9) frame. The
+    /// normalized fit (aspect = 1) over-counts rotation and invents a spurious scale > 1; the
+    /// pixel-proportional fit (aspect = H/W) recovers scale ≈ 1 and the true pixel-space angle.
+    @Test func pixelSpaceFitRemovesAspectBiasOnNonSquare() throws {
+        let W = 320.0, H = 180.0, aspect = H / W
+        let P = [CGPoint(x: 0.30, y: 0.35), CGPoint(x: 0.66, y: 0.40),
+                 CGPoint(x: 0.58, y: 0.72), CGPoint(x: 0.34, y: 0.66)]
+        let phi = 30.0 * .pi / 180   // true pixel-space rotation
+        // Rotate in PIXEL space about the pixel centroid, then back to normalized.
+        let muPx = CGPoint(x: P.reduce(0) { $0 + $1.x * W } / 4, y: P.reduce(0) { $0 + $1.y * H } / 4)
+        let Q = P.map { p -> CGPoint in
+            let dx = Double(p.x) * W - Double(muPx.x), dy = Double(p.y) * H - Double(muPx.y)
+            let rx = Double(muPx.x) + cos(phi) * dx - sin(phi) * dy
+            let ry = Double(muPx.y) + sin(phi) * dx + cos(phi) * dy
+            return CGPoint(x: rx / W, y: ry / H)
+        }
+        // Normalized fit (the bug): inflates scale and rotation.
+        let biased = try #require(PointSetTracker.fitSimilarity(reference: P, current: Q, aspect: 1))
+        #expect(hypot(biased.a, biased.b) > 1.03)               // spurious scale > 1
+        #expect(atan2(biased.b, biased.a) > phi + 0.02)         // rotation over-counted
+        // Pixel-proportional fit (the fix): unit scale, true angle.
+        let fixed = try #require(PointSetTracker.fitSimilarity(reference: P, current: Q, aspect: aspect))
+        #expect(abs(hypot(fixed.a, fixed.b) - 1) < 0.03)
+        #expect(abs(atan2(fixed.b, fixed.a) - phi) < 0.02)
+    }
+
     @Test func clampsExtremeScale() throws {
         let P = [CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.6, y: 0.4), CGPoint(x: 0.5, y: 0.6)]
         // Blow the points apart by 100× about their centroid → scale would be ~100, clamped to ≤5.

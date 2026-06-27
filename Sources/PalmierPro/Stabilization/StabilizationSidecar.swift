@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// On-disk per-asset analysis payload.
@@ -27,26 +28,35 @@ struct StabSidecar: Codable, Sendable, Equatable {
 struct SubjectSidecar: Codable, Sendable, Equatable {
     var version: Int = SubjectSidecarStore.currentVersion
     var sourceSig: String
+    var seedKey: String                // SubjectSeed.seedKey this track was produced for
     var fps: Double
     var frames: [StabFrameTransform]   // per frame: tx=subjectCenterX, ty=subjectCenterY
 }
 
 enum SubjectSidecarStore {
-    static let currentVersion = 1
+    /// Bumped from 1: the sidecar is now keyed by the user-picked seed.
+    static let currentVersion = 2
 
-    static func fileURL(assetId: String, baseDir: URL) -> URL {
-        StabilizationSidecar.dir(baseDir: baseDir).appendingPathComponent("\(assetId).subject.json")
+    /// Short, filesystem-safe, deterministic hash of a seed key.
+    static func seedHash(_ seedKey: String) -> String {
+        let digest = SHA256.hash(data: Data(seedKey.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined().prefix(8).description
     }
 
-    static func read(assetId: String, baseDir: URL, sourceSig: String) -> SubjectSidecar? {
-        guard let data = try? Data(contentsOf: fileURL(assetId: assetId, baseDir: baseDir)),
+    static func fileURL(assetId: String, baseDir: URL, seedKey: String) -> URL {
+        StabilizationSidecar.dir(baseDir: baseDir)
+            .appendingPathComponent("\(assetId).\(seedHash(seedKey)).subject.json")
+    }
+
+    static func read(assetId: String, baseDir: URL, sourceSig: String, seedKey: String) -> SubjectSidecar? {
+        guard let data = try? Data(contentsOf: fileURL(assetId: assetId, baseDir: baseDir, seedKey: seedKey)),
               let s = try? JSONDecoder().decode(SubjectSidecar.self, from: data),
-              s.version == currentVersion, s.sourceSig == sourceSig else { return nil }
+              s.version == currentVersion, s.sourceSig == sourceSig, s.seedKey == seedKey else { return nil }
         return s
     }
 
     static func write(_ s: SubjectSidecar, assetId: String, baseDir: URL) throws {
-        let url = fileURL(assetId: assetId, baseDir: baseDir)
+        let url = fileURL(assetId: assetId, baseDir: baseDir, seedKey: s.seedKey)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(s).write(to: url, options: .atomic)

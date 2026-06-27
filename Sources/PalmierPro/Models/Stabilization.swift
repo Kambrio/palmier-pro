@@ -1,5 +1,18 @@
 import Foundation
 
+/// A user-picked subject to track: the box (normalized, TOP-LEFT) on a chosen source frame.
+struct SubjectSeed: Codable, Equatable, Sendable {
+    var frame: Int          // source-frame index the box was picked on
+    var box: CGRect         // normalized, TOP-LEFT origin
+    var label: String
+
+    /// Stable identity string used to key the per-pick sidecar.
+    var seedKey: String {
+        func r(_ v: CGFloat) -> String { String(format: "%.4f", v) }
+        return "\(frame)|\(r(box.origin.x)),\(r(box.origin.y)),\(r(box.width)),\(r(box.height))|\(label)"
+    }
+}
+
 /// How aggressively the correction is allowed to transform each frame.
 enum StabMethod: String, Codable, Sendable, CaseIterable {
     case position       // translation only
@@ -45,11 +58,13 @@ struct Stabilization: Codable, Sendable, Equatable {
     var smoothness: Double = 0.5
     /// Auto-zoom so counter-motion never exposes the frame edges.
     var cropToFit: Bool = true
+    /// Subject Lock pick (engine == .subject). Nil until the user chooses a subject.
+    var subjectSeed: SubjectSeed? = nil
 
     init(enabled: Bool = true, engine: StabEngine = .vidstab, method: StabMethod = .similarity,
-         smoothness: Double = 0.5, cropToFit: Bool = true) {
+         smoothness: Double = 0.5, cropToFit: Bool = true, subjectSeed: SubjectSeed? = nil) {
         self.enabled = enabled; self.engine = engine; self.method = method
-        self.smoothness = smoothness; self.cropToFit = cropToFit
+        self.smoothness = smoothness; self.cropToFit = cropToFit; self.subjectSeed = subjectSeed
     }
 
     // Tolerate older clips saved before `engine` existed (decode would otherwise drop stabilization).
@@ -60,5 +75,6 @@ struct Stabilization: Codable, Sendable, Equatable {
         method = try c.decodeIfPresent(StabMethod.self, forKey: .method) ?? .similarity
         smoothness = try c.decodeIfPresent(Double.self, forKey: .smoothness) ?? 0.5
         cropToFit = try c.decodeIfPresent(Bool.self, forKey: .cropToFit) ?? true
+        subjectSeed = try c.decodeIfPresent(SubjectSeed.self, forKey: .subjectSeed) ?? nil
     }
 }

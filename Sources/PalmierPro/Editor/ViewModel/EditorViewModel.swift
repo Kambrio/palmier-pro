@@ -59,8 +59,9 @@ final class EditorViewModel {
     var isPlaying: Bool = false
     var selectedClipIds: Set<String> = [] {
         didSet {
-            // A subject pick is bound to its clip's sole selection; abandon it when selection moves.
-            if let s = subjectPicker, selectedClipIds != [s.clipId] { cancelSubjectPick() }
+            // A subject pick is bound to its clip; abandon it when that clip leaves the selection
+            // (contains, not ==: a video clip is usually selected with its linked audio clip).
+            if let s = subjectPicker, !selectedClipIds.contains(s.clipId) { cancelSubjectPick() }
         }
     }
     var isMarqueeSelecting: Bool = false

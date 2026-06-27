@@ -20,7 +20,7 @@ extension EditorViewModel {
     /// The pick session valid for the preview: timeline tab, its clip still the sole selection, and
     /// still on the subject engine. A stale session renders to nothing and is ignored on commit.
     var activeSubjectPicker: SubjectPickerSession? {
-        guard let s = subjectPicker, activePreviewTab == .timeline, selectedClipIds == [s.clipId],
+        guard let s = subjectPicker, activePreviewTab == .timeline, selectedClipIds.contains(s.clipId),
               let clip = timeline.tracks.flatMap(\.clips).first(where: { $0.id == s.clipId }),
               clip.stabilization?.engine == .subject else { return nil }
         return s
@@ -48,14 +48,17 @@ extension EditorViewModel {
             }
             do {
                 let objects = try await ObjectDetector.shared.detect(in: image)
+                Log.preview.notice("subjectPick: \(objects.count) objects on frame \(frame)")
                 // A newer pick, a cancel, or a selection change supersedes this stale result.
-                guard token == subjectPickToken, selectedClipIds == [clipId] else { return }
+                // `contains` (not ==): a video clip is usually selected together with its linked audio.
+                guard token == subjectPickToken, selectedClipIds.contains(clipId) else { return }
                 guard !objects.isEmpty else {
                     mediaPanelToast = "No objects detected on this frame. Move the playhead and try again."
                     return
                 }
                 subjectPicker = SubjectPickerSession(clipId: clipId, sourceFrame: frame, objects: objects)
             } catch {
+                Log.preview.error("subjectPick: detection failed: \(Log.detail(error))")
                 mediaPanelToast = "Subject detection failed: \(error.localizedDescription)"
             }
         }
@@ -64,7 +67,7 @@ extension EditorViewModel {
     /// Commit a picked object as the clip's subject seed and start tracking.
     func commitSubjectPick(object: DetectedObject) {
         guard let session = subjectPicker,
-              selectedClipIds == [session.clipId],
+              selectedClipIds.contains(session.clipId),
               let clip = timeline.tracks.flatMap(\.clips).first(where: { $0.id == session.clipId }) else {
             subjectPicker = nil
             return

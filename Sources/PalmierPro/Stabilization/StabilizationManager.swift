@@ -506,7 +506,9 @@ final class StabilizationManager {
                 method: .position,
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit,
-                denoiseRaw: 2 + stab.smoothness * 8, pinTarget: subjPin)
+                denoiseRaw: 2 + stab.smoothness * 8, pinTarget: subjPin,
+                maxShift: 0.25 + stab.smoothness * 0.35,        // lock strength widens the hold range
+                maxCropZoom: 1.25 + stab.smoothness * 0.85)
             // Axis lock: drop the correction on the freed axis so the subject can move there.
             if stab.subjectLockAxis != .both {
                 result.corrections = result.corrections.map { c in
@@ -539,7 +541,9 @@ final class StabilizationManager {
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit,
                 objectPivot: true,   // rotate/scale about the tracked object, not the frame center
                 denoiseRaw: 2 + stab.smoothness * 8,   // lock strength also controls anti-jitter
-                pinTarget: ptPin)
+                pinTarget: ptPin,
+                maxShift: 0.25 + stab.smoothness * 0.35,        // lock strength widens the hold range
+                maxCropZoom: 1.25 + stab.smoothness * 0.85)
             // Direction lock: drop the correction on the freed axis so the object can move there.
             if stab.subjectLockAxis != .both {
                 result.corrections = result.corrections.map { c in

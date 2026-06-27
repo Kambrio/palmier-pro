@@ -449,16 +449,27 @@ struct InspectorView: View {
                                 switch v {
                                 case .vidstab:
                                     editor.cancelSubjectPick()
+                                    editor.cancelPointPick()
                                     triggerBake(clip: clip, smoothness: stab?.smoothness ?? 0.5)
                                 case .subject:
+                                    editor.cancelPointPick()
                                     // Subject Lock needs a user-picked seed; prompt the pick when none exists yet.
                                     if clip.stabilization?.subjectSeed == nil {
                                         editor.beginSubjectPick(clip: clip)
                                     } else {
                                         triggerSubjectTrack(clip)
                                     }
+                                case .points:
+                                    editor.cancelSubjectPick()
+                                    // Point Track needs user-placed points; enter placing mode when none exist yet.
+                                    if clip.stabilization?.pointsSeed == nil {
+                                        editor.beginPointPick(clip: clip)
+                                    } else {
+                                        triggerPointsTrack(clip)
+                                    }
                                 default:
                                     editor.cancelSubjectPick()
+                                    editor.cancelPointPick()
                                 }
                             })) {
                             ForEach(StabEngine.allCases, id: \.self) { eng in
@@ -523,7 +534,38 @@ struct InspectorView: View {
                             .labelsHidden()
                         }
                     }
-                    propertyRow(label: stab?.engine == .subject ? "Lock strength" : "Smoothness") {
+                    if stab?.engine == .points {
+                        propertyRow(label: "Points") {
+                            Button(stab?.pointsSeed == nil ? "Place points…" : "Edit points…") {
+                                editor.beginPointPick(clip: clip)
+                            }
+                            .buttonStyle(.capsule(.secondary, size: .small))
+                        }
+                        Text(pointsCountLabel(stab?.pointsSeed))
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        if let p = editor.stabilizationManager.progressByAsset[clip.mediaRef], p < 1, stab?.pointsSeed != nil {
+                            Text("Tracking points… \(Int(p * 100))%")
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        }
+                        propertyRow(label: "Smoothing") {
+                            Picker("", selection: Binding(
+                                get: { stab?.subjectSmoothing ?? .cinematic },
+                                set: { v in updateStabilization(clip: clip) { $0.subjectSmoothing = v } })) {
+                                ForEach(SubjectSmoothing.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                        }
+                        propertyRow(label: "Show tracking") {
+                            Toggle("", isOn: Binding(
+                                get: { editor.subjectTrackingPreview },
+                                set: { editor.subjectTrackingPreview = $0 }))
+                            .labelsHidden()
+                        }
+                    }
+                    propertyRow(label: stab?.engine == .subject || stab?.engine == .points ? "Lock strength" : "Smoothness") {
                         Slider(value: Binding(
                             get: { stab?.smoothness ?? 0.5 },
                             set: { v in
@@ -589,9 +631,21 @@ struct InspectorView: View {
             triggerBake(clip: clip, smoothness: clip.stabilization?.smoothness ?? 0.5)
         case .subject:
             triggerSubjectTrack(clip)
+        case .points:
+            // Point Track must not run the global analyzer; place points (no seed) or track (has seed).
+            if clip.stabilization?.pointsSeed == nil {
+                editor.beginPointPick(clip: clip)
+            } else {
+                triggerPointsTrack(clip)
+            }
         default:
             triggerStabilizationAnalysis(clip)
         }
+    }
+
+    private func pointsCountLabel(_ seed: PointsSeed?) -> String {
+        guard let seed, !seed.points.isEmpty else { return "No points placed" }
+        return "Tracking \(seed.points.count) point\(seed.points.count == 1 ? "" : "s")"
     }
 
     private func triggerStabilizationAnalysis(_ clip: Clip) {
@@ -606,6 +660,13 @@ struct InspectorView: View {
               !editor.stabilizationManager.hasSubjectTrack(assetId: clip.mediaRef, seed: seed),
               let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
+    }
+
+    private func triggerPointsTrack(_ clip: Clip) {
+        guard let seed = clip.stabilization?.pointsSeed,
+              !editor.stabilizationManager.hasPointsTrack(assetId: clip.mediaRef, seed: seed),
+              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        editor.stabilizationManager.enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
     }
 
     private func triggerBake(clip: Clip, smoothness: Double) {

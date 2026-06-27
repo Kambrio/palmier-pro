@@ -59,9 +59,10 @@ final class EditorViewModel {
     var isPlaying: Bool = false
     var selectedClipIds: Set<String> = [] {
         didSet {
-            // A subject pick is bound to its clip; abandon it when that clip leaves the selection
-            // (contains, not ==: a video clip is usually selected with its linked audio clip).
+            // A subject/point pick is bound to its clip; abandon it when that clip leaves the
+            // selection (contains, not ==: a video clip is usually selected with its linked audio).
             if let s = subjectPicker, !selectedClipIds.contains(s.clipId) { cancelSubjectPick() }
+            if let s = pointPick, !selectedClipIds.contains(s.clipId) { cancelPointPick() }
         }
     }
     var isMarqueeSelecting: Bool = false
@@ -112,6 +113,8 @@ final class EditorViewModel {
     var cropAspectLock: CropAspectLock = .free
     /// Active Subject Lock pick session (nil unless the user is choosing a subject on the preview).
     var subjectPicker: SubjectPickerSession?
+    /// Active Point Track pick session (nil unless the user is placing tracking points).
+    var pointPick: PointPickSession?
     /// Live overlay of the tracked subject box on the preview (ephemeral view aid, not persisted).
     var subjectTrackingPreview: Bool = true
     /// Bumped on every begin/cancel so a superseded async detection result is discarded.

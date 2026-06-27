@@ -41,8 +41,11 @@ struct PreviewContainerView: View {
                     }
                     if editor.activeSubjectPicker != nil {
                         SubjectPickerOverlay()
+                    } else if editor.activePointPick != nil {
+                        PointPickOverlay()
                     } else {
                         SubjectTrackOverlay()
+                        PointTrackOverlay()
                     }
                 }
                 .frame(width: scaledWidth, height: scaledHeight)
@@ -50,7 +53,7 @@ struct PreviewContainerView: View {
                     SpatialTapGesture(count: 2)
                         .onEnded { value in
                             // A pick tap (commit/cancel) must not also select a clip underneath.
-                            guard isTimeline, editor.subjectPicker == nil,
+                            guard isTimeline, editor.subjectPicker == nil, editor.pointPick == nil,
                                   let id = PreviewHitTester.clipID(
                                     at: value.location,
                                     viewSize: CGSize(width: scaledWidth, height: scaledHeight),

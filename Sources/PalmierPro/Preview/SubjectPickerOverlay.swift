@@ -7,19 +7,29 @@ struct SubjectPickerOverlay: View {
     @State private var hoveredId: Int?
 
     var body: some View {
-        if let session = editor.subjectPicker {
+        if let session = editor.activeSubjectPicker, let clip = clip(for: session) {
             GeometryReader { geo in
                 let videoRect = videoContentRect(in: geo.size)
+                let xform = clip.transformAt(frame: editor.activeFrame)
+                let clipRect = clipFrame(xform, videoRect: videoRect)
                 ZStack {
                     Color.black.opacity(AppTheme.Opacity.moderate)
                         .contentShape(Rectangle())
                         .onTapGesture { editor.cancelSubjectPick() }
 
-                    ForEach(session.objects) { object in
-                        let rect = screenRect(object.box, in: videoRect)
-                        let isHovered = hoveredId == object.id
-                        box(object: object, rect: rect, isHovered: isHovered)
+                    // Boxes are source-normalized; they map into the clip's transform rect and rotate
+                    // with it. Crop only masks the clip's edges, so source coords still map 1:1 here.
+                    ZStack {
+                        ForEach(session.objects) { object in
+                            let local = localRect(object.box, in: clipRect.size)
+                            box(object: object, isHovered: hoveredId == object.id)
+                                .frame(width: local.width, height: local.height)
+                                .position(x: local.midX, y: local.midY)
+                        }
                     }
+                    .frame(width: clipRect.width, height: clipRect.height)
+                    .rotationEffect(.degrees(xform.rotation))
+                    .position(x: clipRect.midX, y: clipRect.midY)
 
                     hint
                         .position(x: videoRect.midX, y: videoRect.minY + AppTheme.Spacing.xl)
@@ -29,8 +39,12 @@ struct SubjectPickerOverlay: View {
         }
     }
 
+    private func clip(for session: SubjectPickerSession) -> Clip? {
+        editor.timeline.tracks.flatMap(\.clips).first { $0.id == session.clipId }
+    }
+
     @ViewBuilder
-    private func box(object: DetectedObject, rect: CGRect, isHovered: Bool) -> some View {
+    private func box(object: DetectedObject, isHovered: Bool) -> some View {
         let accent = AppTheme.Accent.spotlight
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
@@ -43,8 +57,6 @@ struct SubjectPickerOverlay: View {
             chip(object: object)
                 .padding(AppTheme.Spacing.xxs)
         }
-        .frame(width: rect.width, height: rect.height)
-        .position(x: rect.midX, y: rect.midY)
         .contentShape(Rectangle())
         .onHover { hovering in hoveredId = hovering ? object.id : (hoveredId == object.id ? nil : hoveredId) }
         .onTapGesture { editor.commitSubjectPick(object: object) }
@@ -68,13 +80,24 @@ struct SubjectPickerOverlay: View {
             .background(Color.black.opacity(AppTheme.Opacity.strong), in: .capsule)
     }
 
-    /// Normalized TOP-LEFT box → screen rect inside the letterboxed video content rect.
-    private func screenRect(_ box: CGRect, in videoRect: CGRect) -> CGRect {
+    /// Normalized TOP-LEFT box → rect in the clip's local (unrotated) space.
+    private func localRect(_ box: CGRect, in size: CGSize) -> CGRect {
         CGRect(
-            x: videoRect.minX + box.minX * videoRect.width,
-            y: videoRect.minY + box.minY * videoRect.height,
-            width: box.width * videoRect.width,
-            height: box.height * videoRect.height
+            x: box.minX * size.width,
+            y: box.minY * size.height,
+            width: box.width * size.width,
+            height: box.height * size.height
+        )
+    }
+
+    /// The clip's full-frame display rect for `t` inside the letterboxed video content rect.
+    private func clipFrame(_ t: Transform, videoRect: CGRect) -> CGRect {
+        let tl = t.topLeft
+        return CGRect(
+            x: videoRect.origin.x + tl.x * videoRect.width,
+            y: videoRect.origin.y + tl.y * videoRect.height,
+            width: t.width * videoRect.width,
+            height: t.height * videoRect.height
         )
     }
 

@@ -57,7 +57,12 @@ final class EditorViewModel {
     }
     var activeFrame: Int { playheadState.timelineFrame }
     var isPlaying: Bool = false
-    var selectedClipIds: Set<String> = []
+    var selectedClipIds: Set<String> = [] {
+        didSet {
+            // A subject pick is bound to its clip's sole selection; abandon it when selection moves.
+            if let s = subjectPicker, selectedClipIds != [s.clipId] { cancelSubjectPick() }
+        }
+    }
     var isMarqueeSelecting: Bool = false
     var selectedGap: GapSelection?
     var selectedTimelineRange: TimelineRangeSelection?
@@ -106,6 +111,8 @@ final class EditorViewModel {
     var cropAspectLock: CropAspectLock = .free
     /// Active Subject Lock pick session (nil unless the user is choosing a subject on the preview).
     var subjectPicker: SubjectPickerSession?
+    /// Bumped on every begin/cancel so a superseded async detection result is discarded.
+    @ObservationIgnored var subjectPickToken = 0
     var previewTabs: [PreviewTab] = [.timeline]
     var activePreviewTabId: String = PreviewTab.timeline.id
     var previewTabHistory: [String] = [PreviewTab.timeline.id]

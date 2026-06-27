@@ -19,6 +19,7 @@ struct SubjectPickerTests {
 
     @Test func commitWritesSeedAndClearsSession() {
         let editor = makeEditor()
+        editor.selectedClipIds = ["v"]
         let box = CGRect(x: 0.2, y: 0.3, width: 0.4, height: 0.5)
         editor.subjectPicker = SubjectPickerSession(
             clipId: "v", sourceFrame: 12,

@@ -27,6 +27,8 @@ enum SubjectTracker {
         let duration = try await asset.load(.duration).seconds
         let estTotal = max(1, Int((duration * max(1, fps)).rounded()))
         let (outW, outH) = downscaledDims(try await track.load(.naturalSize))
+        // Operate in display (upright) orientation so the seed — picked on an upright frame — matches.
+        let orientation = orientation(from: try await track.load(.preferredTransform))
 
         // TOP-LEFT seed box → Vision bottom-left observation; center kept in top-left.
         let tl = seedBoxTopLeft
@@ -72,7 +74,7 @@ enum SubjectTracker {
                 } else {
                     let req = VNTrackObjectRequest(detectedObjectObservation: forwardObs)
                     req.trackingLevel = .accurate
-                    if (try? forwardSeq.perform([req], on: buffer)) != nil,
+                    if (try? forwardSeq.perform([req], on: buffer, orientation: orientation)) != nil,
                        let r = req.results?.first as? VNDetectedObjectObservation, r.confidence > 0.3 {
                         let b = r.boundingBox
                         forwardLast = CGPoint(x: b.midX, y: 1 - b.midY)
@@ -109,7 +111,7 @@ enum SubjectTracker {
             autoreleasepool {
                 let req = VNTrackObjectRequest(detectedObjectObservation: backObs)
                 req.trackingLevel = .accurate
-                if (try? backSeq.perform([req], on: backward[j])) != nil,
+                if (try? backSeq.perform([req], on: backward[j], orientation: orientation)) != nil,
                    let r = req.results?.first as? VNDetectedObjectObservation, r.confidence > 0.3 {
                     let b = r.boundingBox
                     backLast = CGPoint(x: b.midX, y: 1 - b.midY)
@@ -173,6 +175,7 @@ enum SubjectTracker {
         let duration = try await asset.load(.duration).seconds
         let estTotal = max(1, Int((duration * max(1, fps)).rounded()))
         let (outW, outH) = downscaledDims(try await track.load(.naturalSize))
+        let orientation = orientation(from: try await track.load(.preferredTransform))
 
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(
@@ -204,7 +207,7 @@ enum SubjectTracker {
                 if let obs = lastObservation {
                     let req = VNTrackObjectRequest(detectedObjectObservation: obs)
                     req.trackingLevel = .accurate
-                    if (try? seq.perform([req], on: buffer)) != nil,
+                    if (try? seq.perform([req], on: buffer, orientation: orientation)) != nil,
                        let r = req.results?.first as? VNDetectedObjectObservation,
                        r.confidence > 0.3 {
                         box = r.boundingBox
@@ -214,7 +217,7 @@ enum SubjectTracker {
                     }
                 }
                 if box == nil {
-                    if let b = detectSubject(buffer) {
+                    if let b = detectSubject(buffer, orientation: orientation) {
                         box = b
                         lastObservation = VNDetectedObjectObservation(boundingBox: b)
                         seq = VNSequenceRequestHandler()  // reset sequence on re-seed
@@ -242,8 +245,8 @@ enum SubjectTracker {
 
     /// Largest person box, else largest face box; nil if none detected.
     /// Returned rect is normalized with bottom-left origin (Vision convention).
-    private static func detectSubject(_ buffer: CVPixelBuffer) -> CGRect? {
-        let handler = VNImageRequestHandler(cvPixelBuffer: buffer, options: [:])
+    private static func detectSubject(_ buffer: CVPixelBuffer, orientation: CGImagePropertyOrientation) -> CGRect? {
+        let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: orientation, options: [:])
         let people = VNDetectHumanRectanglesRequest()
         if (try? handler.perform([people])) != nil,
            let boxes = people.results?.map(\.boundingBox),
@@ -257,6 +260,17 @@ enum SubjectTracker {
             return big
         }
         return nil
+    }
+
+    /// Orientation that uprights a frame given its track's preferredTransform, so Vision runs in the
+    /// same (display) space as the picker. Identity (proxies, unrotated source) → `.up` (no-op).
+    private static func orientation(from t: CGAffineTransform) -> CGImagePropertyOrientation {
+        switch (atan2(t.b, t.a) * 180 / .pi).rounded() {
+        case 90: return .right
+        case -90: return .left
+        case 180, -180: return .down
+        default: return .up
+        }
     }
 }
 

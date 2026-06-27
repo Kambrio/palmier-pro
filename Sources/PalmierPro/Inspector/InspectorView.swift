@@ -448,6 +448,7 @@ struct InspectorView: View {
                                 updateStabilization(clip: clip) { $0.engine = v }
                                 switch v {
                                 case .vidstab:
+                                    editor.cancelSubjectPick()
                                     triggerBake(clip: clip, smoothness: stab?.smoothness ?? 0.5)
                                 case .subject:
                                     // Subject Lock needs a user-picked seed; prompt the pick when none exists yet.
@@ -457,7 +458,7 @@ struct InspectorView: View {
                                         triggerSubjectTrack(clip)
                                     }
                                 default:
-                                    break
+                                    editor.cancelSubjectPick()
                                 }
                             })) {
                             ForEach(StabEngine.allCases, id: \.self) { eng in
@@ -491,7 +492,7 @@ struct InspectorView: View {
                         }
                         Text(stab?.subjectSeed.map { "Tracking: \($0.label)" } ?? "No subject selected")
                             .font(.system(size: AppTheme.FontSize.xs))
-                            .foregroundStyle(stab?.subjectSeed == nil ? AppTheme.Status.errorColor : AppTheme.Text.tertiaryColor)
+                            .foregroundStyle(AppTheme.Text.tertiaryColor)
                         if let p = editor.stabilizationManager.progressByAsset[clip.mediaRef], p < 1, stab?.subjectSeed != nil {
                             Text("Tracking subject… \(Int(p * 100))%")
                                 .font(.system(size: AppTheme.FontSize.xs))

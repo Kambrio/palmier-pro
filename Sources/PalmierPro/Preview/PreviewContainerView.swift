@@ -39,7 +39,7 @@ struct PreviewContainerView: View {
                     } else {
                         TransformOverlayView()
                     }
-                    if editor.subjectPicker != nil {
+                    if editor.activeSubjectPicker != nil {
                         SubjectPickerOverlay()
                     }
                 }
@@ -47,7 +47,8 @@ struct PreviewContainerView: View {
                 .simultaneousGesture(
                     SpatialTapGesture(count: 2)
                         .onEnded { value in
-                            guard isTimeline,
+                            // A pick tap (commit/cancel) must not also select a clip underneath.
+                            guard isTimeline, editor.subjectPicker == nil,
                                   let id = PreviewHitTester.clipID(
                                     at: value.location,
                                     viewSize: CGSize(width: scaledWidth, height: scaledHeight),

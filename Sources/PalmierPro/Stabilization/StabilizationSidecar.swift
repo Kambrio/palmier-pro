@@ -40,7 +40,7 @@ enum SubjectSidecarStore {
     /// Short, filesystem-safe, deterministic hash of a seed key.
     static func seedHash(_ seedKey: String) -> String {
         let digest = SHA256.hash(data: Data(seedKey.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined().prefix(8).description
+        return digest.map { String(format: "%02x", $0) }.joined().prefix(16).description
     }
 
     static func fileURL(assetId: String, baseDir: URL, seedKey: String) -> URL {

@@ -21,15 +21,42 @@ final class ObjectDetector {
         var errorDescription: String? { reason }
     }
 
-    private var model: VNCoreMLModel?
+    private let lock = NSLock()
+    nonisolated(unsafe) private var model: VNCoreMLModel?
 
-    private func loadModel() throws -> VNCoreMLModel {
+    /// Locate the compiled detector via `Bundle.main` candidate paths — never `Bundle.module`, whose
+    /// SwiftPM accessor fatalErrors when the resource bundle is absent (see BundledFonts/ClaudeCLISkills).
+    nonisolated private static func detectorURL() throws -> URL {
+        // Search bundle roots manually instead of Bundle.module, whose SwiftPM accessor fatalErrors when
+        // the resource bundle is absent (see BundledFonts/ClaudeCLISkills). bundle.sh flattens Models/ into
+        // Contents/Resources; swift run/tests keep it in PalmierPro_PalmierPro.bundle next to the executable.
+        let forClass = Bundle(for: ObjectDetector.self)
+        let roots = [
+            Bundle.main.resourceURL,
+            Bundle.main.bundleURL,
+            forClass.resourceURL,
+            forClass.bundleURL,
+            forClass.bundleURL.deletingLastPathComponent(),
+        ].compactMap { $0 }
+        let suffixes = [
+            "Models/Detector.mlmodelc",                          // packaged .app
+            "PalmierPro_PalmierPro.bundle/Models/Detector.mlmodelc", // swift run / tests
+            "Detector.mlmodelc",                                  // flattened fallback
+        ]
+        for root in roots {
+            for suffix in suffixes {
+                let url = root.appendingPathComponent(suffix)
+                if FileManager.default.fileExists(atPath: url.path) { return url }
+            }
+        }
+        throw Failure(reason: "Detector.mlmodelc not found in app bundle")
+    }
+
+    /// Compile + cache the CoreML model; called inside the worker so the first-call compile doesn't hitch main.
+    nonisolated private func loadModel() throws -> VNCoreMLModel {
+        lock.lock(); defer { lock.unlock() }
         if let model { return model }
-        let url = Bundle.module.url(forResource: "Models/Detector", withExtension: "mlmodelc")
-            // Resources get flattened in the bundled .app — fall back to the root path.
-            ?? Bundle.module.url(forResource: "Detector", withExtension: "mlmodelc")
-        guard let url else { throw Failure(reason: "Detector.mlmodelc not found in bundle") }
-        let core = try MLModel(contentsOf: url)
+        let core = try MLModel(contentsOf: Self.detectorURL())
         let vn = try VNCoreMLModel(for: core)
         model = vn
         return vn
@@ -37,12 +64,17 @@ final class ObjectDetector {
 
     /// Detect objects in `image`. Inference runs off the main thread. Never throws on zero detections.
     func detect(in image: CGImage) async throws -> [DetectedObject] {
-        let model = try loadModel()
         // Map Vision results to Sendable DetectedObjects inside the worker so nothing non-Sendable crosses back.
         return try await withCheckedThrowingContinuation { cont in
-            // Vision inference is CPU/ANE-heavy — keep it off the main actor.
-            DispatchQueue.global(qos: .userInitiated).async {
-                let request = VNCoreMLRequest(model: model)
+            // Vision inference is CPU/ANE-heavy — keep it (and the model compile) off the main actor.
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                let request: VNCoreMLRequest
+                do {
+                    request = VNCoreMLRequest(model: try loadModel())
+                } catch {
+                    cont.resume(throwing: error)
+                    return
+                }
                 request.imageCropAndScaleOption = .scaleFill
                 let handler = VNImageRequestHandler(cgImage: image, options: [:])
                 do {

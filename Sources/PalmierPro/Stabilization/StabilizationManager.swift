@@ -365,6 +365,8 @@ final class StabilizationManager {
                   let sidecar = SubjectSidecarStore.read(
                       assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig, seedKey: seed.seedKey)
             else { return nil }
+            // Indexing a proxy-produced sidecar by source trimStartFrame/sourceFramesConsumed assumes the
+            // proxy preserves the source's frame count and fps.
             let start = clip.trimStartFrame
             let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
             guard end > start else { return nil }
@@ -404,7 +406,9 @@ final class StabilizationManager {
                       let result = corrections(for: clip, assetURL: srcURL)
                 else { continue }
                 let zoom = CGFloat(result.cropZoom)
-                if stab.method == .perspective {
+                // Subject engine always smooths position-only; branch on .position so a .subject clip
+                // carrying method == .perspective can't fall into the homography branch.
+                if stab.engine != .subject && stab.method == .perspective {
                     stabByClip[clip.id] = StabResolved(affines: [], perspective: result.corrections, zoom: zoom)
                 } else {
                     let displaySize = clipNaturalSizes[clip.id] ?? .zero

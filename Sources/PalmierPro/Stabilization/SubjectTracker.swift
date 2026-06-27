@@ -26,6 +26,7 @@ enum SubjectTracker {
         let fps = Double(try await track.load(.nominalFrameRate))
         let duration = try await asset.load(.duration).seconds
         let estTotal = max(1, Int((duration * max(1, fps)).rounded()))
+        let (outW, outH) = downscaledDims(try await track.load(.naturalSize))
 
         // TOP-LEFT seed box → Vision bottom-left observation; center kept in top-left.
         let tl = seedBoxTopLeft
@@ -36,7 +37,11 @@ enum SubjectTracker {
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(
             track: track,
-            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: outW,
+                kCVPixelBufferHeightKey as String: outH,
+            ])
         output.alwaysCopiesSampleData = false
         reader.add(output)
         guard reader.startReading() else { throw Failure(reason: "reader failed") }
@@ -121,6 +126,15 @@ enum SubjectTracker {
         return (fps == 0 ? 30 : fps, frames)
     }
 
+    /// Cap the long edge at ~720px to bound reader-buffer memory (4K×900 frames ≈ 30GB otherwise);
+    /// preserve aspect, never upscale. Centers are normalized so the sidecar stays resolution-independent.
+    private static func downscaledDims(_ size: CGSize, longEdge: CGFloat = 720) -> (Int, Int) {
+        let w = abs(size.width), h = abs(size.height)
+        guard w > 0, h > 0 else { return (Int(longEdge), Int(longEdge)) }
+        let scale = min(1, longEdge / max(w, h))
+        return (max(1, Int((w * scale).rounded())), max(1, Int((h * scale).rounded())))
+    }
+
     /// Deep-copy a pixel buffer so it survives past the reader's sample lifetime.
     private static func copyPixelBuffer(_ src: CVPixelBuffer) -> CVPixelBuffer? {
         let w = CVPixelBufferGetWidth(src)
@@ -158,11 +172,16 @@ enum SubjectTracker {
         let fps = Double(try await track.load(.nominalFrameRate))
         let duration = try await asset.load(.duration).seconds
         let estTotal = max(1, Int((duration * max(1, fps)).rounded()))
+        let (outW, outH) = downscaledDims(try await track.load(.naturalSize))
 
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(
             track: track,
-            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: outW,
+                kCVPixelBufferHeightKey as String: outH,
+            ])
         output.alwaysCopiesSampleData = false
         reader.add(output)
         guard reader.startReading() else { throw Failure(reason: "reader failed") }

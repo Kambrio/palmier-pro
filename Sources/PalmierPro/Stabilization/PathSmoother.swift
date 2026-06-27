@@ -88,17 +88,14 @@ enum PathSmoother {
         var rotS = method == .position ? path.map { _ in 0.0 } : smoothChannel(path.map(\.rot))
         var scS  = method == .position ? path.map { _ in path.first!.scale } : smoothChannel(path.map(\.scale))
 
-        // Hard lock: pin the target to a fixed pose (e.g. the seed-frame pose) so the object is held in
-        // place rather than following a smoothed version of its motion. The denoised raw above still
-        // removes tracking jitter, so the pin stays smooth.
+        // Hard lock: pin the POSITION to a fixed point (e.g. the seed-frame centroid) so the object is
+        // held in place rather than following a smoothed version of its travel. Rotation/scale stay on
+        // the gentle smoothed follow — hard-pinning them fights the noisy points-fit rotation/scale and
+        // makes the frame spin. The denoised raw above keeps the position pin smooth.
         if let pin = pinTarget {
             let p = decompose(pin)
             txS = Array(repeating: p.tx, count: path.count)
             tyS = Array(repeating: p.ty, count: path.count)
-            if method != .position {
-                rotS = Array(repeating: p.rot, count: path.count)
-                scS = Array(repeating: p.scale, count: path.count)
-            }
         }
 
         // 3. Correction = smoothed − raw, expressed as a homography.

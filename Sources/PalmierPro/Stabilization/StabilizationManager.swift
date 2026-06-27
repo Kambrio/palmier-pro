@@ -353,12 +353,39 @@ final class StabilizationManager {
 
     /// Per-frame corrections for a clip, from the cached sidecar + clip params.
     /// Returns nil when no analysis/tracking exists or stabilization is disabled.
+    /// The tracked subject's box for `sourceFrame`, in DISPLAY-normalized TOP-LEFT space (offset by the
+    /// active correction + crop zoom so it lands on the subject in the stabilized preview). For the
+    /// live tracking overlay. Nil if there's no subject sidecar yet.
+    func subjectMark(for clip: Clip, sourceFrame: Int) -> (center: CGPoint, size: CGSize)? {
+        guard let stab = clip.stabilization, stab.engine == .subject, let seed = stab.subjectSeed,
+              let base = baseDir, let url = editor.mediaAssetsById[clip.mediaRef]?.url,
+              let sig = ProxySignature.of(url),
+              let sidecar = SubjectSidecarStore.read(
+                  assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
+              sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
+        let raw = sidecar.frames[sourceFrame]
+        var cx = raw.m[2], cy = raw.m[5]   // tracked center, source TOP-LEFT normalized
+        var size = CGSize(width: seed.box.width, height: seed.box.height)
+        if stab.enabled, let result = corrections(for: clip, assetURL: url) {
+            let idx = sourceFrame - clip.trimStartFrame
+            if idx >= 0, idx < result.corrections.count {
+                cx += result.corrections[idx].m[2]
+                cy += result.corrections[idx].m[5]
+            }
+            let z = result.cropZoom
+            cx = 0.5 + (cx - 0.5) * z
+            cy = 0.5 + (cy - 0.5) * z
+            size = CGSize(width: size.width * z, height: size.height * z)
+        }
+        return (CGPoint(x: cx, y: cy), size)
+    }
+
     func corrections(for clip: Clip, assetURL: URL) -> PathSmoother.Result? {
         guard let stab = clip.stabilization, stab.enabled, let base = baseDir else { return nil }
-        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.subjectSeed?.seedKey ?? "")|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
+        let key = "\(clip.mediaRef)|\(stab.method.rawValue)|\(stab.engine.rawValue)|\(stab.subjectSeed?.seedKey ?? "")|\(stab.subjectSmoothing.rawValue)|\(stab.subjectLockAxis.rawValue)|\(stab.smoothness)|\(stab.cropToFit)|\(clip.trimStartFrame)|\(clip.trimEndFrame)|\(clip.durationFrames)"
         if let hit = correctionCache[key] { return hit }
 
-        // Subject engine: read the seed-keyed sidecar and run position-only L1 smoothing.
+        // Subject engine: read the seed-keyed sidecar and smooth the subject path (position-only).
         if stab.engine == .subject {
             guard let seed = stab.subjectSeed,
                   let sourceSig = ProxySignature.of(assetURL),
@@ -370,10 +397,19 @@ final class StabilizationManager {
             let start = clip.trimStartFrame
             let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
             guard end > start else { return nil }
-            let result = PathSmoother.corrections(
+            var result = PathSmoother.corrections(
                 raw: sidecar.frames, window: start..<end,
-                method: .position, engine: .l1,
+                method: .position,
+                engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit)
+            // Axis lock: drop the correction on the freed axis so the subject can move there.
+            if stab.subjectLockAxis != .both {
+                result.corrections = result.corrections.map { c in
+                    var m = c.m
+                    if stab.subjectLockAxis == .horizontal { m[5] = 0 } else { m[2] = 0 }
+                    return StabFrameTransform(m: m)
+                }
+            }
             correctionCache[key] = result
             return result
         }

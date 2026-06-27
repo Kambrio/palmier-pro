@@ -41,6 +41,8 @@ struct PreviewContainerView: View {
                     }
                     if editor.activeSubjectPicker != nil {
                         SubjectPickerOverlay()
+                    } else {
+                        SubjectTrackOverlay()
                     }
                 }
                 .frame(width: scaledWidth, height: scaledHeight)

@@ -48,6 +48,33 @@ enum StabEngine: String, Codable, Sendable, CaseIterable {
     var isNative: Bool { self != .vidstab }
 }
 
+/// How the tracked subject's path is smoothed for Subject Lock.
+enum SubjectSmoothing: String, Codable, Sendable, CaseIterable {
+    case cinematic   // L1: locked, piecewise-linear — holds the subject very steady
+    case organic     // Gaussian: follows the subject more loosely
+
+    var displayName: String {
+        switch self {
+        case .cinematic: "Cinematic (locked)"
+        case .organic:   "Organic (loose)"
+        }
+    }
+}
+
+/// Which axes Subject Lock corrects. Lock one axis to hold the subject steady there while letting
+/// it move freely on the other (e.g. lock horizontal during a vertical reveal).
+enum SubjectLockAxis: String, Codable, Sendable, CaseIterable {
+    case both, horizontal, vertical
+
+    var displayName: String {
+        switch self {
+        case .both:       "Both axes"
+        case .horizontal: "Horizontal"
+        case .vertical:   "Vertical"
+        }
+    }
+}
+
 /// Per-clip stabilization parameters. Cheap to store; the expensive raw camera
 /// path lives in a per-asset sidecar (see StabilizationSidecar).
 struct Stabilization: Codable, Sendable, Equatable {
@@ -60,11 +87,17 @@ struct Stabilization: Codable, Sendable, Equatable {
     var cropToFit: Bool = true
     /// Subject Lock pick (engine == .subject). Nil until the user chooses a subject.
     var subjectSeed: SubjectSeed? = nil
+    /// Subject Lock: how the subject path is smoothed.
+    var subjectSmoothing: SubjectSmoothing = .cinematic
+    /// Subject Lock: which axes to hold steady.
+    var subjectLockAxis: SubjectLockAxis = .both
 
     init(enabled: Bool = true, engine: StabEngine = .vidstab, method: StabMethod = .similarity,
-         smoothness: Double = 0.5, cropToFit: Bool = true, subjectSeed: SubjectSeed? = nil) {
+         smoothness: Double = 0.5, cropToFit: Bool = true, subjectSeed: SubjectSeed? = nil,
+         subjectSmoothing: SubjectSmoothing = .cinematic, subjectLockAxis: SubjectLockAxis = .both) {
         self.enabled = enabled; self.engine = engine; self.method = method
         self.smoothness = smoothness; self.cropToFit = cropToFit; self.subjectSeed = subjectSeed
+        self.subjectSmoothing = subjectSmoothing; self.subjectLockAxis = subjectLockAxis
     }
 
     // Tolerate older clips saved before `engine` existed (decode would otherwise drop stabilization).
@@ -76,5 +109,7 @@ struct Stabilization: Codable, Sendable, Equatable {
         smoothness = try c.decodeIfPresent(Double.self, forKey: .smoothness) ?? 0.5
         cropToFit = try c.decodeIfPresent(Bool.self, forKey: .cropToFit) ?? true
         subjectSeed = try c.decodeIfPresent(SubjectSeed.self, forKey: .subjectSeed) ?? nil
+        subjectSmoothing = try c.decodeIfPresent(SubjectSmoothing.self, forKey: .subjectSmoothing) ?? .cinematic
+        subjectLockAxis = try c.decodeIfPresent(SubjectLockAxis.self, forKey: .subjectLockAxis) ?? .both
     }
 }

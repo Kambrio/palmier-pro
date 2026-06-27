@@ -498,8 +498,32 @@ struct InspectorView: View {
                                 .font(.system(size: AppTheme.FontSize.xs))
                                 .foregroundStyle(AppTheme.Text.tertiaryColor)
                         }
+                        propertyRow(label: "Smoothing") {
+                            Picker("", selection: Binding(
+                                get: { stab?.subjectSmoothing ?? .cinematic },
+                                set: { v in updateStabilization(clip: clip) { $0.subjectSmoothing = v } })) {
+                                ForEach(SubjectSmoothing.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                        }
+                        propertyRow(label: "Lock axis") {
+                            Picker("", selection: Binding(
+                                get: { stab?.subjectLockAxis ?? .both },
+                                set: { v in updateStabilization(clip: clip) { $0.subjectLockAxis = v } })) {
+                                ForEach(SubjectLockAxis.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                        }
+                        propertyRow(label: "Show tracking") {
+                            Toggle("", isOn: Binding(
+                                get: { editor.subjectTrackingPreview },
+                                set: { editor.subjectTrackingPreview = $0 }))
+                            .labelsHidden()
+                        }
                     }
-                    propertyRow(label: "Smoothness") {
+                    propertyRow(label: stab?.engine == .subject ? "Lock strength" : "Smoothness") {
                         Slider(value: Binding(
                             get: { stab?.smoothness ?? 0.5 },
                             set: { v in

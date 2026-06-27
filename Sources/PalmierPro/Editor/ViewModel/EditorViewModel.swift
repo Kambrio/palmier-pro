@@ -112,6 +112,8 @@ final class EditorViewModel {
     var cropAspectLock: CropAspectLock = .free
     /// Active Subject Lock pick session (nil unless the user is choosing a subject on the preview).
     var subjectPicker: SubjectPickerSession?
+    /// Live overlay of the tracked subject box on the preview (ephemeral view aid, not persisted).
+    var subjectTrackingPreview: Bool = true
     /// Bumped on every begin/cancel so a superseded async detection result is discarded.
     @ObservationIgnored var subjectPickToken = 0
     var previewTabs: [PreviewTab] = [.timeline]

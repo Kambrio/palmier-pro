@@ -11,7 +11,7 @@ struct SubjectPickerSession: Equatable {
 
 extension EditorViewModel {
     /// The source-frame index under the playhead for `clip` (speed-aware, clamped to the clip).
-    private func sourceFrame(for clip: Clip) -> Int {
+    func sourceFrame(for clip: Clip) -> Int {
         let rel = max(0, currentFrame - clip.startFrame)
         let consumed = Int((Double(rel) * clip.speed).rounded())
         return clip.trimStartFrame + min(consumed, max(0, clip.sourceFramesConsumed - 1))
@@ -52,10 +52,7 @@ extension EditorViewModel {
                 // A newer pick, a cancel, or a selection change supersedes this stale result.
                 // `contains` (not ==): a video clip is usually selected together with its linked audio.
                 guard token == subjectPickToken, selectedClipIds.contains(clipId) else { return }
-                guard !objects.isEmpty else {
-                    mediaPanelToast = "No objects detected on this frame. Move the playhead and try again."
-                    return
-                }
+                // Always open the picker — with zero detections the overlay falls back to draw-a-box.
                 subjectPicker = SubjectPickerSession(clipId: clipId, sourceFrame: frame, objects: objects)
             } catch {
                 Log.preview.error("subjectPick: detection failed: \(Log.detail(error))")
@@ -85,6 +82,15 @@ extension EditorViewModel {
         if let url = mediaResolver.resolveURL(for: clip.mediaRef) {
             stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
         }
+    }
+
+    /// Commit a hand-drawn region (source-normalized TOP-LEFT box) as the subject seed.
+    func commitSubjectDraw(box: CGRect) {
+        let clamped = CGRect(
+            x: min(max(box.minX, 0), 1), y: min(max(box.minY, 0), 1),
+            width: min(box.width, 1), height: min(box.height, 1))
+        guard clamped.width > 0.01, clamped.height > 0.01 else { return }
+        commitSubjectPick(object: DetectedObject(id: -1, label: "selection", confidence: 1, box: clamped))
     }
 
     func cancelSubjectPick() {

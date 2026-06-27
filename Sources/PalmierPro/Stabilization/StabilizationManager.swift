@@ -546,12 +546,21 @@ final class StabilizationManager {
             let start = clip.trimStartFrame
             let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
             guard end > start else { return nil }
-            let result = PathSmoother.corrections(
+            var result = PathSmoother.corrections(
                 raw: sidecar.frames, window: start..<end,
                 method: .similarity,
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit,
-                objectPivot: true)   // rotate/scale about the tracked object, not the frame center
+                objectPivot: true,   // rotate/scale about the tracked object, not the frame center
+                denoiseRaw: 2 + stab.smoothness * 8)   // lock strength also controls anti-jitter
+            // Direction lock: drop the correction on the freed axis so the object can move there.
+            if stab.subjectLockAxis != .both {
+                result.corrections = result.corrections.map { c in
+                    var m = c.m
+                    if stab.subjectLockAxis == .horizontal { m[5] = 0 } else { m[2] = 0 }
+                    return StabFrameTransform(m: m)
+                }
+            }
             correctionCache[key] = result
             return result
         }

@@ -50,7 +50,8 @@ enum PathSmoother {
         engine: StabEngine,
         smoothness: Double,
         cropToFit: Bool,
-        objectPivot: Bool = false
+        objectPivot: Bool = false,
+        denoiseRaw: Double = 0
     ) -> Result {
         // NaN-safe clamp: non-finite input yields the midpoint (or 1.0 for scale handled below).
         func safeClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
@@ -61,7 +62,18 @@ enum PathSmoother {
         guard !idx.isEmpty else { return Result(corrections: [], cropZoom: 1.0) }
 
         // 1. Decompose each raw frame into the camera path (already absolute/cumulative).
-        let path = idx.map { decompose(raw[$0]) }
+        var path = idx.map { decompose(raw[$0]) }
+
+        // Object tracking: low-pass the measured path first so per-frame tracking jitter isn't fed
+        // back as vibration (correction = target − path; differencing against a denoised path keeps
+        // the lock smooth). No-op for camera engines, whose homography path is already accurate.
+        if denoiseRaw > 0, path.count > 2 {
+            let txd = gaussianSmooth(path.map(\.tx), sigma: denoiseRaw)
+            let tyd = gaussianSmooth(path.map(\.ty), sigma: denoiseRaw)
+            let rotd = gaussianSmooth(path.map(\.rot), sigma: denoiseRaw)
+            let scd = gaussianSmooth(path.map(\.scale), sigma: denoiseRaw)
+            path = path.indices.map { State(tx: txd[$0], ty: tyd[$0], rot: rotd[$0], scale: scd[$0]) }
+        }
 
         // Native engine selects the smoother. L1 = locked/cinematic (piecewise-linear);
         // Gaussian = organic (follows the camera). smoothness maps to each one's strength.

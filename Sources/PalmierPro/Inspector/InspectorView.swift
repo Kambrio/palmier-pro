@@ -558,6 +558,15 @@ struct InspectorView: View {
                             .labelsHidden()
                             .fixedSize()
                         }
+                        propertyRow(label: "Stabilize") {
+                            Picker("", selection: Binding(
+                                get: { stab?.subjectLockAxis ?? .both },
+                                set: { v in updateStabilization(clip: clip) { $0.subjectLockAxis = v } })) {
+                                ForEach(SubjectLockAxis.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                        }
                         propertyRow(label: "Show tracking") {
                             Toggle("", isOn: Binding(
                                 get: { editor.subjectTrackingPreview },

@@ -104,6 +104,8 @@ final class EditorViewModel {
     var pendingReplacements: Set<String> = []
     var cropEditingActive: Bool = false
     var cropAspectLock: CropAspectLock = .free
+    /// Active Subject Lock pick session (nil unless the user is choosing a subject on the preview).
+    var subjectPicker: SubjectPickerSession?
     var previewTabs: [PreviewTab] = [.timeline]
     var activePreviewTabId: String = PreviewTab.timeline.id
     var previewTabHistory: [String] = [PreviewTab.timeline.id]

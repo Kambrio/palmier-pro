@@ -450,7 +450,12 @@ struct InspectorView: View {
                                 case .vidstab:
                                     triggerBake(clip: clip, smoothness: stab?.smoothness ?? 0.5)
                                 case .subject:
-                                    triggerSubjectTrack(clip)
+                                    // Subject Lock needs a user-picked seed; prompt the pick when none exists yet.
+                                    if clip.stabilization?.subjectSeed == nil {
+                                        editor.beginSubjectPick(clip: clip)
+                                    } else {
+                                        triggerSubjectTrack(clip)
+                                    }
                                 default:
                                     break
                                 }
@@ -475,6 +480,22 @@ struct InspectorView: View {
                                 .foregroundStyle(AppTheme.Text.tertiaryColor)
                         case .vidstab:
                             EmptyView()
+                        }
+                    }
+                    if stab?.engine == .subject {
+                        propertyRow(label: "Subject") {
+                            Button(stab?.subjectSeed == nil ? "Choose subject…" : "Change subject…") {
+                                editor.beginSubjectPick(clip: clip)
+                            }
+                            .buttonStyle(.capsule(.secondary, size: .small))
+                        }
+                        Text(stab?.subjectSeed.map { "Tracking: \($0.label)" } ?? "No subject selected")
+                            .font(.system(size: AppTheme.FontSize.xs))
+                            .foregroundStyle(stab?.subjectSeed == nil ? AppTheme.Status.errorColor : AppTheme.Text.tertiaryColor)
+                        if let p = editor.stabilizationManager.progressByAsset[clip.mediaRef], p < 1, stab?.subjectSeed != nil {
+                            Text("Tracking subject… \(Int(p * 100))%")
+                                .font(.system(size: AppTheme.FontSize.xs))
+                                .foregroundStyle(AppTheme.Text.tertiaryColor)
                         }
                     }
                     propertyRow(label: "Smoothness") {

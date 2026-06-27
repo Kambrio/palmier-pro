@@ -39,6 +39,9 @@ struct PreviewContainerView: View {
                     } else {
                         TransformOverlayView()
                     }
+                    if editor.subjectPicker != nil {
+                        SubjectPickerOverlay()
+                    }
                 }
                 .frame(width: scaledWidth, height: scaledHeight)
                 .simultaneousGesture(

@@ -42,13 +42,14 @@ struct SubjectTrackerTests {
     @Test func subjectSidecarRoundTrips() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let sidecar = SubjectSidecar(sourceSig: "sig123", fps: 30, frames: [
+        let seedKey = "0|0.1000,0.2000,0.3000,0.4000|person"
+        let sidecar = SubjectSidecar(sourceSig: "sig123", seedKey: seedKey, fps: 30, frames: [
             StabFrameTransform(m: [1, 0, 0.4, 0, 1, 0.6, 0, 0, 1]),
             StabFrameTransform(m: [1, 0, 0.5, 0, 1, 0.5, 0, 0, 1])
         ])
         try SubjectSidecarStore.write(sidecar, assetId: "asset1", baseDir: dir)
 
-        let loaded = SubjectSidecarStore.read(assetId: "asset1", baseDir: dir, sourceSig: "sig123")
+        let loaded = SubjectSidecarStore.read(assetId: "asset1", baseDir: dir, sourceSig: "sig123", seedKey: seedKey)
         #expect(loaded != nil)
         #expect(loaded?.frames.count == 2)
         #expect(loaded?.fps == 30)
@@ -56,8 +57,10 @@ struct SubjectTrackerTests {
         #expect(loaded?.frames[0].m[5] == 0.6)
 
         // Wrong sig is rejected.
-        #expect(SubjectSidecarStore.read(assetId: "asset1", baseDir: dir, sourceSig: "wrong") == nil)
+        #expect(SubjectSidecarStore.read(assetId: "asset1", baseDir: dir, sourceSig: "wrong", seedKey: seedKey) == nil)
+        // Wrong seed key is rejected (a different pick → distinct sidecar).
+        #expect(SubjectSidecarStore.read(assetId: "asset1", baseDir: dir, sourceSig: "sig123", seedKey: "other") == nil)
         // Missing asset returns nil cleanly.
-        #expect(SubjectSidecarStore.read(assetId: "noSuchAsset", baseDir: dir, sourceSig: "sig123") == nil)
+        #expect(SubjectSidecarStore.read(assetId: "noSuchAsset", baseDir: dir, sourceSig: "sig123", seedKey: seedKey) == nil)
     }
 }

@@ -506,7 +506,12 @@ final class StabilizationManager {
                 method: .position,
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit,
-                denoiseRaw: 2 + stab.smoothness * 8, pinTarget: subjPin)
+                denoiseRaw: 3.5,   // sweet spot: enough to damp the noisier single-box jitter, but not so
+                                   // heavy that the subject's real gait motion stops being cancelled
+                pinTarget: subjPin,
+                pinBlend: stab.smoothness,                     // lock strength: follow (0) → hard pin (1)
+                maxShift: 0.15 + stab.smoothness * 0.2,          // hold range (zoom stays sane: ≤~3.3×)
+                maxCropZoom: 1 / (1 - 2 * (0.15 + stab.smoothness * 0.2)))   // exactly covers the shift
             // Axis lock: drop the correction on the freed axis so the subject can move there.
             if stab.subjectLockAxis != .both {
                 result.corrections = result.corrections.map { c in
@@ -534,12 +539,16 @@ final class StabilizationManager {
                 ? sidecar.frames[min(max(seed.frame, 0), sidecar.frames.count - 1)] : nil
             var result = PathSmoother.corrections(
                 raw: sidecar.frames, window: start..<end,
-                method: .similarity,
+                method: .position,   // position-only: rotation/scale from a small point cloud are too
+                                     // noisy (~0.6°/1.7% per frame) and inject visible wobble
                 engine: stab.subjectSmoothing == .organic ? .smooth : .l1,
                 smoothness: stab.smoothness, cropToFit: stab.cropToFit,
-                objectPivot: true,   // rotate/scale about the tracked object, not the frame center
-                denoiseRaw: 2 + stab.smoothness * 8,   // lock strength also controls anti-jitter
-                pinTarget: ptPin)
+                denoiseRaw: 1.5,   // light: kill per-frame tracking noise but keep the baseline ≈ raw so
+                                   // the correction actually cancels the shake (heavy denoise let it pass)
+                pinTarget: ptPin,
+                pinBlend: stab.smoothness,                     // lock strength: follow (0) → hard pin (1)
+                maxShift: 0.15 + stab.smoothness * 0.2,          // hold range (zoom stays sane: ≤~3.3×)
+                maxCropZoom: 1 / (1 - 2 * (0.15 + stab.smoothness * 0.2)))   // exactly covers the shift
             // Direction lock: drop the correction on the freed axis so the object can move there.
             if stab.subjectLockAxis != .both {
                 result.corrections = result.corrections.map { c in
@@ -559,7 +568,8 @@ final class StabilizationManager {
         let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
         let result = PathSmoother.corrections(
             raw: sidecar.frames, window: start..<max(start, end),
-            method: stab.method, engine: stab.engine, smoothness: stab.smoothness, cropToFit: stab.cropToFit)
+            method: stab.method, engine: stab.engine, smoothness: stab.smoothness, cropToFit: stab.cropToFit,
+            denoiseRaw: 1.5)   // median glitch removal + light denoise on the camera path (same as object engines)
         correctionCache[key] = result
         return result
     }

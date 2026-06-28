@@ -32,13 +32,15 @@ enum PathSmoother {
         return a.sorted()[a.count / 2]
     }
 
-    /// Soft threshold (shrinkage): zero within ±t, otherwise shifted toward zero by t. Continuous, so
-    /// it removes small deviations (noise) and keeps large ones (bumps) without a discontinuity.
-    static func softThreshold(_ r: Double, _ t: Double) -> Double {
-        guard t > 0 else { return r }
-        if r > t { return r - t }
-        if r < -t { return r + t }
-        return 0
+    /// Sliding median filter — replaces transient outliers (single/short-run tracking glitches) with the
+    /// local median, the standard robust way to drop trajectory spikes while keeping real motion.
+    static func medianFilter(_ xs: [Double], window: Int) -> [Double] {
+        let n = xs.count, h = window / 2
+        guard window >= 3, n > window else { return xs }
+        return (0..<n).map { i in
+            let lo = max(0, i - h), hi = min(n - 1, i + h)
+            return median(Array(xs[lo...hi]))
+        }
     }
 
     /// Gaussian low-pass — organic smoothing that follows the camera more loosely than L1.
@@ -66,7 +68,10 @@ enum PathSmoother {
         cropToFit: Bool,
         objectPivot: Bool = false,
         denoiseRaw: Double = 0,
-        pinTarget: StabFrameTransform? = nil
+        pinTarget: StabFrameTransform? = nil,
+        pinBlend: Double = 1,
+        maxShift: Double = 0.25,
+        maxCropZoom: Double = 1.25
     ) -> Result {
         // NaN-safe clamp: non-finite input yields the midpoint (or 1.0 for scale handled below).
         func safeClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
@@ -81,27 +86,19 @@ enum PathSmoother {
         var path = rawPath          // smoothing input (target is computed from this)
         var baseline = rawPath      // what the correction differences against (output = raw + (target − baseline))
 
-        // Object tracking: clean the measured path. `path` (denoised) feeds the smoothing target so
-        // jitter doesn't shape it. `baseline` is what the correction differences against: the denoised
-        // path PLUS the soft-thresholded residual — small deviations (steady tracking noise) are
-        // dropped so they aren't reinjected as vibration, while large deviations (occasional bumps) are
-        // KEPT so they get corrected. Soft (continuous) thresholding avoids the per-frame jumps a hard
-        // spike/no-spike switch produced. No-op for camera engines (accurate homography path).
+        // Object tracking: clean the measured path with a MEDIAN filter (drops single-/short-frame
+        // tracking glitches — a centroid that spikes for one frame and snaps back), then a light
+        // low-pass (kills steady per-frame noise). The cleaned path ≈ the true object path, used for
+        // BOTH the smoothing target and the differencing baseline, so the correction cancels real shake
+        // and never yanks the frame toward a glitched measurement. No-op for camera engines.
         if denoiseRaw > 0, path.count > 2 {
-            func clean(_ ch: [Double]) -> (target: [Double], base: [Double]) {
-                let d = gaussianSmooth(ch, sigma: denoiseRaw)
-                let resid = ch.indices.map { ch[$0] - d[$0] }
-                let mad = median(resid.map { abs($0) })              // robust noise scale (resid ~ 0-mean)
-                let t = 2.5 * 1.4826 * mad                           // keep residual beyond ~2.5σ (bumps)
-                let base = ch.indices.map { d[$0] + softThreshold(resid[$0], t) }
-                return (d, base)
+            func clean(_ ch: [Double]) -> [Double] {
+                gaussianSmooth(medianFilter(ch, window: 5), sigma: denoiseRaw)
             }
-            let (txT, txB) = clean(rawPath.map(\.tx))
-            let (tyT, tyB) = clean(rawPath.map(\.ty))
-            let (rotT, rotB) = clean(rawPath.map(\.rot))
-            let (scT, scB) = clean(rawPath.map(\.scale))
-            path = rawPath.indices.map { State(tx: txT[$0], ty: tyT[$0], rot: rotT[$0], scale: scT[$0]) }
-            baseline = rawPath.indices.map { State(tx: txB[$0], ty: tyB[$0], rot: rotB[$0], scale: scB[$0]) }
+            let tx = clean(rawPath.map(\.tx)), ty = clean(rawPath.map(\.ty))
+            let rot = clean(rawPath.map(\.rot)), sc = clean(rawPath.map(\.scale))
+            path = rawPath.indices.map { State(tx: tx[$0], ty: ty[$0], rot: rot[$0], scale: sc[$0]) }
+            baseline = path
         }
 
         // Native engine selects the smoother. L1 = locked/cinematic (piecewise-linear);
@@ -116,14 +113,14 @@ enum PathSmoother {
         var rotS = method == .position ? path.map { _ in 0.0 } : smoothChannel(path.map(\.rot))
         var scS  = method == .position ? path.map { _ in path.first!.scale } : smoothChannel(path.map(\.scale))
 
-        // Hard lock: pin the POSITION to a fixed point (e.g. the seed-frame centroid) so the object is
-        // held in place rather than following a smoothed version of its travel. Rotation/scale stay on
-        // the gentle smoothed follow — hard-pinning them fights the noisy points-fit rotation/scale and
-        // makes the frame spin. The denoised raw above keeps the position pin smooth.
+        // Lock strength: blend the POSITION target between the smoothed follow (pinBlend 0 → tracks the
+        // object's slow travel) and a fixed pin at the seed centroid (pinBlend 1 → held dead still).
+        // Rotation/scale stay on the smoothed follow — hard-pinning them fights the noisy points-fit.
         if let pin = pinTarget {
             let p = decompose(pin)
-            txS = Array(repeating: p.tx, count: path.count)
-            tyS = Array(repeating: p.ty, count: path.count)
+            let b = min(max(pinBlend, 0), 1)
+            txS = txS.map { $0 * (1 - b) + p.tx * b }
+            tyS = tyS.map { $0 * (1 - b) + p.ty * b }
         }
 
         // 3. Correction = smoothed target − baseline, expressed as a homography. Differencing against
@@ -136,8 +133,8 @@ enum PathSmoother {
                             rot: (method == .position) ? 0 : rotS[k] - baseline[k].rot,
                             scale: (method == .position) ? 1 : scS[k] / max(baseline[k].scale, 1e-9))
             // Defense-in-depth: NaN-safe clamp so no non-finite value can reach a correction matrix.
-            cor.tx = safeClamp(cor.tx, -0.25, 0.25)
-            cor.ty = safeClamp(cor.ty, -0.25, 0.25)
+            cor.tx = safeClamp(cor.tx, -maxShift, maxShift)
+            cor.ty = safeClamp(cor.ty, -maxShift, maxShift)
             cor.rot = safeClamp(cor.rot, -0.35, 0.35)
             cor.scale = cor.scale.isFinite ? min(max(cor.scale, 0.5), 2.0) : 1.0
             // Object tracking pivots rotation/scale about the object's own centroid (its raw position).
@@ -148,10 +145,12 @@ enum PathSmoother {
             maxAbsRot = max(maxAbsRot, abs(cor.rot))
         }
 
-        // 4. Crop zoom: cover translation + rotation-induced corner displacement, but cap it —
-        //    an aggressive zoom is more objectionable than a sliver of exposed edge on big shakes.
+        // 4. Crop zoom to hide the edge a shift exposes. The compositor translates THEN zooms about
+        //    center, so covering a shift s needs zoom 1/(1−2s), not 1+2s (which undercovers big shifts
+        //    → black edge). Cap shift below 0.5 (beyond it no zoom can cover) and by maxCropZoom.
         let rotMargin = sin(min(maxAbsRot, 0.35))
-        let cropZoom = cropToFit ? min(1.25, 1 + 2 * (max(maxAbsTx, maxAbsTy) + rotMargin)) : 1.0
+        let shift = min(0.49, max(maxAbsTx, maxAbsTy) + rotMargin)
+        let cropZoom = cropToFit ? min(maxCropZoom, 1 / (1 - 2 * shift)) : 1.0
         return Result(corrections: corrections, cropZoom: max(1.0, cropZoom))
     }
 

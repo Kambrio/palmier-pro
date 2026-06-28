@@ -34,8 +34,8 @@ struct SubjectSidecar: Codable, Sendable, Equatable {
 }
 
 enum SubjectSidecarStore {
-    /// Bumped from 1: the sidecar is now keyed by the user-picked seed.
-    static let currentVersion = 2
+    /// Bumped to 4: revert head anchor back to the box centre (head tested no better) → re-track.
+    static let currentVersion = 4
 
     /// Short, filesystem-safe, deterministic hash of a seed key.
     static func seedHash(_ seedKey: String) -> String {

@@ -204,32 +204,32 @@ struct PathSmootherTests {
         for tx in stabTx { #expect(abs(tx - 0.5) < 0.02) }
     }
 
-    // Soft threshold: zero inside the band, shifted toward zero outside, continuous at the edges.
-    @Test func softThresholdShrinksSmallKeepsLarge() {
-        #expect(PathSmoother.softThreshold(0.01, 0.05) == 0)               // small → removed
-        #expect(abs(PathSmoother.softThreshold(0.2, 0.05) - 0.15) < 1e-9)  // large → kept (− t)
-        #expect(abs(PathSmoother.softThreshold(-0.2, 0.05) + 0.15) < 1e-9)
-        #expect(abs(PathSmoother.softThreshold(0.05, 0.05)) < 1e-9)        // continuous at the boundary
+    // Median filter replaces a 1-frame spike with the local median and preserves a clean ramp.
+    @Test func medianFilterDropsSpikeKeepsRamp() {
+        var xs = [Double](); for i in 0..<20 { xs.append(Double(i) * 0.01) }
+        xs[10] += 0.3
+        let m = PathSmoother.medianFilter(xs, window: 5)
+        #expect(abs(m[10] - 0.10) < 0.03)   // spike (0.40) → back near the ramp (~0.10)
+        #expect(abs(m[5] - 0.05) < 1e-9)    // ramp preserved away from the spike
     }
 
-    // An occasional bump is removed from the stabilized output, and a sustained medium shake is
-    // smoothed WITHOUT a per-frame jump (the failure mode of a hard spike/no-spike switch).
-    @Test func bumpRemovedAndMediumShakeStaysContinuous() {
-        var frames: [StabFrameTransform] = []
+    // A 1-frame MEASUREMENT glitch (centroid spikes then snaps back) must not yank the real frame.
+    // The correction is computed from the glitched measurement M but applied to the true frame F;
+    // the median baseline ignores the glitch so F stays continuous (the DSCF1478 middle-glitch case).
+    @Test func measurementGlitchDoesNotYankRealFrame() {
+        var M: [StabFrameTransform] = []   // measured tracked path (one glitch at frame 60)
+        var F: [StabFrameTransform] = []   // true object path in the frame (clean)
         for i in 0..<120 {
-            var tx = Double(i) * 0.0005 + (i % 2 == 0 ? 0.001 : -0.001)
-            if i == 60 { tx += 0.18 }                                       // isolated bump
-            if (80...95).contains(i) { tx += 0.04 * sin(Double(i) * 1.3) }  // medium shake cluster
-            frames.append(StabFrameTransform(m: [1,0, tx, 0,1,0, 0,0,1]))
+            let tx = Double(i) * 0.0005
+            F.append(StabFrameTransform(m: [1,0, tx, 0,1,0, 0,0,1]))
+            M.append(StabFrameTransform(m: [1,0, i == 60 ? tx + 0.2 : tx, 0,1,0, 0,0,1]))
         }
         let out = PathSmoother.corrections(
-            raw: frames, window: 0..<120, method: .position, engine: .smooth,
-            smoothness: 0.6, cropToFit: false, denoiseRaw: 5)
-        let stab = zip(frames, out.corrections).map { $0.m[2] + $1.m[2] }
-        // Isolated bump pulled back in line with its neighbours.
-        #expect(abs(stab[60] - stab[59]) < 0.03 && abs(stab[61] - stab[60]) < 0.03)
-        // Across the medium-shake cluster the stabilized path is continuous — no frame-to-frame jump.
-        for i in 80...95 { #expect(abs(stab[i] - stab[i-1]) < 0.03) }
+            raw: M, window: 0..<120, method: .position, engine: .smooth,
+            smoothness: 0.6, cropToFit: false, denoiseRaw: 1.5)
+        // Rendered reality = corrections (from M) applied to the CLEAN frames F.
+        let real = zip(F, out.corrections).map { $0.m[2] + $1.m[2] }
+        #expect(abs(real[60] - real[59]) < 0.01 && abs(real[61] - real[60]) < 0.01)
         for c in out.corrections { #expect(c.m.allSatisfy { $0.isFinite }) }
     }
 

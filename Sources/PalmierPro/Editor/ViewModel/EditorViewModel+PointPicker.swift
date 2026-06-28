@@ -27,14 +27,11 @@ extension EditorViewModel {
             return
         }
         if isPlaying { pause() }
-        let existing = clip.stabilization?.pointsSeed
-        let frame = existing?.frame ?? sourceFrame(for: clip)
-        // When editing, scrub to the frame the points were placed on so they line up with the image.
-        if let existing, existing.frame != sourceFrame(for: clip) {
-            let rel = Double(existing.frame - clip.trimStartFrame) / max(clip.speed, 0.0001)
-            seekToFrame(clip.startFrame + max(0, Int(rel.rounded())))
-        }
-        pointPick = PointPickSession(clipId: clip.id, sourceFrame: frame, points: existing?.points ?? [])
+        // Re-anchor at the CURRENT playhead frame so tracking recomputes forward/backward from here.
+        // Pre-load any existing points so they can be nudged onto the object at this frame.
+        let frame = sourceFrame(for: clip)
+        pointPick = PointPickSession(
+            clipId: clip.id, sourceFrame: frame, points: clip.stabilization?.pointsSeed?.points ?? [])
         videoEngine?.refreshVisuals()   // show the clip RAW so points land on real source pixels
     }
 

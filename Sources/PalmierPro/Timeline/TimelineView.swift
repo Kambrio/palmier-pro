@@ -104,17 +104,21 @@ final class TimelineView: NSView {
             // flag, a second "first layout" pass would re-decide zoom and clobber the restored value.
             let isFirstLayout = !didApplyInitialZoom
             if isFirstLayout { didApplyInitialZoom = true }
-            let restoredZoom = isFirstLayout ? editor.restoredSessionZoom : nil
-            if isFirstLayout { editor.restoredSessionZoom = nil }
             let editor = self.editor
             RunLoop.main.perform(inModes: [.default]) {
                 MainActor.assumeIsolated {
                     editor.timelineVisibleWidth = newVisibleWidth
                     let minZoom = editor.minZoomScale
-                    if isFirstLayout {
-                        // Resume last session's zoom (clamped now that minZoom is known), else fit.
-                        editor.zoomScale = restoredZoom.map { min(Zoom.max, max(minZoom, $0)) }
-                            ?? (editor.timeline.totalFrames == 0 ? Defaults.pixelsPerFrame : minZoom)
+                    // Read restoredSessionZoom at PERFORM time, not schedule time: the first layout is
+                    // often scheduled before applyViewState runs, so capturing it earlier saw nil and
+                    // fit-to-window clobbered the restored zoom. Whichever pass runs after the restore
+                    // consumes it here.
+                    if let restored = editor.restoredSessionZoom {
+                        editor.zoomScale = min(Zoom.max, max(minZoom, restored))
+                        editor.restoredSessionZoom = nil
+                    } else if isFirstLayout {
+                        editor.zoomScale = editor.timeline.totalFrames == 0
+                            ? Defaults.pixelsPerFrame : minZoom
                     } else if editor.zoomScale < minZoom {
                         editor.zoomScale = minZoom
                     }

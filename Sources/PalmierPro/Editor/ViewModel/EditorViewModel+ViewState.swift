@@ -21,10 +21,11 @@ extension EditorViewModel {
         let total = max(0, timeline.totalFrames)
         currentFrame = max(0, min(s.playheadFrame, total))
         if let z = s.zoomScale, z > 0 {
-            zoomScale = min(Zoom.max, max(minZoomScale, z))
-            // Stash it: the timeline's first layout otherwise resets zoom to fit-to-window. minZoom
-            // is only correct once the view has a width, so the real clamp happens there.
+            // Stash for the timeline's first layout to apply (clamped against the real minZoom, which
+            // is only known once the view has a width). Set zoomScale provisionally too; the layout
+            // pass re-affirms/clamps it. Without the stash, first layout fits-to-window and clobbers.
             restoredSessionZoom = z
+            zoomScale = min(Zoom.max, z)
         }
         let clipIds = Set(timeline.tracks.flatMap { $0.clips.map(\.id) })
         selectedClipIds = Set(s.selectedClipIds).intersection(clipIds)

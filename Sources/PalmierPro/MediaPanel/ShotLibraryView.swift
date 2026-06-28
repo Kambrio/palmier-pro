@@ -483,10 +483,9 @@ private struct ShotPlayer: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        // No transport chrome — the inline controls dim the frame with a scrim on appear that only
-        // clears on cursor activity; the Play/Frames toggle already governs start/stop.
-        view.controlsStyle = .none
+        view.controlsStyle = .inline
         view.videoGravity = .resizeAspect
+        view.showsFullScreenToggleButton = true
         let player = AVPlayer(url: url)
         view.player = player
         player.play()   // auto-play once the player is shown

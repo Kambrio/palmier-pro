@@ -196,9 +196,9 @@ private struct ShotDetailEditor: View {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
                 if let entry {
                     mediaPreview(entry)
+                    labelsSection(entry)
                     nameField(entry)
                     summaryField(entry)
-                    labelsSection(entry)
                     metaSection(entry)
                     Button("Re-analyze this footage") { manager.analyze(assetId: asset.id, force: true) }
                         .buttonStyle(.capsule(.secondary, size: .small))

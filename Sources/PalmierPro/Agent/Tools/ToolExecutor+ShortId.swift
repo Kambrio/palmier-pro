@@ -14,7 +14,7 @@ extension ToolExecutor {
         "folderId", "parentFolderId",
     ]
     private static let arrayIdKeys: Set<String> = [
-        "clipIds", "targetClipIds", "assetIds", "folderIds",
+        "clipIds", "targetClipIds", "assetIds", "folderIds", "mediaRefs",
         "referenceMediaRefs", "referenceImageMediaRefs",
         "referenceVideoMediaRefs", "referenceAudioMediaRefs",
     ]

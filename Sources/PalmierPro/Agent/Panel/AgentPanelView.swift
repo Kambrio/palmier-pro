@@ -39,6 +39,26 @@ struct AgentPanelView: View {
             systemImage: "folder",
             prompt: "Organize my media into structured folders. Review all assets, create clearly named folders by role, scene, or type, move assets into them, and rename generic files when useful. Don't delete anything or change the timeline."
         ),
+        AgentStarterPrompt(
+            title: "Stabilize shaky footage",
+            systemImage: "viewfinder",
+            prompt: "Stabilize shaky video on my timeline. Inspect the edit, find handheld or shaky shots, and stabilize them so the footage looks locked-down and smooth. Tell me which clips you stabilized."
+        ),
+        AgentStarterPrompt(
+            title: "Lock the camera onto my subject",
+            systemImage: "dot.viewfinder",
+            prompt: "Lock the camera onto the main subject in my selected clip. Inspect a frame to find the subject, then apply subject-lock stabilization so it stays steady in the frame as the camera moves."
+        ),
+        AgentStarterPrompt(
+            title: "Analyze my footage",
+            systemImage: "film.stack",
+            prompt: "Analyze my footage and build the shot library. For each video, sample frames and describe what it shows — shot size, people, action, scene — give each clip a meaningful name, and tag the shots that lead the story. Then summarize what I have to work with."
+        ),
+        AgentStarterPrompt(
+            title: "Develop a story from my footage",
+            systemImage: "point.3.connected.trianglepath.dotted",
+            prompt: "Help me develop a story from my footage. Analyze what I have, then propose a few directions on the story graph, branch the one I pick into beats, and link each beat to the footage that fills it."
+        ),
     ]
 
     private var service: AgentService { editor.agentService }

@@ -48,6 +48,14 @@ We built Palmier Pro from scratch with Swift. The north star is Premiere Pro, wi
 
 Generate videos and images with SOTA models like Seedance, Kling, Nano Banana Pro inside the timeline editor.
 
+### On-device stabilization & tracking
+
+Smooth shaky footage right in the timeline — no round-trip to another app. Choose a native locked/cinematic or organic camera path, FFmpeg `vid.stab`, **Subject Lock** to keep a person or object steady, or **Point Track** to hold an object's position, rotation, and scale. Everything runs locally on Apple Silicon, and your agent can drive it too via the `stabilize_clips` MCP tool.
+
+### Shot Library — footage your agent understands
+
+Analyze your footage on-device (Apple Vision + a bundled YOLO detector + the transcript) to build a **Shot Library**: each video gets a meaningful name (shown on the timeline), a description, shot size, people count, and an identity group so you can tell which clips feature the same person. Tag shots with editorial labels — **key** (drives the story), **skip** (don't use it), or your own — then edit any of it in the Documents tab. The library feeds the agent so it can plan edits and develop a story from what the footage actually shows. Drive it from the chat too via `analyze_footage`, `get_shot_library`, and `set_shot`.
+
 ### Integrates with your agents
 
 Connects your Claude/Codex/Cursor via MCP, or use the in-app agent to work on the same project together.

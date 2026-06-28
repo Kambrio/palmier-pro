@@ -25,6 +25,9 @@ final class AppState {
         })
         service.start()
         mcpService = service
+        // If the user opted in (Settings), keep the app-bundled skills installed in their global
+        // ~/.claude/skills so their own `claude` CLI discovers them. Idempotent, best-effort.
+        Task.detached(priority: .utility) { ClaudeCLISkills.syncGlobalInstall() }
     }
 
     func stopMCPService() {

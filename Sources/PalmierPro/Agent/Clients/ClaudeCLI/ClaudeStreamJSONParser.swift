@@ -37,9 +37,25 @@ struct ClaudeStreamJSONParser {
         for block in content where block["type"] as? String == "tool_result" {
             guard let id = block["tool_use_id"] as? String else { continue }
             let isError = block["is_error"] as? Bool ?? false
-            events.append(.toolResult(toolUseId: id, isError: isError))
+            events.append(.toolResult(toolUseId: id, isError: isError, resultText: Self.resultText(from: block["content"])))
         }
         return events
+    }
+
+    /// Flattens a tool_result `content` (a string, or an array of text/image blocks) to plain text.
+    /// Images become a compact `[image]` marker so stored transcripts never carry base64.
+    private static func resultText(from content: Any?) -> String? {
+        if let s = content as? String { return s }
+        guard let arr = content as? [[String: Any]] else { return nil }
+        var parts: [String] = []
+        for b in arr {
+            switch b["type"] as? String {
+            case "text": if let t = b["text"] as? String, !t.isEmpty { parts.append(t) }
+            case "image": parts.append("[image]")
+            default: break
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     private func assistantEvents(_ obj: [String: Any]) -> [AnthropicStreamEvent] {

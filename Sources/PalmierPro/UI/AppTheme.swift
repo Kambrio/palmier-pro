@@ -137,6 +137,24 @@ enum AppTheme {
         static var successColor: Color { Color(success) }
     }
 
+    /// Distinct, slightly muted hues for color-coding categorical tags (e.g. Shot Library labels)
+    /// on the dark surface. Tuned to read clearly as both an icon/text tint and a chip fill.
+    enum Label {
+        static let amber  = Color(red: 0.93, green: 0.74, blue: 0.27)
+        static let red    = Color(red: 0.90, green: 0.31, blue: 0.31)
+        static let orange = Color(red: 0.95, green: 0.55, blue: 0.26)
+        static let blue   = Color(red: 0.36, green: 0.62, blue: 0.95)
+        static let teal   = Color(red: 0.27, green: 0.76, blue: 0.74)
+        static let green  = Color(red: 0.42, green: 0.78, blue: 0.45)
+        static let pink   = Color(red: 0.92, green: 0.45, blue: 0.70)
+        static let purple = Color(red: 0.66, green: 0.55, blue: 0.93)
+        static let neutral = Color(red: 0.62, green: 0.64, blue: 0.68)
+
+        /// Cycling palette for color-coding an ordered series (e.g. story beats on the timeline).
+        static let palette: [Color] = [amber, blue, teal, green, pink, purple, orange, red]
+        static func cycle(_ index: Int) -> Color { palette[((index % palette.count) + palette.count) % palette.count] }
+    }
+
     // MARK: - Text
 
     enum Text {

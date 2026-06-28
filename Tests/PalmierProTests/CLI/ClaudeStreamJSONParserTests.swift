@@ -61,18 +61,19 @@ struct ClaudeStreamJSONParserTests {
         let (evts, _) = events([
             #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}]}}"#
         ])
-        guard case .toolResult(let id, let isError)? = evts.first else {
+        guard case .toolResult(let id, let isError, let text)? = evts.first else {
             Issue.record("expected toolResult"); return
         }
         #expect(id == "t1")
         #expect(isError == false)
+        #expect(text == "ok")
     }
 
     @Test func emitsErrorToolResult() {
         let (evts, _) = events([
             #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"boom","is_error":true}]}}"#
         ])
-        guard case .toolResult(let id, let isError)? = evts.first else {
+        guard case .toolResult(let id, let isError, _)? = evts.first else {
             Issue.record("expected toolResult"); return
         }
         #expect(id == "t2")
@@ -83,10 +84,20 @@ struct ClaudeStreamJSONParserTests {
         let (evts, _) = events([
             #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","content":"ok"}]}}"#
         ])
-        guard case .toolResult(_, let isError)? = evts.first else {
+        guard case .toolResult(_, let isError, _)? = evts.first else {
             Issue.record("expected toolResult"); return
         }
         #expect(isError == false)
+    }
+
+    @Test func extractsToolResultTextFromContentArrayAndMarksImages() {
+        let (evts, _) = events([
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t4","content":[{"type":"text","text":"shot library json"},{"type":"image","source":{}}]}]}}"#
+        ])
+        guard case .toolResult(_, _, let text)? = evts.first else {
+            Issue.record("expected toolResult"); return
+        }
+        #expect(text == "shot library json\n[image]")   // base64 never stored; image → marker
     }
 
     @Test func ignoresPlainUserTextMessage() {

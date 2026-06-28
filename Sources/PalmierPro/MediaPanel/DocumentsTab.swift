@@ -13,6 +13,12 @@ struct DocumentsTab: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().overlay(AppTheme.Border.subtleColor)
+            shotLibraryCard
+                .padding(.horizontal, AppTheme.Spacing.sm)
+                .padding(.top, AppTheme.Spacing.sm)
+            storyGraphCard
+                .padding(.horizontal, AppTheme.Spacing.sm)
+                .padding(.top, AppTheme.Spacing.xs)
             if files.isEmpty {
                 emptyState
             } else {
@@ -45,6 +51,72 @@ struct DocumentsTab: View {
         .foregroundStyle(AppTheme.Text.secondaryColor)
         .padding(.horizontal, AppTheme.Spacing.lgXl)
         .padding(.vertical, AppTheme.Spacing.md)
+    }
+
+    private var shotLibraryCard: some View {
+        let analyzed = editor.shotLibrary.entries.count
+        let total = editor.shotLibraryManager.analyzableAssets.count
+        return Button { editor.showShotLibrary = true } label: {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: AppTheme.FontSize.md))
+                    .foregroundStyle(AppTheme.Accent.primary)
+                    .frame(width: AppTheme.IconSize.md)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Shot Library")
+                        .font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.semibold))
+                        .foregroundStyle(AppTheme.Text.primaryColor)
+                    Text(total == 0 ? "Analyze footage to help the assistant understand it"
+                                    : "\(analyzed) of \(total) footage analyzed")
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if editor.shotLibraryManager.isAnalyzing { ProgressView().controlSize(.small) }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+            .padding(AppTheme.Spacing.sm)
+            .background(RoundedRectangle(cornerRadius: AppTheme.Radius.sm).fill(AppTheme.Background.raisedColor))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.sm).strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.hairline))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+    }
+
+    private var storyGraphCard: some View {
+        let nodes = editor.storyGraph.nodes.count
+        return Button { editor.showStoryGraph = true } label: {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: AppTheme.FontSize.md))
+                    .foregroundStyle(AppTheme.Accent.timecodeColor)
+                    .frame(width: AppTheme.IconSize.md)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Story Graph")
+                        .font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.semibold))
+                        .foregroundStyle(AppTheme.Text.primaryColor)
+                    Text(nodes == 0 ? "Develop a story from your footage, with the assistant"
+                                    : "\(nodes) node\(nodes == 1 ? "" : "s")")
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+            .padding(AppTheme.Spacing.sm)
+            .background(RoundedRectangle(cornerRadius: AppTheme.Radius.sm).fill(AppTheme.Background.raisedColor))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.sm).strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.hairline))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
     }
 
     private var emptyState: some View {

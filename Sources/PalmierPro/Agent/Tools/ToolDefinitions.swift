@@ -36,6 +36,14 @@ enum ToolName: String, CaseIterable, Sendable {
     case applyColor = "apply_color"
     case applyEffect = "apply_effect"
     case inspectColor = "inspect_color"
+    case stabilizeClips = "stabilize_clips"
+    case analyzeFootage = "analyze_footage"
+    case getShotLibrary = "get_shot_library"
+    case setShot = "set_shot"
+    case getStoryGraph = "get_story_graph"
+    case addStoryNodes = "add_story_nodes"
+    case setStoryNode = "set_story_node"
+    case removeStoryNode = "remove_story_node"
     case listFolders = "list_folders"
     case createFolder = "create_folder"
     case moveToFolder = "move_to_folder"
@@ -739,6 +747,202 @@ enum ToolDefinitions {
             )
         ),
         AgentTool(
+            name: .stabilizeClips,
+            description: """
+            Stabilize shaky video clips — smooth a handheld camera path, lock onto a subject, or hold an \
+            object steady. Applies per clip; each clip must be a VIDEO clip at normal speed (1×). MERGES: \
+            only the fields you pass change; the rest keep their current (or default) value. Tracking and \
+            ffmpeg bakes run in the BACKGROUND — the call returns immediately and the preview updates when \
+            the work finishes. Undoable. Read a clip's current settings from get_timeline (the clip's \
+            `stabilization` object). Pass enabled:false to turn it off without losing settings.
+
+            Engines:
+            • vidstab — FFmpeg vid.stab. General handheld shake; needs ffmpeg on PATH. (default)
+            • l1 — native, locked / cinematic camera path (piecewise-linear).
+            • smooth — native, organic path that follows the camera more loosely.
+            • subject — Subject Lock: keep one subject steady. Requires a `subject` box (or one already on the clip).
+            • points — Point Track: hold an object steady (position + rotation + scale). Requires `points` (or ones already on the clip).
+            vidstab/l1/smooth need no seed — just pick the engine and a smoothness. subject/points need a seed: \
+            find the subject/object with inspect_timeline or inspect_media, then pass its normalized box/points.
+            """,
+            inputSchema: objectSchema(
+                properties: [
+                    "clipIds": ["type": "array", "items": ["type": "string"], "description": "Video clip ids from get_timeline. Each must be at normal speed (1×)."],
+                    "enabled": ["type": "boolean", "description": "Default true. Pass false to turn stabilization off for the clips (settings are kept)."],
+                    "engine": ["type": "string", "enum": ["vidstab", "l1", "smooth", "subject", "points"], "description": "Stabilization method (see list above). Omit to keep the current engine. A `subject`/`points` payload sets this automatically."],
+                    "method": ["type": "string", "enum": ["position", "similarity", "perspective"], "description": "How aggressively to correct the camera path (camera engines only): position = translation, similarity = +scale & rotation (default), perspective = full homography."],
+                    "smoothness": ["type": "number", "description": "0…1. Higher = smoother / more locked-down. For subject/points this is the lock strength (follow → hard pin). Default 0.5."],
+                    "cropToFit": ["type": "boolean", "description": "Auto-zoom so counter-motion never exposes the frame edges. Default true."],
+                    "subjectSmoothing": ["type": "string", "enum": ["cinematic", "organic"], "description": "Subject/Point path smoothing: cinematic = locked, organic = follows loosely. Default cinematic."],
+                    "lockAxis": ["type": "string", "enum": ["both", "horizontal", "vertical"], "description": "Subject/Point: which axes to hold steady; the freed axis moves with the subject. Default both."],
+                    "subject": objectSchema(
+                        properties: [
+                            "frame": ["type": "integer", "description": "Source-frame index the box is defined on (a frame inside the clip's trimmed range)."],
+                            "box": ["type": "array", "items": ["type": "number"], "description": "[x, y, width, height], each normalized 0–1, TOP-LEFT origin — the subject to lock onto."],
+                            "label": ["type": "string", "description": "Optional name for the subject (e.g. 'face', 'car')."],
+                        ],
+                        required: ["frame", "box"]
+                    ),
+                    "points": objectSchema(
+                        properties: [
+                            "frame": ["type": "integer", "description": "Source-frame index the points are defined on."],
+                            "points": ["type": "array", "items": ["type": "array", "items": ["type": "number"]], "description": "One or more [x, y] points, each normalized 0–1, TOP-LEFT origin, placed on the object to hold steady."],
+                            "direction": ["type": "string", "enum": ["both", "forward", "backward"], "description": "Track from the seed frame both ways (default), or only forward/backward in time."],
+                        ],
+                        required: ["frame", "points"]
+                    ),
+                ],
+                required: ["clipIds"]
+            )
+        ),
+        AgentTool(
+            name: .analyzeFootage,
+            description: """
+            Analyze video footage to build the Shot Library — the project's per-footage understanding \
+            that helps you edit and develop the story. For each video it samples 3 frames (at 10%, 50%, \
+            and 90% of the duration), runs on-device vision (scene classification, object detection, \
+            face detection → shot size & people count, face identity grouping) and folds in the \
+            transcript, then composes a baseline description, a meaningful NAME (shown on the timeline), \
+            shot size, people count, and an identity group so you can tell which footage features the \
+            same person. Runs on-device; thumbnails are stored in the project. Idempotent — skips footage \
+            already analyzed unless force=true. After analyzing, refine the descriptions/names with \
+            set_shot, and read everything back with get_shot_library before planning an edit.
+
+            Set includeFrames=true with a single mediaRef to get the 3 sampled frames back as IMAGES so \
+            you can look at the footage and write a richer description/name with set_shot.
+            """,
+            inputSchema: objectSchema(
+                properties: [
+                    "mediaRefs": ["type": "array", "items": ["type": "string"], "description": "Video asset ids to analyze. Omit to analyze all not-yet-analyzed video footage."],
+                    "force": ["type": "boolean", "description": "Re-analyze even footage that already has a current entry. Default false. User edits to name/description/labels are preserved."],
+                    "includeFrames": ["type": "boolean", "description": "When true and exactly one mediaRef is given, return the 3 sampled frames as images so you can describe them. Default false."],
+                ]
+            )
+        ),
+        AgentTool(
+            name: .getShotLibrary,
+            description: """
+            Read the Shot Library: the per-footage analysis (meaningful name, description, shot size, \
+            people count, identity group, editorial labels, per-frame scene/object tags, transcript \
+            excerpt). Call this before planning or revising an edit so you understand what each piece of \
+            footage shows and how it's tagged. Labels include the built-ins 'key' (drives the story) and \
+            'skip' (don't use this footage) plus any custom tags — RESPECT them: never place footage \
+            labeled 'skip', and lead the story with 'key' shots. Footage with the same personGroup \
+            features the same person. Returns unanalyzedCount; run analyze_footage if footage is missing.
+            Reading the whole library returns a COMPACT summary per shot (name, shotSize, people, \
+            labels, personGroup, speech) — small even for hundreds of clips. Pass mediaRefs to get the \
+            full per-frame scene/object detail for a handful of specific shots.
+            """,
+            inputSchema: objectSchema(
+                properties: [
+                    "mediaRefs": ["type": "array", "items": ["type": "string"], "description": "Limit to these video asset ids. Omit to return the whole library."],
+                ]
+            )
+        ),
+        AgentTool(
+            name: .setShot,
+            description: """
+            Edit a footage's Shot Library entry: its meaningful NAME (surfaced on the timeline and media \
+            tiles), DESCRIPTION, and editorial LABELS. Use this to record what you learned about a shot \
+            (especially after analyze_footage with includeFrames=true), to give footage clear names, and \
+            to tag the story: 'key' for shots that drive the narrative, 'skip' for footage to avoid, plus \
+            any custom labels. Requires the footage to be analyzed first (analyze_footage).
+            """,
+            inputSchema: objectSchema(
+                properties: [
+                    "mediaRef": ["type": "string", "description": "The video asset id (must already be analyzed)."],
+                    "name": ["type": "string", "description": "A short, meaningful name for the footage, shown on the timeline (e.g. 'Founder interview — medium')."],
+                    "description": ["type": "string", "description": "Overall description of what the footage shows and how it could be used."],
+                    "labels": ["type": "array", "items": ["type": "string"], "description": "Replace ALL labels with this set. Built-ins: key, skip, hero, broll, interview, establishing, reaction, transition; custom strings allowed."],
+                    "addLabels": ["type": "array", "items": ["type": "string"], "description": "Labels to add (merge), leaving existing ones in place."],
+                    "removeLabels": ["type": "array", "items": ["type": "string"], "description": "Labels to remove."],
+                    "frameDescriptions": [
+                        "type": "array",
+                        "description": "Per-frame descriptions for the sampled frames.",
+                        "items": objectSchema(
+                            properties: [
+                                "position": ["type": "string", "enum": ["q10", "median", "q90"], "description": "Which sampled frame (10% / 50% / 90%)."],
+                                "description": ["type": "string", "description": "What this frame shows."],
+                            ],
+                            required: ["position", "description"]
+                        ),
+                    ],
+                ],
+                required: ["mediaRef"]
+            )
+        ),
+        AgentTool(
+            name: .getStoryGraph,
+            description: """
+            Read the Story Graph — the interactive tree the user develops a story on. The root is the \
+            project's DIRECTION/genre; children are story STRUCTURES, then ACTS, then BEATS, and beats \
+            link to real footage/captions/documents. Call this before proposing or revising a story. \
+            Returns every node (id, kind, title, summary, parentId, chosen, links) plus catalogs of \
+            direction and structure options and the valid node kinds. Develop the story WITH the user: \
+            offer a few options at each level (add_story_nodes), mark the picked one (set_story_node \
+            chosen), and link the footage that fills each beat. Ground every option in the Shot Library \
+            (get_shot_library) — only propose what the footage can actually support.
+            """,
+            inputSchema: objectSchema()
+        ),
+        AgentTool(
+            name: .addStoryNodes,
+            description: """
+            Add story nodes under a parent (omit parentId to add top-level DIRECTION options). Use this \
+            to offer 2–4 ALTERNATIVES at a level — directions, then structures under the chosen direction, \
+            then beats — so the user can choose by clicking. Kinds: direction, structure, act, beat, block \
+            (smaller element inside a beat). Each node may carry links to the footage/captions/documents \
+            that fill it. Keep options few and concrete, each tied to what the footage shows.
+            """,
+            inputSchema: objectSchema(
+                properties: [
+                    "parentId": ["type": "string", "description": "Parent node id (from get_story_graph). Omit/null to add top-level direction options."],
+                    "nodes": [
+                        "type": "array",
+                        "description": "The option nodes to add.",
+                        "items": objectSchema(
+                            properties: [
+                                "kind": ["type": "string", "enum": ["direction", "structure", "act", "beat", "block"], "description": "The node level."],
+                                "title": ["type": "string", "description": "Short option title (e.g. 'Hook → Build → Payoff', 'Cold-open hook')."],
+                                "summary": ["type": "string", "description": "One-line description of the option and why it fits."],
+                                "chosen": ["type": "boolean", "description": "Mark this option as the picked one (clears siblings of the same kind)."],
+                                "links": ["type": "array", "description": "Project elements that fill this node.", "items": Self.storyLinkSchema()],
+                            ],
+                            required: ["kind", "title"]
+                        ),
+                    ],
+                ],
+                required: ["nodes"]
+            )
+        ),
+        AgentTool(
+            name: .setStoryNode,
+            description: """
+            Edit a story node: its title/summary, mark it chosen (the picked option for its branch), or \
+            link/unlink project elements. Linking a beat to footage is how the plan becomes concrete — \
+            use the Shot Library to pick the clips that fill each beat (lead with 'key', never 'skip').
+            """,
+            inputSchema: objectSchema(
+                properties: [
+                    "nodeId": ["type": "string", "description": "The node id (from get_story_graph)."],
+                    "title": ["type": "string", "description": "New title."],
+                    "summary": ["type": "string", "description": "New summary."],
+                    "chosen": ["type": "boolean", "description": "Mark chosen (true) — clears the chosen flag on sibling options of the same kind."],
+                    "addLinks": ["type": "array", "description": "Links to add.", "items": Self.storyLinkSchema()],
+                    "removeLinkIds": ["type": "array", "items": ["type": "string"], "description": "Link ids to remove (from the node's links)."],
+                ],
+                required: ["nodeId"]
+            )
+        ),
+        AgentTool(
+            name: .removeStoryNode,
+            description: "Remove a story node and its whole subtree (use to prune a discarded branch).",
+            inputSchema: objectSchema(
+                properties: ["nodeId": ["type": "string", "description": "The node id to remove."]],
+                required: ["nodeId"]
+            )
+        ),
+        AgentTool(
             name: .applyColor,
             description: "Author/refine a color grade on video/image clips with named controls — the colorist path, distinct from apply_effect (looks/FX). MERGES with the clip's current grade: only the params you pass change, the rest are preserved, so you can nudge one knob at a time (pass reset:true to start from neutral). Applies as live, editable color.* effects; non-color effects untouched. Iterate: apply_color → inspect_color(clipId, reference) → read the gap → adjust → repeat. Undoable. All knobs optional. Color WHEELS use HUE (0–360°, standard) + AMOUNT per tonal zone — to push shadows teal, set shadowsHue 180 and shadowsAmount ~0.15. CURVES (master + per-channel R/G/B) give precise tone shaping — per-channel curves are tone-selective (e.g. pull the blue curve down in the highlights to tame a bright sky). HUE CURVES do secondary/qualified correction — target a source hue and shift its hue/saturation/lightness (e.g. desaturate greens, warm the skin) without a mask; pair with inspect_color's hueHistogram to find which hues are present. LUT applies a .cube film-look pack on top of the grade.",
             inputSchema: objectSchema(
@@ -855,6 +1059,17 @@ enum ToolDefinitions {
                 return "• \(d.id) — \(d.displayName): \(params.isEmpty ? "no params" : params)"
             }
             .joined(separator: "\n")
+    }
+
+    private static func storyLinkSchema() -> [String: Any] {
+        objectSchema(
+            properties: [
+                "kind": ["type": "string", "enum": ["footage", "clip", "caption", "document"], "description": "What the link points at."],
+                "ref": ["type": "string", "description": "The target id: a mediaRef (footage), clipId (clip), captionGroupId (caption), or document filename."],
+                "label": ["type": "string", "description": "Optional display label."],
+            ],
+            required: ["kind", "ref"]
+        )
     }
 
     /// In-app assistant only. Not registered with the MCP server

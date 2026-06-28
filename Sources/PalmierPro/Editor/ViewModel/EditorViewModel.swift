@@ -92,6 +92,13 @@ final class EditorViewModel {
     var timelineRenderRevision: Int = 0
     var isScrubbing: Bool = false
 
+    /// Live timeline scroll offset, mirrored from the scroll view (ObservationIgnored so per-scroll
+    /// updates don't churn SwiftUI). Persisted as last-session view state.
+    @ObservationIgnored var timelineScrollX: Double = 0
+    @ObservationIgnored var timelineScrollY: Double = 0
+    /// One-shot scroll restore applied by TimelineContainerView once the content is sized.
+    @ObservationIgnored var pendingTimelineScroll: CGPoint?
+
     /// Live caption-generation progress, surfaced by the app-level CaptionProgressHUD.
     /// nil when idle. Managed by startCaptionGeneration / cancelCaptionGeneration.
     var captionJob: CaptionJob?

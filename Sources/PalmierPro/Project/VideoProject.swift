@@ -9,6 +9,7 @@ private struct ProjectPackageContents: Sendable {
     var generationLog: GenerationLog?
     var shotLibrary: ShotLibrary?
     var storyGraph: StoryGraph?
+    var viewState: ProjectViewState?
 }
 
 private struct ProjectPackageSnapshot: Sendable {
@@ -17,6 +18,7 @@ private struct ProjectPackageSnapshot: Sendable {
     var generationLog: Data?
     var shotLibrary: Data?
     var storyGraph: Data?
+    var viewState: Data?
     var thumbnail: Data?
     var chatSessionFiles: [(name: String, data: Data)]
 }
@@ -39,6 +41,7 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var loadedGenerationLog: GenerationLog?
     private nonisolated(unsafe) var loadedShotLibrary: ShotLibrary?
     private nonisolated(unsafe) var loadedStoryGraph: StoryGraph?
+    private nonisolated(unsafe) var loadedViewState: ProjectViewState?
 
     /// Captured on main thread before writes may continue off-main.
     private nonisolated(unsafe) var snapshotTimeline: Data?
@@ -46,6 +49,7 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var snapshotGenerationLog: Data?
     private nonisolated(unsafe) var snapshotShotLibrary: Data?
     private nonisolated(unsafe) var snapshotStoryGraph: Data?
+    private nonisolated(unsafe) var snapshotViewState: Data?
     private nonisolated(unsafe) var snapshotThumbnail: Data?
     private nonisolated(unsafe) var snapshotChatSessionFiles: [(name: String, data: Data)] = []
     private nonisolated(unsafe) var snapshotSourceProjectURL: URL?
@@ -77,6 +81,7 @@ final class VideoProject: NSDocument {
         loadedGenerationLog = contents.generationLog
         loadedShotLibrary = contents.shotLibrary
         loadedStoryGraph = contents.storyGraph
+        loadedViewState = contents.viewState
         Log.project.notice(
             "read ok tracks=\(self.loadedTimeline?.tracks.count ?? 0)",
             telemetry: "Project read",
@@ -120,12 +125,16 @@ final class VideoProject: NSDocument {
         let storyGraph = try optionalData(Project.storyGraphFilename, in: url)
             .flatMap { try? JSONDecoder().decode(StoryGraph.self, from: $0) }
 
+        let viewState = try optionalData(Project.viewStateFilename, in: url)
+            .flatMap { try? JSONDecoder().decode(ProjectViewState.self, from: $0) }
+
         return ProjectPackageContents(
             timeline: timeline,
             manifest: manifest,
             generationLog: generationLog,
             shotLibrary: shotLibrary,
-            storyGraph: storyGraph
+            storyGraph: storyGraph,
+            viewState: viewState
         )
     }
 
@@ -166,6 +175,7 @@ final class VideoProject: NSDocument {
                 generationLog: snapshotGenerationLog,
                 shotLibrary: snapshotShotLibrary,
                 storyGraph: snapshotStoryGraph,
+                viewState: snapshotViewState,
                 thumbnail: snapshotThumbnail,
                 chatSessionFiles: snapshotChatSessionFiles
             ),
@@ -182,6 +192,8 @@ final class VideoProject: NSDocument {
             ? nil : try? JSONEncoder().encode(editorViewModel.shotLibrary)
         snapshotStoryGraph = editorViewModel.storyGraph.isEmpty
             ? nil : try? JSONEncoder().encode(editorViewModel.storyGraph)
+        let viewState = editorViewModel.currentViewState()
+        snapshotViewState = viewState.isDefault ? nil : try? JSONEncoder().encode(viewState)
         snapshotThumbnail = captureThumbnail()
         snapshotChatSessionFiles = editorViewModel.agentService.sessions
             .filter { !$0.messages.isEmpty }
@@ -229,6 +241,12 @@ final class VideoProject: NSDocument {
             try storyGraph.write(to: storyGraphURL, options: .atomic)
         } else {
             try? fm.removeItem(at: storyGraphURL)
+        }
+        let viewStateURL = packageURL.appendingPathComponent(Project.viewStateFilename)
+        if let viewState = snapshot.viewState {
+            try viewState.write(to: viewStateURL, options: .atomic)
+        } else {
+            try? fm.removeItem(at: viewStateURL)
         }
         if let thumbnail = snapshot.thumbnail {
             try thumbnail.write(to: packageURL.appendingPathComponent(Project.thumbnailFilename), options: .atomic)
@@ -322,11 +340,26 @@ final class VideoProject: NSDocument {
     // MARK: - Close
 
     override func close() {
+        // Persist last-session view state even when nothing else dirtied the document (e.g. the user
+        // only scrolled / zoomed / moved the playhead this session). Direct, small write.
+        persistViewStateOnClose()
         super.close()
         DispatchQueue.main.async {
             if AppState.shared.activeProject === self {
                 AppState.shared.showHome()
             }
+        }
+    }
+
+    private func persistViewStateOnClose() {
+        guard let packageURL = fileURL else { return }
+        let viewState = editorViewModel.currentViewState()
+        let url = packageURL.appendingPathComponent(Project.viewStateFilename, isDirectory: false)
+        guard FileManager.default.fileExists(atPath: packageURL.path) else { return }
+        if viewState.isDefault {
+            try? FileManager.default.removeItem(at: url)
+        } else if let data = try? JSONEncoder().encode(viewState) {
+            try? data.write(to: url, options: .atomic)
         }
     }
 
@@ -431,6 +464,12 @@ final class VideoProject: NSDocument {
         if let storyGraph = loadedStoryGraph {
             editorViewModel.storyGraph = storyGraph
             loadedStoryGraph = nil
+        }
+        // Resume last session: playhead, zoom, scroll, selection. After timeline + media are loaded
+        // so the playhead clamps and selection ids resolve against what actually exists.
+        if let viewState = loadedViewState {
+            editorViewModel.applyViewState(viewState)
+            loadedViewState = nil
         }
         editorViewModel.searchIndex.projectOpened()
         editorViewModel.updateTelemetryContext()

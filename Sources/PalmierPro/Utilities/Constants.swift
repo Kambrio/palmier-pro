@@ -114,6 +114,8 @@ enum Project {
     static let shotLibraryFilename = "shot-library.json"
     /// Story-development graph (directions, structures, acts, beats wired to footage).
     static let storyGraphFilename = "story-graph.json"
+    /// Last-session editor view state (playhead, zoom, scroll, selection).
+    static let viewStateFilename = "view-state.json"
     static let thumbnailFilename = "thumbnail.jpg"
     static let mediaDirectoryName = "media"
     /// Subdirectory of `media/` holding generated proxy movies.

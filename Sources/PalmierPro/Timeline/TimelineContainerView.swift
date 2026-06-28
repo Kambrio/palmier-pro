@@ -89,6 +89,13 @@ struct TimelineContainerView: NSViewRepresentable {
                 )
             }
         }
+
+        // Restore last-session scroll once (after the content is sized at the restored zoom).
+        if let pending = editor.pendingTimelineScroll {
+            editor.pendingTimelineScroll = nil
+            let coordinator = context.coordinator
+            DispatchQueue.main.async { coordinator.applyScrollRestore(pending, editor: editor) }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -116,10 +123,34 @@ struct TimelineContainerView: NSViewRepresentable {
         @MainActor @objc func scrollViewBoundsChanged(_ notification: Notification) {
             timelineView?.needsDisplay = true
             timelineView?.updatePlayheadLayer()
-            if let scrollY = scrollView?.contentView.bounds.origin.y {
-                headerView?.setBoundsOrigin(NSPoint(x: 0, y: scrollY))
-                headerView?.needsDisplay = true
+            guard let origin = scrollView?.contentView.bounds.origin else { return }
+            headerView?.setBoundsOrigin(NSPoint(x: 0, y: origin.y))
+            headerView?.needsDisplay = true
+            // Mirror the live offset so it can be persisted as last-session view state.
+            timelineView?.editor.timelineScrollX = origin.x
+            timelineView?.editor.timelineScrollY = origin.y
+        }
+
+        /// Applies a restored scroll offset, retrying until the scroll view is laid out and the
+        /// document is sized (so clamping uses real dimensions).
+        @MainActor func applyScrollRestore(_ point: CGPoint, editor: EditorViewModel, attempt: Int = 0) {
+            guard let timelineView, let scrollView else { return }
+            timelineView.updateContentSize()
+            let docSize = timelineView.frame.size
+            let visible = scrollView.contentView.bounds.size
+            if visible.width <= 1, attempt < 10 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self.applyScrollRestore(point, editor: editor, attempt: attempt + 1)
+                }
+                return
             }
+            let x = min(max(0, point.x), max(0, docSize.width - visible.width))
+            let y = min(max(0, point.y), max(0, docSize.height - visible.height))
+            scrollView.contentView.setBoundsOrigin(NSPoint(x: x, y: y))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            timelineView.needsDisplay = true
+            editor.timelineScrollX = x
+            editor.timelineScrollY = y
         }
 
         @MainActor @objc func clipViewFrameChanged(_ notification: Notification) {

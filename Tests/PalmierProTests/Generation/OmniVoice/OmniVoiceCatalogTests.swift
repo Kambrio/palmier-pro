@@ -17,4 +17,16 @@ struct OmniVoiceCatalogTests {
     @Test func modelIdIsStable() {
         #expect(OmniVoiceCatalog.modelId == "omnivoice-local")
     }
+
+    @MainActor
+    @Test func catalogIncludesOmniVoiceOffline() {
+        // No Convex configured in tests → audio comes only from local registration.
+        let audio = ModelCatalog.shared.audio
+        #expect(audio.contains { $0.id == OmniVoiceCatalog.modelId })
+        if case .audio(let m)? = ModelCatalog.shared.byId[OmniVoiceCatalog.modelId] {
+            #expect(m.id == OmniVoiceCatalog.modelId)
+        } else {
+            Issue.record("OmniVoice model not in byId")
+        }
+    }
 }

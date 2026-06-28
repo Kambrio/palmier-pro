@@ -31,6 +31,9 @@ enum ModelRegistry {
 final class ModelCatalog {
     static let shared = ModelCatalog()
 
+    /// Models defined locally (no Convex), e.g. the on-device OmniVoice TTS provider.
+    static let localAudio: [AudioModelConfig] = [OmniVoiceCatalog.model]
+
     private(set) var video: [VideoModelConfig] = []
     private(set) var image: [ImageModelConfig] = []
     private(set) var audio: [AudioModelConfig] = []
@@ -42,7 +45,12 @@ final class ModelCatalog {
     @ObservationIgnored private var subscription: AnyCancellable?
     @ObservationIgnored private var didConfigure = false
 
-    private init() {}
+    private init() {
+        for m in Self.localAudio {
+            audio.append(m)
+            byId[m.id] = .audio(m)
+        }
+    }
 
     func configure() {
         guard !didConfigure else { return }
@@ -97,6 +105,11 @@ final class ModelCatalog {
                 newUpscale.append(m)
                 newById[m.id] = .upscale(m)
             }
+        }
+
+        for m in Self.localAudio {
+            newAudio.append(m)
+            newById[m.id] = .audio(m)
         }
 
         self.video = newVideo

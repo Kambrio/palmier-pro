@@ -35,6 +35,7 @@ extension EditorViewModel {
             seekToFrame(clip.startFrame + max(0, Int(rel.rounded())))
         }
         pointPick = PointPickSession(clipId: clip.id, sourceFrame: frame, points: existing?.points ?? [])
+        videoEngine?.refreshVisuals()   // show the clip RAW so points land on real source pixels
     }
 
     /// Add a tracking point (normalized TOP-LEFT), clamped to the frame.
@@ -82,6 +83,7 @@ extension EditorViewModel {
 
     func cancelPointPick() {
         pointPick = nil
+        videoEngine?.refreshVisuals()   // restore the stabilized preview
     }
 
     private func clampUnit(_ p: CGPoint) -> CGPoint {

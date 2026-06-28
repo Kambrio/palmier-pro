@@ -10,6 +10,14 @@ struct SubjectPickerSession: Equatable {
 }
 
 extension EditorViewModel {
+    /// The clip the renderer should show RAW (no stabilization transform/zoom): the one being picked
+    /// (so points land on real source pixels) or the tracking-preview clip. Nil → normal stabilized.
+    var stabBypassClipId: String? {
+        if let p = pointPick { return p.clipId }
+        if let s = subjectPicker { return s.clipId }
+        return trackingPreviewClipId
+    }
+
     /// While tracking-preview is on, the single selected object-tracking clip (with a seed) to render
     /// RAW so its tracked points/box ride the object. Nil otherwise (normal stabilized render).
     var trackingPreviewClipId: String? {
@@ -67,6 +75,7 @@ extension EditorViewModel {
                 guard token == subjectPickToken, selectedClipIds.contains(clipId) else { return }
                 // Always open the picker — with zero detections the overlay falls back to draw-a-box.
                 subjectPicker = SubjectPickerSession(clipId: clipId, sourceFrame: frame, objects: objects)
+                videoEngine?.refreshVisuals()   // show the clip RAW so the box lands on real source pixels
             } catch {
                 Log.preview.error("subjectPick: detection failed: \(Log.detail(error))")
                 mediaPanelToast = "Subject detection failed: \(error.localizedDescription)"
@@ -109,6 +118,7 @@ extension EditorViewModel {
     func cancelSubjectPick() {
         subjectPickToken &+= 1
         subjectPicker = nil
+        videoEngine?.refreshVisuals()   // restore the stabilized preview
     }
 
     /// Decode a single source frame as a CGImage (exact-time, upright), off the calling actor.

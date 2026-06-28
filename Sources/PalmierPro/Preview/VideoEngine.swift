@@ -266,7 +266,7 @@ final class VideoEngine {
 
         let stabByClip = editor.stabilizationManager.resolveStabByClip(
             clipNaturalSizes: clipNaturalSizes, clipTransforms: clipTransforms,
-            bypassClipId: editor.trackingPreviewClipId)
+            bypassClipId: editor.stabBypassClipId)
         let (audioMix, videoComposition) = CompositionBuilder.buildVisuals(
             timeline: editor.timeline,
             trackMappings: trackMappings,

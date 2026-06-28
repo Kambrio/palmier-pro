@@ -23,9 +23,10 @@ final class ShotLibraryManager {
 
     var library: ShotLibrary { editor.shotLibrary }
 
-    /// Video assets eligible for analysis (have a resolvable on-disk source).
+    /// Video assets eligible for analysis (have on-disk media — source, or a proxy when the source
+    /// volume is offline; `run` decodes from the proxy anyway).
     var analyzableAssets: [MediaAsset] {
-        editor.mediaAssets.filter { $0.type == .video && editor.mediaResolver.resolveURL(for: $0.id) != nil }
+        editor.mediaAssets.filter { $0.type == .video && editor.trackingInputURL(for: $0.id) != nil }
     }
 
     func entry(assetId: String) -> ShotEntry? { editor.shotLibrary.entry(assetId: assetId) }
@@ -33,7 +34,7 @@ final class ShotLibraryManager {
     /// Assets with no entry, or whose source changed since the last analysis.
     var pendingAssetIds: [String] {
         analyzableAssets.compactMap { asset in
-            let sig = editor.mediaResolver.resolveURL(for: asset.id).flatMap { ProxySignature.of($0) }
+            let sig = editor.stableSourceSig(for: asset.id)
             guard let existing = editor.shotLibrary.entry(assetId: asset.id) else { return asset.id }
             return existing.isStale(against: sig) ? asset.id : nil
         }
@@ -45,9 +46,9 @@ final class ShotLibraryManager {
     func analyze(assetId: String, force: Bool = false) {
         guard editor.projectURL != nil,
               let asset = editor.mediaAssetsById[assetId], asset.type == .video,
-              let sourceURL = editor.mediaResolver.resolveURL(for: assetId) else { return }
+              editor.trackingInputURL(for: assetId) != nil else { return }
         if !force, let existing = editor.shotLibrary.entry(assetId: assetId),
-           !existing.isStale(against: ProxySignature.of(sourceURL)) { return }
+           !existing.isStale(against: editor.stableSourceSig(for: assetId)) { return }
         if running == assetId || pending.contains(assetId) { return }
         pending.append(assetId)
         if job == nil { startDraining() }
@@ -94,20 +95,19 @@ final class ShotLibraryManager {
     private func run(assetId: String) async {
         guard let projectURL = editor.projectURL,
               let asset = editor.mediaAssetsById[assetId],
-              let sourceURL = editor.mediaResolver.resolveURL(for: assetId) else { return }
-        let decodeURL = (editor.mediaManifest.useProxies ? editor.mediaResolver.proxyURL(for: assetId) : nil) ?? sourceURL
+              let decodeURL = editor.trackingInputURL(for: assetId) else { return }
         progressByAsset[assetId] = 0
 
         var transcript: TranscriptionResult?
-        if asset.hasAudio {
+        if asset.hasAudio, let audioURL = editor.sourcePreferredInputURL(for: assetId) {
             let engineTag = TranscriptCache.currentEngineTag()
             transcript = try? await TranscriptCache.shared.transcript(
-                for: sourceURL, isVideo: true, range: nil, engineTag: engineTag, preferredLocale: nil)
+                for: audioURL, isVideo: true, range: nil, engineTag: engineTag, preferredLocale: nil)
         }
 
         let input = ShotAnalyzer.Input(
             assetId: assetId, url: decodeURL, durationSeconds: asset.duration,
-            sourceSig: ProxySignature.of(sourceURL), projectURL: projectURL)
+            sourceSig: editor.stableSourceSig(for: assetId), projectURL: projectURL)
 
         let entry = await ShotAnalyzer.analyze(input, transcript: transcript) { [weak self] p in
             Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }

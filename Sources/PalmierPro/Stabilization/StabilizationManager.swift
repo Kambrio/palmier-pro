@@ -187,16 +187,8 @@ final class StabilizationManager {
 
     // MARK: - Subject tracking
 
-    /// Stable identity of a clip's SOURCE for keying track/stab sidecars: the live source
-    /// signature when online, else the signature recorded when its proxy was built
-    /// (`proxySourceSig`) — the same value, but available with the source volume offline so
-    /// tracks stay valid when working from local proxies only.
-    func stableSourceSig(for assetId: String) -> String? {
-        if let url = editor.mediaResolver.resolveURL(for: assetId), let sig = ProxySignature.of(url) {
-            return sig
-        }
-        return editor.mediaManifest.entries.first(where: { $0.id == assetId })?.proxySourceSig
-    }
+    /// Stable source identity for keying track/stab sidecars — see EditorViewModel.stableSourceSig.
+    func stableSourceSig(for assetId: String) -> String? { editor.stableSourceSig(for: assetId) }
 
     func hasSubjectTrack(assetId: String, seed: SubjectSeed) -> Bool {
         guard let base = baseDir else { return false }

@@ -63,6 +63,16 @@ extension EditorViewModel {
             ?? (mediaManifest.useProxies ? mediaResolver.proxyURL(for: assetId) : nil)
     }
 
+    /// Stable identity of a clip's SOURCE for keying analysis/track caches: the live source
+    /// signature when online, else the signature recorded when its proxy was built
+    /// (`proxySourceSig`) — the same value, but available with the source volume offline.
+    func stableSourceSig(for assetId: String) -> String? {
+        if let url = mediaResolver.resolveURL(for: assetId), let sig = ProxySignature.of(url) {
+            return sig
+        }
+        return mediaManifest.entries.first(where: { $0.id == assetId })?.proxySourceSig
+    }
+
     /// Enter pick mode: grab the clip's current frame, detect objects, show the overlay.
     func beginSubjectPick(clip: Clip) {
         // Grab from the SAME input the tracker will use (proxy when on) so picker and tracker see

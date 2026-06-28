@@ -178,9 +178,11 @@ enum PointSetTracker {
             return centers
         }
 
+        let seedCount = Double(seedPointsTopLeft.count)
         let backwardStart = max(0, seedFrame - maxBackwardFrames)
         var backward: [CVPixelBuffer] = []          // frames [backwardStart, seedFrame), forward order
         var forwardTransforms: [StabFrameTransform] = []   // frames [seedFrame, end]
+        var forwardConf: [Double] = []                     // aligned with forwardTransforms
         var forwardSeq = VNSequenceRequestHandler()
         var forwardObs: [VNDetectedObjectObservation?] = seedObservations.map { Optional($0) }
         var forwardLast = seedTransform
@@ -199,16 +201,19 @@ enum PointSetTracker {
                     }
                 } else if index == seedFrame {
                     forwardTransforms.append(seedTransform)
+                    forwardConf.append(1.0)
                     forwardLast = seedTransform
                     forwardObs = seedObservations.map { Optional($0) }
                     forwardSeq = VNSequenceRequestHandler()
                 } else if direction == .backward {
                     forwardTransforms.append(seedTransform)   // hold; not tracking forward
+                    forwardConf.append(1.0)
                 } else {
                     let centers = step(forwardSeq, &forwardObs, buffer)
                     forwardLast = transform(
                         from: centers, reference: seedPointsTopLeft, last: forwardLast, aspect: aspect)
                     forwardTransforms.append(forwardLast)
+                    forwardConf.append(Double(centers.lazy.filter { $0 != nil }.count) / seedCount)
                 }
                 index += 1
                 processed += 1
@@ -227,10 +232,13 @@ enum PointSetTracker {
         }
 
         // Frames before the cap hold the seed transform; forward + backward fills overwrite the rest.
+        // Held frames (capped backward, or held during a single-direction pass) are intentional — keep
+        // them at confidence 1.0 so interpolation never treats them as spikes.
         var frames = [StabFrameTransform](repeating: seedTransform, count: total)
+        var conf = [Double](repeating: 1.0, count: total)
         for (i, t) in forwardTransforms.enumerated() {
             let f = seedFrame + i
-            if f >= 0, f < total { frames[f] = t }
+            if f >= 0, f < total { frames[f] = t; conf[f] = forwardConf[i] }
         }
         var backSeq = VNSequenceRequestHandler()
         var backObs: [VNDetectedObjectObservation?] = seedObservations.map { Optional($0) }
@@ -243,6 +251,7 @@ enum PointSetTracker {
                 backLast = transform(
                     from: centers, reference: seedPointsTopLeft, last: backLast, aspect: aspect)
                 frames[backwardStart + j] = backLast
+                conf[backwardStart + j] = Double(centers.lazy.filter { $0 != nil }.count) / seedCount
             }
             if (done + 1) % 30 == 0 {
                 progress(min(1, 0.6 + 0.4 * Double(done + 1) / Double(max(1, backCount))))
@@ -250,6 +259,8 @@ enum PointSetTracker {
             }
         }
 
+        // Reject transient low-confidence fits and interpolate them from reliable neighbours.
+        frames = TrackPath.interpolateLowConfidence(frames, conf: conf, minConf: 0.6)
         progress(1)
         return (fps == 0 ? 30 : fps, frames)
     }

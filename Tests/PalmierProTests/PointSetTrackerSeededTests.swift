@@ -76,6 +76,27 @@ struct PointSetTrackerSeededTests {
         #expect(abs(d[f].rot - expected) < 0.08)
     }
 
+    /// With confidence-gated interpolation wired in, the recovered path is finite and continuous —
+    /// no isolated per-frame spike survives in the centroid or rotation.
+    @Test func seededTrackPathIsContinuous() async throws {
+        let frames = 30, K = 15
+        let dots = [CGPoint(x: 0.35, y: 0.40), CGPoint(x: 0.62, y: 0.42), CGPoint(x: 0.48, y: 0.66)]
+        let (url, seedPoints) = try await TestClip.makeRigidDotsClip(
+            frames: frames, dots: dots, pxPerFrame: 2, degPerFrame: 0.8, seedFrame: K)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let (_, out) = try await PointSetTracker.track(
+            input: url, seedFrame: K, seedPointsTopLeft: seedPoints, progress: { _ in })
+
+        #expect(out.allSatisfy { $0.m.allSatisfy(\.isFinite) })
+        let d = out.map(decompose)
+        // No frame-to-frame spike: the rigid motion is ~2px/frame ≈ 0.008 normalized; allow ample slack.
+        for i in 1..<d.count {
+            #expect(abs(d[i].tx - d[i-1].tx) < 0.1)
+            #expect(abs(d[i].ty - d[i-1].ty) < 0.1)
+        }
+    }
+
     @Test func rejectsEmptySeed() async {
         let bad = URL(fileURLWithPath: "/tmp/nope-\(UUID().uuidString).mov")
         await #expect(throws: (any Error).self) {

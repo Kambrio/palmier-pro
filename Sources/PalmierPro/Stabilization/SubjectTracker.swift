@@ -51,6 +51,7 @@ enum SubjectTracker {
         let backwardStart = max(0, seedFrame - maxBackwardFrames)
         var backward: [CVPixelBuffer] = []      // frames [backwardStart, seedFrame), forward order
         var forwardCenters: [CGPoint] = []       // frames [seedFrame, end]
+        var forwardConf: [Double] = []           // aligned with forwardCenters
         var forwardSeq = VNSequenceRequestHandler()
         var forwardObs = seedObservation
         var forwardLast = seedCenter
@@ -68,19 +69,23 @@ enum SubjectTracker {
                     }
                 } else if index == seedFrame {
                     forwardCenters.append(seedCenter)
+                    forwardConf.append(1.0)
                     forwardLast = seedCenter
                     forwardObs = seedObservation
                     forwardSeq = VNSequenceRequestHandler()
                 } else {
                     let req = VNTrackObjectRequest(detectedObjectObservation: forwardObs)
                     req.trackingLevel = .accurate
+                    var c = 0.0   // carried-forward on loss → 0
                     if (try? forwardSeq.perform([req], on: buffer, orientation: orientation)) != nil,
                        let r = req.results?.first as? VNDetectedObjectObservation, r.confidence > 0.3 {
                         let b = r.boundingBox
                         forwardLast = CGPoint(x: b.midX, y: 1 - b.midY)
                         forwardObs = r
+                        c = Double(r.confidence)
                     }
                     forwardCenters.append(forwardLast)
+                    forwardConf.append(c)
                 }
                 index += 1
                 processed += 1
@@ -98,10 +103,12 @@ enum SubjectTracker {
         }
 
         // Frames before the cap hold the seed center; forward + backward fills overwrite the rest.
+        // Held (capped) frames are an intentional hold → confidence 1.0 so they aren't interpolated away.
         var centers = [CGPoint](repeating: seedCenter, count: total)
+        var conf = [Double](repeating: 1.0, count: total)
         for (i, c) in forwardCenters.enumerated() {
             let f = seedFrame + i
-            if f >= 0, f < total { centers[f] = c }
+            if f >= 0, f < total { centers[f] = c; conf[f] = forwardConf[i] }
         }
         var backSeq = VNSequenceRequestHandler()
         var backObs = seedObservation
@@ -111,19 +118,24 @@ enum SubjectTracker {
             autoreleasepool {
                 let req = VNTrackObjectRequest(detectedObjectObservation: backObs)
                 req.trackingLevel = .accurate
+                var c = 0.0   // carried-forward on loss → 0
                 if (try? backSeq.perform([req], on: backward[j], orientation: orientation)) != nil,
                    let r = req.results?.first as? VNDetectedObjectObservation, r.confidence > 0.3 {
                     let b = r.boundingBox
                     backLast = CGPoint(x: b.midX, y: 1 - b.midY)
                     backObs = r
+                    c = Double(r.confidence)
                 }
                 centers[backwardStart + j] = backLast
+                conf[backwardStart + j] = c
             }
         }
 
-        let frames = centers.map {
+        var frames = centers.map {
             StabFrameTransform(m: [1, 0, Double($0.x), 0, 1, Double($0.y), 0, 0, 1])
         }
+        // Reject transient low-confidence frames; interpolate them from reliable neighbours.
+        frames = TrackPath.interpolateLowConfidence(frames, conf: conf, minConf: 0.5)
         progress(1)
         return (fps == 0 ? 30 : fps, frames)
     }
@@ -190,6 +202,7 @@ enum SubjectTracker {
         guard reader.startReading() else { throw Failure(reason: "reader failed") }
 
         var frames: [StabFrameTransform] = []
+        var conf: [Double] = []
         var seq = VNSequenceRequestHandler()
         var lastObservation: VNDetectedObjectObservation?
         var lastCenter = CGPoint(x: 0.5, y: 0.5)
@@ -203,6 +216,7 @@ enum SubjectTracker {
                       let buffer = CMSampleBufferGetImageBuffer(sample) else { return true }
                 count += 1
                 var box: CGRect? = nil
+                var c = 0.0   // carried-forward on loss → 0
                 // Track existing observation; re-detect on loss or low confidence.
                 if let obs = lastObservation {
                     let req = VNTrackObjectRequest(detectedObjectObservation: obs)
@@ -212,6 +226,7 @@ enum SubjectTracker {
                        r.confidence > 0.3 {
                         box = r.boundingBox
                         lastObservation = r
+                        c = Double(r.confidence)
                     } else {
                         lastObservation = nil
                     }
@@ -222,6 +237,7 @@ enum SubjectTracker {
                         lastObservation = VNDetectedObjectObservation(boundingBox: b)
                         seq = VNSequenceRequestHandler()  // reset sequence on re-seed
                         everDetected = true
+                        c = 1.0   // fresh detection is a reliable anchor
                     }
                 }
                 if let b = box {
@@ -232,6 +248,7 @@ enum SubjectTracker {
                 frames.append(StabFrameTransform(m: [1, 0, Double(lastCenter.x),
                                                      0, 1, Double(lastCenter.y),
                                                      0, 0, 1]))
+                conf.append(c)
                 if count % 10 == 0 { progress(min(1, Double(count) / Double(estTotal))) }
                 return false
             }
@@ -239,6 +256,8 @@ enum SubjectTracker {
             if count % 30 == 0 { await Task.yield() }
         }
         guard everDetected, !frames.isEmpty else { throw Failure(reason: "no subject detected") }
+        // Reject transient low-confidence frames; interpolate them from reliable neighbours.
+        frames = TrackPath.interpolateLowConfidence(frames, conf: conf, minConf: 0.5)
         progress(1)
         return (fps == 0 ? 30 : fps, frames)
     }

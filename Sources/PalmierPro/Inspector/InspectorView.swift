@@ -561,7 +561,7 @@ struct InspectorView: View {
                                         // Direction changes the tracked path → re-track. The captured
                                         // `clip` is stale, so build the seed with the new direction here.
                                         if var seed = clip.stabilization?.pointsSeed,
-                                           let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) {
+                                           let url = editor.trackingInputURL(for: clip.mediaRef) {
                                             seed.direction = v
                                             if !editor.stabilizationManager.hasPointsTrack(assetId: clip.mediaRef, seed: seed) {
                                                 editor.stabilizationManager.enqueuePointsTrack(
@@ -696,14 +696,14 @@ struct InspectorView: View {
         // Subject Lock no longer auto-tracks; it needs a user-picked seed (set by the picker UI).
         guard let seed = clip.stabilization?.subjectSeed,
               !editor.stabilizationManager.hasSubjectTrack(assetId: clip.mediaRef, seed: seed),
-              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+              let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
     }
 
     private func triggerPointsTrack(_ clip: Clip) {
         guard let seed = clip.stabilization?.pointsSeed,
               !editor.stabilizationManager.hasPointsTrack(assetId: clip.mediaRef, seed: seed),
-              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+              let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
     }
 

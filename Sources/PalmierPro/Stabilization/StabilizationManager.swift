@@ -189,11 +189,22 @@ final class StabilizationManager {
 
     // MARK: - Subject tracking
 
+    /// Stable identity of a clip's SOURCE for keying track/stab sidecars: the live source
+    /// signature when online, else the signature recorded when its proxy was built
+    /// (`proxySourceSig`) — the same value, but available with the source volume offline so
+    /// tracks stay valid when working from local proxies only.
+    func stableSourceSig(for assetId: String) -> String? {
+        if let url = editor.mediaResolver.resolveURL(for: assetId), let sig = ProxySignature.of(url) {
+            return sig
+        }
+        return editor.mediaManifest.entries.first(where: { $0.id == assetId })?.proxySourceSig
+    }
+
     func hasSubjectTrack(assetId: String, seed: SubjectSeed) -> Bool {
-        guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
+        guard let base = baseDir else { return false }
         return SubjectSidecarStore.read(
             assetId: assetId, baseDir: base,
-            sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey) != nil
+            sourceSig: stableSourceSig(for: assetId) ?? "", seedKey: seed.seedKey) != nil
     }
 
     func enqueueSubjectTrack(assetId: String, url: URL, seed: SubjectSeed) {
@@ -234,7 +245,7 @@ final class StabilizationManager {
                     Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
                 }
             let sidecar = SubjectSidecar(
-                sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey, fps: fps, frames: frames)
+                sourceSig: stableSourceSig(for: assetId) ?? "", seedKey: seed.seedKey, fps: fps, frames: frames)
             try SubjectSidecarStore.write(sidecar, assetId: assetId, baseDir: base)
             correctionCache.removeAll()
             progressByAsset[assetId] = 1
@@ -259,7 +270,7 @@ final class StabilizationManager {
                       let seed = clip.stabilization?.subjectSeed,
                       seen.insert("\(clip.mediaRef)|\(seed.seedKey)").inserted,
                       !hasSubjectTrack(assetId: clip.mediaRef, seed: seed),
-                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                      let url = editor.trackingInputURL(for: clip.mediaRef) else { continue }
                 enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
             }
         }
@@ -268,10 +279,10 @@ final class StabilizationManager {
     // MARK: - Point tracking
 
     func hasPointsTrack(assetId: String, seed: PointsSeed) -> Bool {
-        guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
+        guard let base = baseDir else { return false }
         return PointSidecarStore.read(
             assetId: assetId, baseDir: base,
-            sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey) != nil
+            sourceSig: stableSourceSig(for: assetId) ?? "", seedKey: seed.seedKey) != nil
     }
 
     func enqueuePointsTrack(assetId: String, url: URL, seed: PointsSeed) {
@@ -312,7 +323,7 @@ final class StabilizationManager {
                     Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
                 }
             let sidecar = PointSidecar(
-                sourceSig: ProxySignature.of(url) ?? "", seedKey: seed.seedKey, fps: fps, frames: frames)
+                sourceSig: stableSourceSig(for: assetId) ?? "", seedKey: seed.seedKey, fps: fps, frames: frames)
             try PointSidecarStore.write(sidecar, assetId: assetId, baseDir: base)
             correctionCache.removeAll()
             progressByAsset[assetId] = 1
@@ -337,7 +348,7 @@ final class StabilizationManager {
                       let seed = clip.stabilization?.pointsSeed,
                       seen.insert("\(clip.mediaRef)|\(seed.seedKey)").inserted,
                       !hasPointsTrack(assetId: clip.mediaRef, seed: seed),
-                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                      let url = editor.trackingInputURL(for: clip.mediaRef) else { continue }
                 enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
             }
         }
@@ -443,8 +454,8 @@ final class StabilizationManager {
     /// live tracking overlay. Nil if there's no subject sidecar yet.
     func subjectMark(for clip: Clip, sourceFrame: Int) -> (center: CGPoint, size: CGSize)? {
         guard let stab = clip.stabilization, stab.engine == .subject, let seed = stab.subjectSeed,
-              let base = baseDir, let url = editor.mediaAssetsById[clip.mediaRef]?.url,
-              let sig = ProxySignature.of(url),
+              let base = baseDir,
+              let sig = stableSourceSig(for: clip.mediaRef),
               let sidecar = SubjectSidecarStore.read(
                   assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
               sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
@@ -461,7 +472,7 @@ final class StabilizationManager {
     func pointMarks(for clip: Clip, sourceFrame: Int) -> [CGPoint]? {
         guard let stab = clip.stabilization, stab.engine == .points, let seed = stab.pointsSeed,
               let base = baseDir, let asset = editor.mediaAssetsById[clip.mediaRef],
-              let sig = ProxySignature.of(asset.url),
+              let sig = stableSourceSig(for: clip.mediaRef),
               let sidecar = PointSidecarStore.read(
                   assetId: clip.mediaRef, baseDir: base, sourceSig: sig, seedKey: seed.seedKey),
               sourceFrame >= 0, sourceFrame < sidecar.frames.count else { return nil }
@@ -489,7 +500,7 @@ final class StabilizationManager {
         // Subject engine: read the seed-keyed sidecar and smooth the subject path (position-only).
         if stab.engine == .subject {
             guard let seed = stab.subjectSeed,
-                  let sourceSig = ProxySignature.of(assetURL),
+                  let sourceSig = ProxySignature.of(assetURL) ?? stableSourceSig(for: clip.mediaRef),
                   let sidecar = SubjectSidecarStore.read(
                       assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig, seedKey: seed.seedKey)
             else { return nil }
@@ -527,7 +538,7 @@ final class StabilizationManager {
         // Point Track engine: read the seed-keyed sidecar and smooth the fitted similarity path.
         if stab.engine == .points {
             guard let seed = stab.pointsSeed,
-                  let sourceSig = ProxySignature.of(assetURL),
+                  let sourceSig = ProxySignature.of(assetURL) ?? stableSourceSig(for: clip.mediaRef),
                   let sidecar = PointSidecarStore.read(
                       assetId: clip.mediaRef, baseDir: base, sourceSig: sourceSig, seedKey: seed.seedKey)
             else { return nil }
@@ -588,9 +599,11 @@ final class StabilizationManager {
             for clip in track.clips where clip.mediaType == .video {
                 // Tracking-preview shows this clip raw so the tracked points visibly ride the object.
                 if clip.id == bypassClipId { continue }
+                // Key on the source's canonical URL (O(1)); corrections falls back to the recorded
+                // source signature when it's offline, so stabilization applies from local proxies too.
                 guard let stab = clip.stabilization, stab.enabled, stab.engine.isNative, clip.speed == 1.0,
-                      let srcURL = editor.mediaResolver.resolveURL(for: clip.mediaRef),
-                      let result = corrections(for: clip, assetURL: srcURL)
+                      let assetURL = editor.mediaAssetsById[clip.mediaRef]?.url,
+                      let result = corrections(for: clip, assetURL: assetURL)
                 else { continue }
                 let zoom = CGFloat(result.cropZoom)
                 // Subject/Point engines smooth into 2D affines; keep them out of the homography branch

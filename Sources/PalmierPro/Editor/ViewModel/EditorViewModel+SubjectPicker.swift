@@ -47,17 +47,23 @@ extension EditorViewModel {
         return s
     }
 
-    /// Enter pick mode: grab the clip's current source frame, detect objects, show the overlay.
+    /// The input the tracker/picker decode from: the proxy when proxies are on (a frame-exact,
+    /// upright re-encode of the source), else the source. nil only when neither is on disk — so
+    /// subject/point tracking keeps working from local proxies with the source volume offline.
+    func trackingInputURL(for assetId: String) -> URL? {
+        let proxy = mediaManifest.useProxies ? mediaResolver.proxyURL(for: assetId) : nil
+        return proxy ?? mediaResolver.resolveURL(for: assetId)
+    }
+
+    /// Enter pick mode: grab the clip's current frame, detect objects, show the overlay.
     func beginSubjectPick(clip: Clip) {
-        guard let source = mediaResolver.resolveURL(for: clip.mediaRef) else {
-            mediaPanelToast = "Subject Lock needs the clip's source file — it appears to be offline."
+        // Grab from the SAME input the tracker will use (proxy when on) so picker and tracker see
+        // identical frames; the proxy preserves frame count and is already upright.
+        guard let input = trackingInputURL(for: clip.mediaRef) else {
+            mediaPanelToast = "Subject Lock needs the clip's media — the source is offline and there's no proxy."
             return
         }
         if isPlaying { pause() }
-        // Grab from the SAME input the tracker will use (proxy when on) so picker and tracker see
-        // identical frames; the proxy preserves frame count and is already upright.
-        let proxy = mediaManifest.useProxies ? mediaResolver.proxyURL(for: clip.mediaRef) : nil
-        let input = proxy ?? source
         let frame = sourceFrame(for: clip)
         let clipId = clip.id
         subjectPickToken &+= 1
@@ -101,7 +107,7 @@ extension EditorViewModel {
         subjectPicker = nil
         stabilizationManager.invalidateCache()
         videoEngine?.refreshVisuals()
-        if let url = mediaResolver.resolveURL(for: clip.mediaRef) {
+        if let url = trackingInputURL(for: clip.mediaRef) {
             stabilizationManager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
         }
     }

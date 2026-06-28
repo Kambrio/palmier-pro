@@ -163,20 +163,20 @@ extension ToolExecutor {
 
     /// Kicks off the right background work for a clip's engine, mirroring the Inspector.
     private static func triggerStabilizationWork(_ editor: EditorViewModel, clip: Clip, stab: Stabilization) {
-        guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
         let manager = editor.stabilizationManager
         switch stab.engine {
         case .vidstab:
+            guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
             manager.enqueueBake(assetId: clip.mediaRef, url: url, smoothness: stab.smoothness)
         case .subject:
-            if let seed = stab.subjectSeed {
-                manager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
-            }
+            // Subject/Point tracking run on the proxy when present, so they work with the source offline.
+            guard let seed = stab.subjectSeed, let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
+            manager.enqueueSubjectTrack(assetId: clip.mediaRef, url: url, seed: seed)
         case .points:
-            if let seed = stab.pointsSeed {
-                manager.enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
-            }
+            guard let seed = stab.pointsSeed, let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
+            manager.enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
         case .l1, .smooth:
+            guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
             manager.analyze(assetId: clip.mediaRef, url: url)
         }
     }

@@ -82,6 +82,9 @@ final class TimelineView: NSView {
     }
 
     private var isUpdatingContentSize = false
+    /// True once the initial-zoom decision has been made for this view, so duplicate first-layout
+    /// passes can't re-run it (and clobber a restored session zoom with fit-to-window).
+    private var didApplyInitialZoom = false
 
     // Nil until first layout; used to detect playhead-anchored zoom changes.
     private var lastAppliedZoomScale: Double?
@@ -96,22 +99,22 @@ final class TimelineView: NSView {
 
         let newVisibleWidth = Double(visibleSize.width)
         if editor.timelineVisibleWidth != newVisibleWidth {
-            let isFirstLayout = editor.timelineVisibleWidth == 0
+            // One-shot, claimed synchronously: timelineVisibleWidth is only updated inside the
+            // deferred block below, so it stays 0 across several early layout passes — without this
+            // flag, a second "first layout" pass would re-decide zoom and clobber the restored value.
+            let isFirstLayout = !didApplyInitialZoom
+            if isFirstLayout { didApplyInitialZoom = true }
+            let restoredZoom = isFirstLayout ? editor.restoredSessionZoom : nil
+            if isFirstLayout { editor.restoredSessionZoom = nil }
             let editor = self.editor
             RunLoop.main.perform(inModes: [.default]) {
                 MainActor.assumeIsolated {
                     editor.timelineVisibleWidth = newVisibleWidth
                     let minZoom = editor.minZoomScale
                     if isFirstLayout {
-                        if let restored = editor.restoredSessionZoom {
-                            // Resume last session's zoom (clamped now that minZoom is known).
-                            editor.zoomScale = min(Zoom.max, max(minZoom, restored))
-                            editor.restoredSessionZoom = nil
-                        } else {
-                            editor.zoomScale = editor.timeline.totalFrames == 0
-                                ? Defaults.pixelsPerFrame
-                                : minZoom
-                        }
+                        // Resume last session's zoom (clamped now that minZoom is known), else fit.
+                        editor.zoomScale = restoredZoom.map { min(Zoom.max, max(minZoom, $0)) }
+                            ?? (editor.timeline.totalFrames == 0 ? Defaults.pixelsPerFrame : minZoom)
                     } else if editor.zoomScale < minZoom {
                         editor.zoomScale = minZoom
                     }

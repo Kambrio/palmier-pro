@@ -50,6 +50,17 @@ final class MediaVisualCache {
 
     // MARK: - Async generation
 
+    /// On-screen visuals (filmstrips/waveforms) decode from a lightweight proxy when one
+    /// exists — proxies carry both video and an AAC audio track, so both thumbnails and
+    /// waveforms decode far faster than from the full-res source. Falls back to source.
+    private func visualURL(for asset: MediaAsset) -> URL {
+        if let editor, editor.mediaManifest.useProxies,
+           let proxy = editor.mediaResolver.proxyURL(for: asset.id) {
+            return proxy
+        }
+        return asset.url
+    }
+
     func generateWaveform(for asset: MediaAsset) {
         guard asset.type == .audio || (asset.type == .video && asset.hasAudio) else { return }
         let key = asset.id
@@ -57,7 +68,7 @@ final class MediaVisualCache {
         waveformInFlight.insert(key)
         editor?.mediaPrepStarted()
 
-        let url = asset.url
+        let url = visualURL(for: asset)
         let editorRef = editor
         Task.detached(priority: .utility) { [weak self] in
             defer { Task { @MainActor in editorRef?.mediaPrepFinished() } }
@@ -109,7 +120,7 @@ final class MediaVisualCache {
         videoThumbnailInFlight.insert(key)
         editor?.mediaPrepStarted()
 
-        let url = asset.url
+        let url = visualURL(for: asset)
         let editorRef = editor
         Task.detached(priority: .utility) { [weak self] in
             defer { Task { @MainActor in editorRef?.mediaPrepFinished() } }

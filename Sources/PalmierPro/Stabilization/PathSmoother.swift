@@ -27,6 +27,25 @@ enum PathSmoother {
         return StabFrameTransform(m: [cs, -sn, tx, sn, cs, ty, 0, 0, 1])
     }
 
+    /// Hampel identifier — replaces transient outliers (sudden one-off bumps) with the local median.
+    /// For each sample, `sigma = 1.4826·MAD` over a window; samples beyond `nSigma·sigma` from the
+    /// local median are anomalies. Leaves normal motion (and degenerate flat windows) untouched.
+    static func hampel(_ xs: [Double], halfWindow: Int = 4, nSigma: Double = 3) -> [Double] {
+        let n = xs.count
+        guard halfWindow > 0, n > 2 * halfWindow + 1 else { return xs }
+        func median(_ a: [Double]) -> Double { a.sorted()[a.count / 2] }
+        var out = xs
+        for i in 0..<n {
+            let lo = max(0, i - halfWindow), hi = min(n - 1, i + halfWindow)
+            let window = Array(xs[lo...hi])
+            let med = median(window)
+            let mad = median(window.map { abs($0 - med) })
+            let sigma = 1.4826 * mad
+            if sigma > 0, abs(xs[i] - med) > nSigma * sigma { out[i] = med }
+        }
+        return out
+    }
+
     /// Gaussian low-pass — organic smoothing that follows the camera more loosely than L1.
     static func gaussianSmooth(_ xs: [Double], sigma: Double) -> [Double] {
         guard xs.count > 1, sigma > 0 else { return xs }
@@ -63,17 +82,28 @@ enum PathSmoother {
         guard !idx.isEmpty else { return Result(corrections: [], cropZoom: 1.0) }
 
         // 1. Decompose each raw frame into the camera path (already absolute/cumulative).
-        var path = idx.map { decompose(raw[$0]) }
+        let rawPath = idx.map { decompose(raw[$0]) }
+        var path = rawPath          // smoothing input (target is computed from this)
+        var baseline = rawPath      // what the correction differences against (output = raw + (target − baseline))
 
-        // Object tracking: low-pass the measured path first so per-frame tracking jitter isn't fed
-        // back as vibration (correction = target − path; differencing against a denoised path keeps
-        // the lock smooth). No-op for camera engines, whose homography path is already accurate.
+        // Object tracking: clean the measured path. `path` (cleaned+denoised) feeds the target so
+        // tracking jitter and spikes don't shape it. `baseline` is denoised normally — so steady
+        // tracking noise isn't reinjected as vibration — but uses the RAW value at Hampel-flagged spike
+        // frames, so an occasional hand-bump IS corrected (pulled back) instead of riding through.
+        // No-op for camera engines, whose homography path is already accurate.
         if denoiseRaw > 0, path.count > 2 {
-            let txd = gaussianSmooth(path.map(\.tx), sigma: denoiseRaw)
-            let tyd = gaussianSmooth(path.map(\.ty), sigma: denoiseRaw)
-            let rotd = gaussianSmooth(path.map(\.rot), sigma: denoiseRaw)
-            let scd = gaussianSmooth(path.map(\.scale), sigma: denoiseRaw)
-            path = path.indices.map { State(tx: txd[$0], ty: tyd[$0], rot: rotd[$0], scale: scd[$0]) }
+            func clean(_ ch: [Double]) -> (target: [Double], base: [Double]) {
+                let h = hampel(ch)                                   // spikes → local median
+                let d = gaussianSmooth(h, sigma: denoiseRaw)         // low-pass the de-spiked channel
+                let base = d.indices.map { h[$0] == ch[$0] ? d[$0] : ch[$0] }   // raw at spikes
+                return (d, base)
+            }
+            let (txT, txB) = clean(rawPath.map(\.tx))
+            let (tyT, tyB) = clean(rawPath.map(\.ty))
+            let (rotT, rotB) = clean(rawPath.map(\.rot))
+            let (scT, scB) = clean(rawPath.map(\.scale))
+            path = rawPath.indices.map { State(tx: txT[$0], ty: tyT[$0], rot: rotT[$0], scale: scT[$0]) }
+            baseline = rawPath.indices.map { State(tx: txB[$0], ty: tyB[$0], rot: rotB[$0], scale: scB[$0]) }
         }
 
         // Native engine selects the smoother. L1 = locked/cinematic (piecewise-linear);
@@ -98,21 +128,22 @@ enum PathSmoother {
             tyS = Array(repeating: p.ty, count: path.count)
         }
 
-        // 3. Correction = smoothed − raw, expressed as a homography.
+        // 3. Correction = smoothed target − baseline, expressed as a homography. Differencing against
+        //    `baseline` (raw at spike frames, denoised elsewhere) corrects bumps without reinjecting noise.
         var corrections: [StabFrameTransform] = []
         var maxAbsTx = 0.0, maxAbsTy = 0.0, maxAbsRot = 0.0
         for k in path.indices {
-            var cor = State(tx: txS[k] - path[k].tx,
-                            ty: tyS[k] - path[k].ty,
-                            rot: (method == .position) ? 0 : rotS[k] - path[k].rot,
-                            scale: (method == .position) ? 1 : scS[k] / max(path[k].scale, 1e-9))
+            var cor = State(tx: txS[k] - baseline[k].tx,
+                            ty: tyS[k] - baseline[k].ty,
+                            rot: (method == .position) ? 0 : rotS[k] - baseline[k].rot,
+                            scale: (method == .position) ? 1 : scS[k] / max(baseline[k].scale, 1e-9))
             // Defense-in-depth: NaN-safe clamp so no non-finite value can reach a correction matrix.
             cor.tx = safeClamp(cor.tx, -0.25, 0.25)
             cor.ty = safeClamp(cor.ty, -0.25, 0.25)
             cor.rot = safeClamp(cor.rot, -0.35, 0.35)
             cor.scale = cor.scale.isFinite ? min(max(cor.scale, 0.5), 2.0) : 1.0
             // Object tracking pivots rotation/scale about the object's own centroid (its raw position).
-            let (px, py) = objectPivot ? (path[k].tx, path[k].ty) : (0.5, 0.5)
+            let (px, py) = objectPivot ? (baseline[k].tx, baseline[k].ty) : (0.5, 0.5)
             corrections.append(compose(cor, cx: px, cy: py))
             maxAbsTx = max(maxAbsTx, abs(cor.tx))
             maxAbsTy = max(maxAbsTy, abs(cor.ty))

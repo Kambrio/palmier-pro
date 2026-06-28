@@ -996,6 +996,14 @@ final class TimelineView: NSView {
             item.representedObject = clip.id
             mediaItems.append(item)
         }
+        // Shot labels (footage tagging, single clip)
+        var labelItems: [NSMenuItem] = []
+        if singleLinkGroup, let labelSubmenu = shotLabelSubmenu(for: clip) {
+            let labelItem = NSMenuItem(title: "Label", action: nil, keyEquivalent: "")
+            labelItem.submenu = labelSubmenu
+            labelItems.append(labelItem)
+        }
+
         // Sync
         var syncItems: [NSMenuItem] = []
         if let pair = editor.audioSyncSelection() {
@@ -1005,7 +1013,7 @@ final class TimelineView: NSView {
             syncItems.append(syncItem)
         }
 
-        for group in [timelineItems, aiItems, mediaItems, syncItems] where !group.isEmpty {
+        for group in [timelineItems, aiItems, mediaItems, labelItems, syncItems] where !group.isEmpty {
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             group.forEach { menu.addItem($0) }
         }

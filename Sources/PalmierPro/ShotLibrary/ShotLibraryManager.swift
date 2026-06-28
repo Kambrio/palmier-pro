@@ -163,6 +163,16 @@ final class ShotLibraryManager {
         }
     }
 
+    /// Toggle a label, creating a minimal shot entry first if the footage hasn't been analyzed —
+    /// so footage can be labeled directly from the timeline before (or without) analysis. The bare
+    /// entry is `edited` + has no sourceSig, so a later analysis still runs and preserves the label.
+    func toggleLabelEnsuringEntry(assetId: String, _ rawLabel: String) {
+        if editor.shotLibrary.entry(assetId: assetId) == nil {
+            editor.shotLibrary.upsert(ShotEntry(assetId: assetId))
+        }
+        toggleLabel(assetId: assetId, rawLabel)
+    }
+
     func setLabels(assetId: String, _ labels: [String]) {
         let normalized = labels.map(ShotLabels.normalize).filter { !$0.isEmpty }
         mutate(assetId) { $0.labels = Array(NSOrderedSet(array: normalized).array as? [String] ?? []); $0.edited = true }

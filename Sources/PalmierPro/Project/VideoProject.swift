@@ -10,6 +10,9 @@ private struct ProjectPackageContents: Sendable {
     var shotLibrary: ShotLibrary?
     var storyGraph: StoryGraph?
     var viewState: ProjectViewState?
+    /// File was present but failed to decode — preserve it rather than overwrite with an empty session.
+    var shotLibraryReadFailed = false
+    var storyGraphReadFailed = false
 }
 
 private struct ProjectPackageSnapshot: Sendable {
@@ -21,6 +24,9 @@ private struct ProjectPackageSnapshot: Sendable {
     var viewState: Data?
     var thumbnail: Data?
     var chatSessionFiles: [(name: String, data: Data)]
+    /// Leave the on-disk file untouched (a present-but-undecodable file we won't clobber).
+    var skipShotLibrary = false
+    var skipStoryGraph = false
 }
 
 private struct RestoredMediaCandidate: Sendable {
@@ -42,6 +48,10 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var loadedShotLibrary: ShotLibrary?
     private nonisolated(unsafe) var loadedStoryGraph: StoryGraph?
     private nonisolated(unsafe) var loadedViewState: ProjectViewState?
+    /// Set when a present shot-library/story-graph file failed to decode this session; while set
+    /// (and the in-memory copy is empty) writes leave the on-disk file alone so it stays recoverable.
+    private nonisolated(unsafe) var shotLibraryReadFailed = false
+    private nonisolated(unsafe) var storyGraphReadFailed = false
 
     /// Captured on main thread before writes may continue off-main.
     private nonisolated(unsafe) var snapshotTimeline: Data?
@@ -54,6 +64,8 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var snapshotChatSessionFiles: [(name: String, data: Data)] = []
     private nonisolated(unsafe) var snapshotSourceProjectURL: URL?
     private nonisolated(unsafe) var snapshotPreparedForWrite = false
+    private nonisolated(unsafe) var snapshotSkipShotLibrary = false
+    private nonisolated(unsafe) var snapshotSkipStoryGraph = false
 
     // MARK: - Persistence
 
@@ -82,6 +94,8 @@ final class VideoProject: NSDocument {
         loadedShotLibrary = contents.shotLibrary
         loadedStoryGraph = contents.storyGraph
         loadedViewState = contents.viewState
+        shotLibraryReadFailed = contents.shotLibraryReadFailed
+        storyGraphReadFailed = contents.storyGraphReadFailed
         Log.project.notice(
             "read ok tracks=\(self.loadedTimeline?.tracks.count ?? 0)",
             telemetry: "Project read",
@@ -119,11 +133,29 @@ final class VideoProject: NSDocument {
         let generationLog = try optionalData(Project.generationLogFilename, in: url)
             .flatMap { try? JSONDecoder().decode(GenerationLog.self, from: $0) }
 
-        let shotLibrary = try optionalData(Project.shotLibraryFilename, in: url)
-            .flatMap { try? JSONDecoder().decode(ShotLibrary.self, from: $0) }
+        // Distinguish "absent" from "present but undecodable": on a decode failure we must NOT let
+        // a later empty autosave delete/overwrite the file — the user's analysis may be recoverable.
+        var shotLibraryReadFailed = false
+        let shotLibrary: ShotLibrary?
+        if let data = try optionalData(Project.shotLibraryFilename, in: url) {
+            do { shotLibrary = try JSONDecoder().decode(ShotLibrary.self, from: data) }
+            catch {
+                Log.project.error("shot-library decode failed bytes=\(data.count) error=\(String(describing: error)) — preserving file")
+                shotLibrary = nil
+                shotLibraryReadFailed = true
+            }
+        } else { shotLibrary = nil }
 
-        let storyGraph = try optionalData(Project.storyGraphFilename, in: url)
-            .flatMap { try? JSONDecoder().decode(StoryGraph.self, from: $0) }
+        var storyGraphReadFailed = false
+        let storyGraph: StoryGraph?
+        if let data = try optionalData(Project.storyGraphFilename, in: url) {
+            do { storyGraph = try JSONDecoder().decode(StoryGraph.self, from: data) }
+            catch {
+                Log.project.error("story-graph decode failed bytes=\(data.count) error=\(String(describing: error)) — preserving file")
+                storyGraph = nil
+                storyGraphReadFailed = true
+            }
+        } else { storyGraph = nil }
 
         let viewState = try optionalData(Project.viewStateFilename, in: url)
             .flatMap { try? JSONDecoder().decode(ProjectViewState.self, from: $0) }
@@ -134,7 +166,9 @@ final class VideoProject: NSDocument {
             generationLog: generationLog,
             shotLibrary: shotLibrary,
             storyGraph: storyGraph,
-            viewState: viewState
+            viewState: viewState,
+            shotLibraryReadFailed: shotLibraryReadFailed,
+            storyGraphReadFailed: storyGraphReadFailed
         )
     }
 
@@ -177,7 +211,9 @@ final class VideoProject: NSDocument {
                 storyGraph: snapshotStoryGraph,
                 viewState: snapshotViewState,
                 thumbnail: snapshotThumbnail,
-                chatSessionFiles: snapshotChatSessionFiles
+                chatSessionFiles: snapshotChatSessionFiles,
+                skipShotLibrary: snapshotSkipShotLibrary,
+                skipStoryGraph: snapshotSkipStoryGraph
             ),
             to: url,
             sourceURL: snapshotSourceProjectURL
@@ -188,10 +224,14 @@ final class VideoProject: NSDocument {
         snapshotTimeline = try? JSONEncoder().encode(editorViewModel.timeline)
         snapshotManifest = try? JSONEncoder().encode(editorViewModel.mediaManifest)
         snapshotGenerationLog = try? JSONEncoder().encode(editorViewModel.generationLog)
-        snapshotShotLibrary = editorViewModel.shotLibrary.entries.isEmpty
-            ? nil : try? JSONEncoder().encode(editorViewModel.shotLibrary)
-        snapshotStoryGraph = editorViewModel.storyGraph.isEmpty
-            ? nil : try? JSONEncoder().encode(editorViewModel.storyGraph)
+        // Always encode (even when empty → "{...entries:[]}") so a legitimate clear is persisted
+        // WITHOUT deleting the file — deleting turned any transient empty into permanent data loss.
+        snapshotShotLibrary = try? JSONEncoder().encode(editorViewModel.shotLibrary)
+        snapshotStoryGraph = try? JSONEncoder().encode(editorViewModel.storyGraph)
+        // If the file was present but undecodable this session and we have nothing better in memory,
+        // leave it on disk for recovery rather than clobbering it.
+        snapshotSkipShotLibrary = shotLibraryReadFailed && editorViewModel.shotLibrary.entries.isEmpty
+        snapshotSkipStoryGraph = storyGraphReadFailed && editorViewModel.storyGraph.isEmpty
         let viewState = editorViewModel.currentViewState()
         snapshotViewState = viewState.isDefault ? nil : try? JSONEncoder().encode(viewState)
         snapshotThumbnail = captureThumbnail()
@@ -228,19 +268,16 @@ final class VideoProject: NSDocument {
         if let log = snapshot.generationLog {
             try log.write(to: packageURL.appendingPathComponent(Project.generationLogFilename), options: .atomic)
         }
-        // Write when present; DELETE when empty/nil — an in-place autosave reuses the package dir,
-        // so a stale non-empty file would otherwise resurrect cleared data on reopen.
+        // Always overwrite with the current state (empty → "{entries:[]}"), so a legitimate clear
+        // persists without resurrecting on reopen — but NEVER delete (a transient empty must not wipe
+        // saved analysis). `skip*` leaves a present-but-undecodable file untouched for recovery.
         let shotLibraryURL = packageURL.appendingPathComponent(Project.shotLibraryFilename)
-        if let shotLibrary = snapshot.shotLibrary {
+        if !snapshot.skipShotLibrary, let shotLibrary = snapshot.shotLibrary {
             try shotLibrary.write(to: shotLibraryURL, options: .atomic)
-        } else {
-            try? fm.removeItem(at: shotLibraryURL)
         }
         let storyGraphURL = packageURL.appendingPathComponent(Project.storyGraphFilename)
-        if let storyGraph = snapshot.storyGraph {
+        if !snapshot.skipStoryGraph, let storyGraph = snapshot.storyGraph {
             try storyGraph.write(to: storyGraphURL, options: .atomic)
-        } else {
-            try? fm.removeItem(at: storyGraphURL)
         }
         let viewStateURL = packageURL.appendingPathComponent(Project.viewStateFilename)
         if let viewState = snapshot.viewState {

@@ -166,7 +166,7 @@ extension ToolExecutor {
         let manager = editor.stabilizationManager
         switch stab.engine {
         case .vidstab:
-            guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+            guard let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
             manager.enqueueBake(assetId: clip.mediaRef, url: url, smoothness: stab.smoothness)
         case .subject:
             // Subject/Point tracking run on the proxy when present, so they work with the source offline.
@@ -176,7 +176,7 @@ extension ToolExecutor {
             guard let seed = stab.pointsSeed, let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
             manager.enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
         case .l1, .smooth:
-            guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+            guard let url = editor.sourcePreferredInputURL(for: clip.mediaRef) else { return }
             manager.analyze(assetId: clip.mediaRef, url: url)
         }
     }

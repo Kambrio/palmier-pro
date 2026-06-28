@@ -688,7 +688,7 @@ struct InspectorView: View {
 
     private func triggerStabilizationAnalysis(_ clip: Clip) {
         guard !editor.stabilizationManager.hasAnalysis(assetId: clip.mediaRef),
-              let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+              let url = editor.sourcePreferredInputURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.analyze(assetId: clip.mediaRef, url: url)
     }
 
@@ -708,7 +708,7 @@ struct InspectorView: View {
     }
 
     private func triggerBake(clip: Clip, smoothness: Double) {
-        guard let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { return }
+        guard let url = editor.trackingInputURL(for: clip.mediaRef) else { return }
         editor.stabilizationManager.enqueueBake(assetId: clip.mediaRef, url: url, smoothness: smoothness)
     }
 

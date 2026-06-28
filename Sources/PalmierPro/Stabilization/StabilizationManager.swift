@@ -57,8 +57,7 @@ final class StabilizationManager {
     /// renderer falls back to source (and reconcile re-bakes at the right resolution).
     func stabilizedURL(for assetId: String) -> URL? {
         guard let dir = stabilizedDir,
-              let sourceURL = editor.mediaAssetsById[assetId]?.url,
-              let sourceSig = ProxySignature.of(sourceURL) else { return nil }
+              let sourceSig = stableSourceSig(for: assetId) else { return nil }
         let mov = dir.appendingPathComponent("\(assetId).mov")
         let sig = dir.appendingPathComponent("\(assetId).sig")
         guard FileManager.default.fileExists(atPath: mov.path),
@@ -71,8 +70,7 @@ final class StabilizationManager {
     /// the ffmpeg capability (deshake→vidstab), OR the proxy state (proxy-res↔source-res) changes.
     private func hasCurrentBake(assetId: String, smoothness: Double) -> Bool {
         guard let dir = stabilizedDir,
-              let sourceURL = editor.mediaAssetsById[assetId]?.url,
-              let sourceSig = ProxySignature.of(sourceURL) else { return false }
+              let sourceSig = stableSourceSig(for: assetId) else { return false }
         let sig = dir.appendingPathComponent("\(assetId).sig")
         guard let stored = try? String(contentsOf: sig, encoding: .utf8) else { return false }
         return stored == "\(sourceSig)|\(smoothness)|\(VidStab.capability)|\(previewResTag)"
@@ -124,7 +122,7 @@ final class StabilizationManager {
                     Task { @MainActor [weak self] in self?.bakeProgress[assetId] = p }
                 }
             // Write sidecar sig (sourceSig|smoothness|capability|resTag) after successful bake.
-            if let sourceSig = ProxySignature.of(url) {
+            if let sourceSig = stableSourceSig(for: assetId) {
                 try? "\(sourceSig)|\(smoothness)|\(cap)|\(resTag)".write(to: sigFile, atomically: true, encoding: .utf8)
             }
             bakeProgress[assetId] = 1
@@ -180,7 +178,7 @@ final class StabilizationManager {
                 guard clip.stabilization?.enabled == true,
                       clip.stabilization?.engine == .vidstab,
                       seen.insert(clip.mediaRef).inserted,
-                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                      let url = editor.trackingInputURL(for: clip.mediaRef) else { continue }
                 let smoothness = clip.stabilization?.smoothness ?? 0.5
                 enqueueBake(assetId: clip.mediaRef, url: url, smoothness: smoothness)
             }
@@ -355,9 +353,9 @@ final class StabilizationManager {
     }
 
     func hasAnalysis(assetId: String) -> Bool {
-        guard let base = baseDir, let url = editor.mediaAssetsById[assetId]?.url else { return false }
+        guard let base = baseDir else { return false }
         return StabilizationSidecar.read(
-            assetId: assetId, baseDir: base, requiringSig: ProxySignature.of(url)) != nil
+            assetId: assetId, baseDir: base, requiringSig: stableSourceSig(for: assetId)) != nil
     }
 
     /// Re-queue analysis for any stabilization-enabled clip whose sidecar is missing or stale —
@@ -375,7 +373,7 @@ final class StabilizationManager {
                       clip.stabilization?.engine != .points,
                       seen.insert(clip.mediaRef).inserted,
                       !hasAnalysis(assetId: clip.mediaRef),
-                      let url = editor.mediaResolver.resolveURL(for: clip.mediaRef) else { continue }
+                      let url = editor.sourcePreferredInputURL(for: clip.mediaRef) else { continue }
                 analyze(assetId: clip.mediaRef, url: url)
             }
         }
@@ -428,12 +426,13 @@ final class StabilizationManager {
         defer { Task { await Self.gate.signal() } }
         progressByAsset[assetId] = 0
         do {
-            // Analyze the SOURCE (downscaled internally): low-res proxy registration is too noisy
-            // and the noise, applied as a correction, makes footage shakier instead of steadier.
+            // Prefer the SOURCE (downscaled internally): low-res proxy registration is too noisy and
+            // the noise, applied as a correction, makes footage shakier. `url` is source when online,
+            // else the proxy (noisier but lets analysis run with the source volume disconnected).
             let (fps, frames) = try await StabilizationAnalyzer.analyze(url: url) { p in
                 Task { @MainActor [weak self] in self?.progressByAsset[assetId] = p }
             }
-            let payload = StabSidecar(sourceSig: ProxySignature.of(url) ?? "", fps: fps, frames: frames)
+            let payload = StabSidecar(sourceSig: stableSourceSig(for: assetId) ?? "", fps: fps, frames: frames)
             try StabilizationSidecar.write(payload, assetId: assetId, baseDir: base)
             correctionCache.removeAll()
             progressByAsset[assetId] = 1
@@ -574,7 +573,7 @@ final class StabilizationManager {
 
         guard let sidecar = StabilizationSidecar.read(
             assetId: clip.mediaRef, baseDir: base,
-            requiringSig: ProxySignature.of(assetURL)) else { return nil }
+            requiringSig: ProxySignature.of(assetURL) ?? stableSourceSig(for: clip.mediaRef)) else { return nil }
         let start = clip.trimStartFrame
         let end = min(sidecar.frames.count, start + clip.sourceFramesConsumed)
         let result = PathSmoother.corrections(

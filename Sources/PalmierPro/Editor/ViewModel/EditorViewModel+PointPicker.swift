@@ -22,8 +22,8 @@ extension EditorViewModel {
     /// Enter point-placing mode for `clip`. No detection needed — the live preview already shows the
     /// frame; we only seed the session (with any existing points when editing) and pause playback.
     func beginPointPick(clip: Clip) {
-        guard mediaResolver.resolveURL(for: clip.mediaRef) != nil else {
-            mediaPanelToast = "Point Track needs the clip's source file — it appears to be offline."
+        guard trackingInputURL(for: clip.mediaRef) != nil else {
+            mediaPanelToast = "Point Track needs the clip's media — the source is offline and there's no proxy."
             return
         }
         if isPlaying { pause() }
@@ -73,7 +73,7 @@ extension EditorViewModel {
         pointPick = nil
         stabilizationManager.invalidateCache()
         videoEngine?.refreshVisuals()
-        if let url = mediaResolver.resolveURL(for: clip.mediaRef) {
+        if let url = trackingInputURL(for: clip.mediaRef) {
             stabilizationManager.enqueuePointsTrack(assetId: clip.mediaRef, url: url, seed: seed)
         }
     }

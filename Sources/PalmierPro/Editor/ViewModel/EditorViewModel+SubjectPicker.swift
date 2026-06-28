@@ -55,6 +55,14 @@ extension EditorViewModel {
         return proxy ?? mediaResolver.resolveURL(for: assetId)
     }
 
+    /// Like `trackingInputURL` but prefers the SOURCE — for analyzers (L1/Smooth global motion
+    /// estimation) that are too noisy on a low-res proxy. Falls back to the proxy only when the
+    /// source is offline, so analysis still works (a bit noisier) from local proxies.
+    func sourcePreferredInputURL(for assetId: String) -> URL? {
+        mediaResolver.resolveURL(for: assetId)
+            ?? (mediaManifest.useProxies ? mediaResolver.proxyURL(for: assetId) : nil)
+    }
+
     /// Enter pick mode: grab the clip's current frame, detect objects, show the overlay.
     func beginSubjectPick(clip: Clip) {
         // Grab from the SAME input the tracker will use (proxy when on) so picker and tracker see

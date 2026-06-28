@@ -55,6 +55,7 @@ final class SkillStore {
     private static var ledgerURL: URL { directory.appendingPathComponent(".installed.json") }
 
     private var reloadGeneration = 0
+    private var didSeedBundled = false
 
     private init() {
         installed = Self.loadLedger()
@@ -69,9 +70,72 @@ final class SkillStore {
     func reloadInBackground() async {
         reloadGeneration += 1
         let generation = reloadGeneration
-        let scan = await Task.detached(priority: .utility) { Self.scan() }.value
+        let seed = !didSeedBundled
+        didSeedBundled = true
+        let scan = await Task.detached(priority: .utility) {
+            if seed { Self.seedBundledSkills() }   // once per launch, before the scan
+            return Self.scan()
+        }.value
         guard generation == reloadGeneration else { return }
         apply(scan)
+    }
+
+    // MARK: Bundled fork skills
+
+    nonisolated private static let bundledMarkerName = ".palmier-bundled.json"
+
+    /// Seeds the app-bundled fork skills (Resources/Skills/<id>/SKILL.md) into ~/.palmier/skills so
+    /// the in-app agent and the Skills pane see them. Never clobbers a user-authored or catalog skill,
+    /// and refreshes a previously-seeded copy on app update ONLY if the user hasn't edited it (sha match).
+    nonisolated static func seedBundledSkills() {
+        guard let src = ClaudeCLISkills.bundledSkillsURL else { return }
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
+        seedBundledSkills(from: src, into: directory, version: version)
+    }
+
+    /// Path-injected core (testable). See `seedBundledSkills()` for the production entry point.
+    nonisolated static func seedBundledSkills(from src: URL, into root: URL, version: String) {
+        let fm = FileManager.default
+        let markerURL = root.appendingPathComponent(bundledMarkerName)
+
+        var prevShas: [String: String] = [:]
+        if let data = try? Data(contentsOf: markerURL),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            prevShas = (obj["shas"] as? [String: String]) ?? [:]
+        }
+        guard let entries = try? fm.contentsOfDirectory(at: src, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
+
+        var shas = prevShas
+        for dir in entries where (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let id = dir.lastPathComponent
+            guard isValidSkillId(id) else { continue }
+            guard let bundledText = try? String(contentsOf: dir.appendingPathComponent("SKILL.md"), encoding: .utf8) else { continue }
+            let bundledSha = sha12(Data(bundledText.utf8))
+            let destDir = root.appendingPathComponent(id, isDirectory: true)
+            let destMd = destDir.appendingPathComponent("SKILL.md")
+
+            if !fm.fileExists(atPath: destMd.path) {
+                try? fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+                try? bundledText.write(to: destMd, atomically: true, encoding: .utf8)
+                shas[id] = bundledSha
+            } else if let recorded = prevShas[id] {
+                // We seeded this before. Refresh only when our copy is pristine and the bundle changed.
+                let destSha = (try? String(contentsOf: destMd, encoding: .utf8)).map { sha12(Data($0.utf8)) }
+                if destSha == recorded {
+                    if bundledSha != recorded {
+                        try? bundledText.write(to: destMd, atomically: true, encoding: .utf8)
+                        shas[id] = bundledSha
+                    }
+                } else {
+                    shas[id] = destSha   // user edited our copy → stop refreshing, respect their edits
+                }
+            }
+            // else: a pre-existing folder we didn't seed (user/catalog) — leave it untouched.
+        }
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: ["version": version, "shas": shas]) {
+            try? data.write(to: markerURL, options: .atomic)
+        }
     }
 
     private func apply(_ scan: SkillScan) {

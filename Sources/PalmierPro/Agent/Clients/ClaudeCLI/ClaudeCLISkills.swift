@@ -9,7 +9,7 @@ import Foundation
 /// read-only, code-signed app bundle) avoids translocation/permission issues.
 enum ClaudeCLISkills {
     /// Bundled `Skills` resource directory — packaged `.app` or `swift run` layout.
-    private static var bundledSkillsURL: URL? {
+    static var bundledSkillsURL: URL? {
         guard let root = Bundle.main.resourceURL else { return nil }
         let candidates = [
             root.appendingPathComponent("Skills", isDirectory: true),                                   // packaged .app

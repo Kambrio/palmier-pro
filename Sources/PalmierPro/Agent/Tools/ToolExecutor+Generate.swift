@@ -240,13 +240,20 @@ extension ToolExecutor {
     }
 
     func generateAudio(_ editor: EditorViewModel, _ args: [String: Any]) async throws -> ToolResult {
-        guard AccountService.shared.isSignedIn else {
-            throw ToolError("Generation requires signing in to Palmier. Tell the user to sign in.")
+        let useOmniVoice = GenerationProvider.selected == .omnivoice
+            || (args.string("model") ?? "") == OmniVoiceCatalog.modelId
+
+        if !useOmniVoice {
+            guard AccountService.shared.isSignedIn else {
+                throw ToolError("Generation requires signing in to Palmier. Tell the user to sign in.")
+            }
+            guard AccountService.shared.hasCredits else {
+                throw ToolError("Out of credits. Tell the user to add credits or subscribe to keep generating.")
+            }
         }
-        guard AccountService.shared.hasCredits else {
-            throw ToolError("Out of credits. Tell the user to add credits or subscribe to keep generating.")
-        }
-        guard let modelId = args.string("model") ?? AudioModelConfig.allModels.first?.id else {
+
+        let defaultModelId = useOmniVoice ? OmniVoiceCatalog.modelId : AudioModelConfig.allModels.first?.id
+        guard let modelId = args.string("model") ?? defaultModelId else {
             throw ToolError("Model catalog not loaded yet. Try again in a moment.")
         }
         guard let model = AudioModelConfig.allModels.first(where: { $0.id == modelId }) else {
@@ -310,17 +317,31 @@ extension ToolExecutor {
             throw ToolError(err)
         }
 
-        let genInput = GenerationInput(
+        // OmniVoice: resolve a voice-reference asset (for cloning) to a local file path.
+        var omniVoiceRefPath: String?
+        var omniVoiceLanguage: String?
+        if useOmniVoice {
+            omniVoiceLanguage = args.string("language") ?? "English"
+            if let voiceRef = args.string("voice"),
+               let voiceAsset = try? asset(voiceRef, editor: editor, label: "Voice reference"),
+               voiceAsset.type == .audio,
+               let url = editor.mediaResolver.resolveURL(for: voiceAsset.id) {
+                omniVoiceRefPath = url.path
+            }
+        }
+
+        var genInput = GenerationInput(
             prompt: prompt,
             model: model.id,
             duration: durationSeconds ?? 0,
             aspectRatio: "",
             resolution: nil,
-            voice: params.voice,
+            voice: omniVoiceRefPath ?? params.voice,
             lyrics: params.lyrics,
             styleInstructions: params.styleInstructions,
             instrumental: model.supportsInstrumental ? instrumental : nil
         )
+        genInput.language = omniVoiceLanguage
 
         let folderId = try resolveFolderId(args, editor: editor)
         let submission = AudioGenerationSubmission.make(

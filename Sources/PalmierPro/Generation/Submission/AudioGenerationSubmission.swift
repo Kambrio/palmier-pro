@@ -34,7 +34,7 @@ struct AudioGenerationSubmission {
                 }
                 return .audio(resolvedParams)
             },
-            fileExtension: "mp3",
+            fileExtension: GenerationProvider.selected == .omnivoice ? "wav" : "mp3",
             projectURL: projectURL,
             editor: editor,
             onComplete: onComplete,

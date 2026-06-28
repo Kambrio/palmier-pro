@@ -82,6 +82,9 @@ final class TimelineView: NSView {
     }
 
     private var isUpdatingContentSize = false
+    /// True once the initial-zoom decision has been made for this view, so duplicate first-layout
+    /// passes can't re-run it (and clobber a restored session zoom with fit-to-window).
+    private var didApplyInitialZoom = false
 
     // Nil until first layout; used to detect playhead-anchored zoom changes.
     private var lastAppliedZoomScale: Double?
@@ -96,16 +99,26 @@ final class TimelineView: NSView {
 
         let newVisibleWidth = Double(visibleSize.width)
         if editor.timelineVisibleWidth != newVisibleWidth {
-            let isFirstLayout = editor.timelineVisibleWidth == 0
+            // One-shot, claimed synchronously: timelineVisibleWidth is only updated inside the
+            // deferred block below, so it stays 0 across several early layout passes — without this
+            // flag, a second "first layout" pass would re-decide zoom and clobber the restored value.
+            let isFirstLayout = !didApplyInitialZoom
+            if isFirstLayout { didApplyInitialZoom = true }
             let editor = self.editor
             RunLoop.main.perform(inModes: [.default]) {
                 MainActor.assumeIsolated {
                     editor.timelineVisibleWidth = newVisibleWidth
                     let minZoom = editor.minZoomScale
-                    if isFirstLayout {
+                    // Read restoredSessionZoom at PERFORM time, not schedule time: the first layout is
+                    // often scheduled before applyViewState runs, so capturing it earlier saw nil and
+                    // fit-to-window clobbered the restored zoom. Whichever pass runs after the restore
+                    // consumes it here.
+                    if let restored = editor.restoredSessionZoom {
+                        editor.zoomScale = min(Zoom.max, max(minZoom, restored))
+                        editor.restoredSessionZoom = nil
+                    } else if isFirstLayout {
                         editor.zoomScale = editor.timeline.totalFrames == 0
-                            ? Defaults.pixelsPerFrame
-                            : minZoom
+                            ? Defaults.pixelsPerFrame : minZoom
                     } else if editor.zoomScale < minZoom {
                         editor.zoomScale = minZoom
                     }
@@ -210,6 +223,7 @@ final class TimelineView: NSView {
             drawRippleInsertGapBand(preview: rippleInsertPreview, geometry: geo, context: ctx)
         }
         drawClips(geometry: geo, dirtyRect: dirtyRect, context: ctx, rippleInsertPreview: rippleInsertPreview)
+        drawStoryPreviewBands(geometry: geo, dirtyRect: dirtyRect, context: ctx)
         drawGapSelection(geometry: geo, context: ctx)
         syncGeneratingClipOverlays(geometry: geo)
 
@@ -322,14 +336,32 @@ final class TimelineView: NSView {
 
         let linkOffsets = editor.linkGroupOffsets()
 
+        // When zoomed out, clips can be only a few pixels wide — too thin to show their own chrome
+        // (strip, border, label). Drawing each as a full clip (paths + fills + strokes) is the
+        // dominant scroll/playback cost on dense timelines. Instead, coalesce adjacent same-type
+        // clips below this width into ONE fill — visually a continuous strip, which is honest at a
+        // zoom where individual boundaries aren't resolvable. Hit-testing still uses per-clip rects.
+        let coalesceMinWidth: CGFloat = 6
+        let coalesceCornerRadius = Trim.clipCornerRadius
+
         clipDisplayRects.removeAll(keepingCapacity: true)
         for (ti, track) in editor.timeline.tracks.enumerated() {
+            var run: (type: ClipType, rect: NSRect)?
+            func flushRun() {
+                guard let r = run else { return }
+                ctx.setFillColor(r.type.themeColor.withAlphaComponent(0.3).cgColor)
+                let p = CGPath(roundedRect: r.rect, cornerWidth: coalesceCornerRadius, cornerHeight: coalesceCornerRadius, transform: nil)
+                ctx.addPath(p)
+                ctx.fillPath()
+                run = nil
+            }
             for clip in track.clips {
                 let isSelected = editor.selectedClipIds.contains(clip.id)
                 let clipMissing = editor.isClipMediaOffline(clip)
                 let clipGenerating = editor.isClipMediaGenerating(clip)
 
                 if let shiftDelta = rippleInsertPreview?.shiftDeltasByClipId[clip.id] {
+                    flushRun()
                     var previewClip = clip
                     previewClip.startFrame += shiftDelta
                     let previewRect = geo.clipRect(for: previewClip, trackIndex: ti)
@@ -345,6 +377,7 @@ final class TimelineView: NSView {
                 }
 
                 if let drag = moveDrag, allDraggedIds.contains(clip.id) {
+                    flushRun()
                     let originalRect = geo.clipRect(for: clip, trackIndex: ti)
 
                     if originalRect.intersects(dirtyRect) {
@@ -387,6 +420,7 @@ final class TimelineView: NSView {
                    clip.id == drag.clipId || trimPartnerIds.contains(clip.id),
                    // Ripple drags with no resize preview at rest.
                    !(drag.isRipple && rippleResizeByClip[clip.id] == nil) {
+                    flushRun()
                     var previewClip = clip
                     if let resize = rippleResizeByClip[clip.id] {
                         // Ripple: start stays anchored; the plan's resize grows/shrinks the tail.
@@ -417,6 +451,7 @@ final class TimelineView: NSView {
                 }
 
                 if let shiftedStart = rippleShiftByClip[clip.id] {
+                    flushRun()
                     var shiftedClip = clip
                     shiftedClip.startFrame = shiftedStart
                     let shiftedRect = geo.clipRect(for: shiftedClip, trackIndex: ti)
@@ -434,7 +469,21 @@ final class TimelineView: NSView {
 
                 let rect = geo.clipRect(for: clip, trackIndex: ti)
                 clipDisplayRects[clip.id] = rect
-                guard rect.intersects(dirtyRect) else { continue }
+                guard rect.intersects(dirtyRect) else { flushRun(); continue }
+
+                // Too thin to resolve individually → merge into the running same-type block.
+                if rect.width < coalesceMinWidth, !isSelected, !clipMissing, !clipGenerating {
+                    if var r = run, r.type == clip.sourceClipType, rect.minX <= r.rect.maxX + 2 {
+                        r.rect = r.rect.union(rect)
+                        run = r
+                    } else {
+                        flushRun()
+                        run = (clip.sourceClipType, rect)
+                    }
+                    continue
+                }
+
+                flushRun()
                 editor.requestClipVisuals(for: clip)   // lazy: generate visuals only for on-screen clips
                 ClipRenderer.draw(clip, type: clip.mediaType, in: rect,
                                   isSelected: isSelected, context: ctx,
@@ -443,6 +492,7 @@ final class TimelineView: NSView {
                                   linkOffset: linkOffsets[clip.id],
                                   fps: editor.timeline.fps, isMissing: clipMissing, isGenerating: clipGenerating)
             }
+            flushRun()
         }
 
         // Red wall at the obstacle frame — the sync-locked clip edge the ripple butts against.
@@ -508,6 +558,43 @@ final class TimelineView: NSView {
             ctx.addLine(to: CGPoint(x: x, y: Double(scrollOffset.y + geo.rulerHeight)))
         }
         ctx.strokePath()
+    }
+
+    /// "Preview story on the timeline": tint each beat's clip span and label it with the beat title,
+    /// color-coded by beat order. Non-destructive overlay driven by editor.storyPreviewBands.
+    /// Culls to dirtyRect (like drawClips) so only on-screen bands pay the fill + text-layout cost —
+    /// this runs on every scroll/playback frame, and uncull­ed per-band text layout made the editor lag.
+    private func drawStoryPreviewBands(geometry geo: TimelineGeometry, dirtyRect: NSRect, context ctx: CGContext) {
+        let bands = editor.storyPreviewBands
+        guard !bands.isEmpty else { return }
+        let top = Double(geo.rulerHeight)
+        let bottom = Double(bounds.height)
+        guard bottom > top else { return }
+        // Bridge the 8-color palette once per redraw, not once per band.
+        let palette = AppTheme.Label.palette.map { NSColor($0) }
+        let font = NSFont.systemFont(ofSize: AppTheme.FontSize.xs, weight: .semibold)
+        for band in bands {
+            let minX = geo.xForFrame(band.startFrame)
+            let maxX = geo.xForFrame(band.endFrame)
+            let width = maxX - minX
+            guard width > 0 else { continue }
+            // Skip bands outside the dirty x-range — no off-screen fills or text layout.
+            guard maxX >= dirtyRect.minX, minX <= dirtyRect.maxX else { continue }
+            let color = palette[((band.colorIndex % palette.count) + palette.count) % palette.count]
+            // Low-alpha full-height tint so the underlying clips stay visible.
+            ctx.setFillColor(color.withAlphaComponent(0.13).cgColor)
+            ctx.fill(NSRect(x: minX, y: top, width: width, height: bottom - top))
+            // Accent bar at the top of the track area.
+            ctx.setFillColor(color.withAlphaComponent(0.95).cgColor)
+            ctx.fill(NSRect(x: minX, y: top, width: width, height: 3))
+            // Beat label, clipped to the band.
+            guard width > 24 else { continue }
+            let str = NSAttributedString(string: band.title, attributes: [.font: font, .foregroundColor: color])
+            ctx.saveGState()
+            ctx.clip(to: NSRect(x: minX + 4, y: top + 5, width: width - 8, height: 16))
+            str.draw(at: NSPoint(x: minX + 5, y: top + 5))
+            ctx.restoreGState()
+        }
     }
 
     private func drawGapSelection(geometry geo: TimelineGeometry, context ctx: CGContext) {

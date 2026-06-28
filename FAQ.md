@@ -26,6 +26,17 @@ What we don't have yet:
 
 We launched it because it was enough for us to make professional AI videos. We acknowledge that without AI features, this is quite a bare-bone video editor. That's why we decided to open source it and release the video editor for free, because we want to improve the product with the community.
 
+**Can it stabilize shaky footage?**
+
+Yes. Stabilization runs entirely on-device on Apple Silicon. Select a video clip and open the Stabilization section in the Inspector, then pick an engine:
+
+1. **L1 (locked / cinematic)** and **Smooth (organic)** — native camera-path stabilization. No external dependencies.
+2. **vid.stab (FFmpeg)** — general handheld-shake removal; install an `ffmpeg` with `libvidstab` on your PATH for the highest quality.
+3. **Subject Lock** — click a detected person/object (or draw a box) and the frame holds that subject steady.
+4. **Point Track** — place a few points on an object to hold its position, rotation, and scale.
+
+Tune smoothness/lock strength, crop-to-fit, and the smoothing/lock-axis options to taste. Your AI agent can do all of this too through the `stabilize_clips` MCP tool.
+
 **What's the difference between MCP server and the in-app chat?**
 
 They share the same prompt and tools. The MCP server is free to use for your MCP clients, and the in-app chat requires either BYOK or subscription. The differences are mostly the UX.

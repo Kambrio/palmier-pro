@@ -20,8 +20,73 @@ struct AgentPane: View {
             apiKeySection
             Divider().overlay(AppTheme.Border.subtleColor)
             mcpSection
+            Divider().overlay(AppTheme.Border.subtleColor)
+            skillsSection
+            Divider().overlay(AppTheme.Border.subtleColor)
+            transcriptSection
         }
         .onAppear(perform: refresh)
+    }
+
+    @State private var transcriptDetail = ChatTranscriptDetail.selected
+
+    private var transcriptSection: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            Text("Chat history")
+                .font(.system(size: AppTheme.FontSize.md, weight: .medium))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+            Text("How much tool-result detail to save in this project's chat history. Affects only stored and displayed history — never what's sent to the model or your token cost.")
+                .font(.system(size: AppTheme.FontSize.sm))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: AppTheme.Spacing.sm) {
+                Picker("", selection: $transcriptDetail) {
+                    ForEach(ChatTranscriptDetail.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .onChange(of: transcriptDetail) { _, v in ChatTranscriptDetail.selected = v }
+                Spacer()
+            }
+            Text(transcriptDetail.detail)
+                .font(.system(size: AppTheme.FontSize.xs))
+                .foregroundStyle(AppTheme.Text.mutedColor)
+        }
+    }
+
+    @State private var installSkillsGlobally = ClaudeCLISkills.globalInstallEnabled
+
+    private var skillsSection: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            Text("Skills")
+                .font(.system(size: AppTheme.FontSize.md, weight: .medium))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+            Text("Palmier bundles creative skills (montage-editing, story-development, scriptwriter, and more) for the in-app chat. Turn this on to also install them into your global Claude CLI (~/.claude/skills) so your own terminal sessions can use them.")
+                .font(.system(size: AppTheme.FontSize.sm))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: AppTheme.Spacing.sm) {
+                Text("Install skills for your Claude CLI")
+                    .font(.system(size: AppTheme.FontSize.sm))
+                    .foregroundStyle(AppTheme.Text.secondaryColor)
+                Spacer()
+                Toggle("", isOn: $installSkillsGlobally)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                    .onChange(of: installSkillsGlobally) { _, on in
+                        ClaudeCLISkills.globalInstallEnabled = on
+                        Task.detached(priority: .utility) { ClaudeCLISkills.syncGlobalInstall() }
+                    }
+            }
+            .padding(.horizontal, AppTheme.Spacing.md)
+            .padding(.vertical, AppTheme.Spacing.smMd)
+            .background(RoundedRectangle(cornerRadius: AppTheme.Radius.sm).fill(Color.black.opacity(AppTheme.Opacity.muted)))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.sm).strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.thin))
+            if !ClaudeCLISkills.bundledSkillNames().isEmpty {
+                Text(ClaudeCLISkills.bundledSkillNames().joined(separator: " · "))
+                    .font(.system(size: AppTheme.FontSize.xs, design: .monospaced))
+                    .foregroundStyle(AppTheme.Text.mutedColor)
+            }
+        }
     }
 
     private var backendSection: some View {

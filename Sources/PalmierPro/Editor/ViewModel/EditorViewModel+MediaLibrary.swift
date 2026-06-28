@@ -26,7 +26,8 @@ extension EditorViewModel {
     /// still). Idempotent and gated by MediaVisualCache, so it's safe to call from the draw
     /// path for every visible clip — generation is deferred until a clip is actually on screen.
     func requestClipVisuals(for clip: Clip) {
-        guard let asset = mediaAssets.first(where: { $0.id == clip.mediaRef }) else { return }
+        // O(1) lookup — this runs per visible clip on every timeline redraw (scroll/playback).
+        guard let asset = mediaAssetsById[clip.mediaRef] else { return }
         switch clip.mediaType {
         case .video:
             mediaVisualCache.generateVideoThumbnails(for: asset)
@@ -387,7 +388,23 @@ extension EditorViewModel {
         if let asset = mediaAssetsById[clip.mediaRef], asset.isGenerating {
             return asset.name
         }
+        // Prefer the meaningful name from Shot Library analysis, via the O(1) index (this is the
+        // hot timeline-draw path — never linear-scan shotLibrary.entries here).
+        if let name = shotDisplayNameByAsset[clip.mediaRef] { return name }
         return mediaResolver.displayName(for: clip.mediaRef)
+    }
+
+    /// Rebuilds the assetId → display-name index from the shot library. Cheap (runs only when the
+    /// library changes), and keeps clipDisplayLabel O(1) on the timeline-draw hot path.
+    func rebuildShotDisplayNameIndex() {
+        var index: [String: String] = [:]
+        index.reserveCapacity(shotLibrary.entries.count)
+        for entry in shotLibrary.entries {
+            guard let name = entry.displayName,
+                  !name.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            index[entry.assetId] = name
+        }
+        shotDisplayNameByAsset = index
     }
 
     /// missing on disk or present-but-unloadable (no permission, ejected volume)

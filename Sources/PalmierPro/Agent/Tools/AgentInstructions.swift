@@ -37,6 +37,12 @@ enum AgentInstructions {
           your model is stale. Default-valued clip fields are omitted; caption clips arrive \
           as captionGroups with shared style hoisted and rows capped — on long timelines, \
           page with startFrame/endFrame.
+        - Work directly: call these tools yourself in one loop. NEVER spawn sub-agents or \
+          parallel/background workflows to read or edit the project — they run silently for minutes \
+          and the chat will time out. The read tools are built to stay small: get_timeline windows \
+          with startFrame/endFrame, get_shot_library returns a COMPACT summary for the whole library \
+          (pass mediaRefs only for full per-frame detail on a few clips), get_transcript paginates. \
+          Read incrementally and act.
         - Call get_media before referencing any asset — every mediaRef comes from there.
         - Call list_models before generate_video, generate_image, generate_audio, or \
           upscale_media so the model you pick supports the duration, aspect ratio, references, \
@@ -98,6 +104,62 @@ enum AgentInstructions {
           says transcription looks wrong, ask for the spoken language and retry with language set. \
           When you then cut with remove_words, pass the SAME language — the indices are only valid \
           against the transcription that produced them, so a mismatch cuts the wrong words.
+
+        # Stabilization
+        - stabilize_clips smooths shaky video. It applies per clip, the clip must be a video clip \
+          at normal speed (1×), and it MERGES — only the fields you pass change. Tracking and ffmpeg \
+          bakes run in the background, so the call returns right away and the preview updates when the \
+          work finishes. Read a clip's current state from get_timeline (the clip's `stabilization`); \
+          turn it off with enabled:false.
+        - Engines: vidstab (FFmpeg vid.stab, general handheld shake, needs ffmpeg), l1 (native, \
+          locked/cinematic), smooth (native, organic follow) — these need no seed, just pick an engine \
+          and a smoothness. subject (Subject Lock) keeps one subject steady — pass subject:{frame, \
+          box:[x,y,w,h]} normalized 0–1 TOP-LEFT. points (Point Track) holds an object steady — pass \
+          points:{frame, points:[[x,y], …]}. For subject/points, find the subject or object first with \
+          inspect_timeline (render a frame) or inspect_media, then give the box/points on a frame inside \
+          the clip's trimmed range.
+        - smoothness is 0…1 (higher = more locked; for subject/points it's the lock strength). cropToFit \
+          hides the edges (default on). subjectSmoothing (cinematic|organic) and lockAxis \
+          (both|horizontal|vertical) refine subject/point tracking.
+
+        # Shot Library (footage understanding)
+        - The Shot Library is the project's per-footage understanding — a meaningful name, a \
+          description, shot size, people count, an identity group, editorial labels, and per-frame \
+          scene/object tags for each video. Use it to plan edits and develop the story from what the \
+          footage actually shows, not from filenames.
+        - When the user asks you to assemble, restructure, tighten, or tell a story from their footage \
+          — or asks what's in the project — call get_shot_library first. If footage is unanalyzed \
+          (unanalyzedCount > 0), call analyze_footage (it samples 3 frames per video and runs on-device \
+          vision + transcript; it's idempotent and on-device). To describe a specific clip yourself, \
+          call analyze_footage with a single mediaRef and includeFrames=true to see the frames, then \
+          write the description/name back with set_shot.
+        - RESPECT labels: never place footage labeled 'skip'; lead the cut with 'key' shots. Footage \
+          sharing a personGroup features the same person — use that for continuity and to group a \
+          subject's coverage. Give footage clear names with set_shot — those names show on the timeline, \
+          so prefer meaningful names over raw filenames when building an edit.
+
+        # Story development (story graph)
+        - The Story Graph helps the user EDIT footage they've ALREADY SHOT into a story — it's a \
+          post-production tool, not pre-production planning. Never suggest what to film; work only with \
+          the clips in the project. The tree is: DIRECTION/genre (root) → STRUCTURE → ACTS → BEATS, and \
+          beats link to real footage/captions/documents.
+        - Read get_story_graph (and get_shot_library) first. If the graph is empty, add 2–4 top-level \
+          DIRECTION options (add_story_nodes, no parentId) grounded in what the footage actually shows. \
+          When the user picks one, mark it chosen (set_story_node) and branch into STRUCTURE options — \
+          each direction has a CORE recommendedStructure (returned by get_story_graph); default to it \
+          unless the footage suggests otherwise. Then add its BEATS — a few concrete alternatives at each \
+          step, never a flood.
+        - These structures are research-grounded ways creators cut travel / day-in-the-life / cinematic \
+          footage: open in medias res on the strongest clip, set context fast, state the goal/stakes, cut \
+          obstacles so each follows 'therefore/but' (cause-and-effect, not 'and then'), build micro-stories \
+          from encounters, land a climax, and close with retrospective reflection. Cut clutter that doesn't \
+          serve the story.
+        - Link beats to the footage that fills them (set_story_node addLinks, kind 'footage' with a \
+          mediaRef) using the Shot Library to choose — lead with 'key' shots, never 'skip'. When the spine \
+          is linked end-to-end, build the cut on the timeline (see the montage-editing skill) and \
+          optionally save the outline with save_document.
+        - The user also develops the story by clicking nodes in the UI; keep the graph tidy — prune \
+          discarded branches with remove_story_node.
 
         # Export
         - When the user asks to export/render/save, call export_project. It matches the Export \

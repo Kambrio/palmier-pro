@@ -12,7 +12,8 @@ enum PalmierMCPConfig {
 
     /// Pre-authorizes every Palmier MCP tool (matched by server scope `mcp__<server>`) plus
     /// the `Skill` tool, so the chat can use the app-bundled creative skills (scriptwriter,
-    /// storytelling-craft, video-hooks, write-metadata, video-scripting). Loading a SKILL.md
+    /// storytelling-craft, video-hooks, write-metadata, video-scripting, montage-editing,
+    /// story-development). Loading a SKILL.md
     /// is internal to the Skill tool; the file/shell tools below stay disallowed, so a skill
     /// contributes knowledge but can't touch the filesystem — it applies its output only
     /// through the Palmier MCP tools.
@@ -22,8 +23,16 @@ enum PalmierMCPConfig {
     /// Palmier MCP tools. Disallowing these also prevents inheriting the user's global
     /// Bash/file permissions and keeps the agent from wandering onto the filesystem.
     /// (ToolSearch is intentionally left enabled — it loads the deferred MCP tools.)
+    /// `Task`/`Workflow` and the background-task family (`TaskCreate`/`TaskOutput`/…)/`Monitor` are
+    /// disallowed so the in-app chat drives the Palmier MCP tools directly in its own loop. Each chat
+    /// turn is a FRESH `claude -p` process (continuity via `--resume`); a background task or workflow
+    /// created in one turn is runtime state that dies with that process, so polling it next turn fails
+    /// ("didn't persist across the reconnect") — and a silent fan-out also trips the idle timeout.
+    /// Only list tools the CLI actually exposes; an unknown deny rule (e.g. the removed `MultiEdit`)
+    /// makes the CLI emit a harmless "matches no known tool" warning.
     static let disallowedBuiltinTools =
-        "Bash Read Write Edit MultiEdit NotebookEdit Glob Grep WebFetch WebSearch Task TodoWrite"
+        "Bash Read Write Edit NotebookEdit Glob Grep WebFetch WebSearch Task Workflow "
+        + "TaskCreate TaskOutput TaskStop TaskList TaskGet TaskUpdate Monitor TodoWrite"
 
     /// JSON string for `--mcp-config`.
     static func inlineConfigJSON() -> String {

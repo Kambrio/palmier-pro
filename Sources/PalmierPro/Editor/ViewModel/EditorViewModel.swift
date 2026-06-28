@@ -29,6 +29,15 @@ final class EditorViewModel {
     }
     var mediaManifest = MediaManifest()
     var generationLog = GenerationLog()
+    /// Per-footage shot analysis (descriptions, labels, meaningful names). Persisted as shot-library.json.
+    var shotLibrary = ShotLibrary() {
+        didSet { rebuildShotDisplayNameIndex() }
+    }
+    /// O(1) assetId → meaningful display name, derived from shotLibrary. Read on the hot timeline-draw
+    /// path (clipDisplayLabel, per visible clip per redraw) to avoid a per-clip linear scan of entries.
+    @ObservationIgnored var shotDisplayNameByAsset: [String: String] = [:]
+    /// Story-development graph (directions → structures → beats wired to footage). Persisted as story-graph.json.
+    var storyGraph = StoryGraph()
 
     // MARK: - Panel focus
 
@@ -83,6 +92,16 @@ final class EditorViewModel {
     var timelineRenderRevision: Int = 0
     var isScrubbing: Bool = false
 
+    /// Live timeline scroll offset, mirrored from the scroll view (ObservationIgnored so per-scroll
+    /// updates don't churn SwiftUI). Persisted as last-session view state.
+    @ObservationIgnored var timelineScrollX: Double = 0
+    @ObservationIgnored var timelineScrollY: Double = 0
+    /// One-shot scroll restore applied by TimelineContainerView once the content is sized.
+    @ObservationIgnored var pendingTimelineScroll: CGPoint?
+    /// One-shot zoom restore honored by the timeline's first layout (when minZoom is finally known),
+    /// instead of the default fit-to-window. Cleared once applied.
+    @ObservationIgnored var restoredSessionZoom: Double?
+
     /// Live caption-generation progress, surfaced by the app-level CaptionProgressHUD.
     /// nil when idle. Managed by startCaptionGeneration / cancelCaptionGeneration.
     var captionJob: CaptionJob?
@@ -97,6 +116,13 @@ final class EditorViewModel {
 
     /// Document the user opened from the Documents tab to read in-app (drives the reader sheet).
     var openDocument: ReaderDocument?
+    /// Drives the Shot Library sheet (opened from the Documents tab).
+    var showShotLibrary: Bool = false
+    /// Drives the Story Graph sheet (opened from the Documents tab).
+    var showStoryGraph: Bool = false
+    /// Story beats highlighted on the timeline ("Preview story on the timeline"). Empty = off.
+    /// Transient (not persisted); bumps the render revision so the timeline redraws.
+    var storyPreviewBands: [StoryPreviewBand] = [] { didSet { timelineRenderRevision &+= 1 } }
     var toolMode: ToolMode = .pointer
     var showExportDialog: Bool = false
     var showGenerationPanel: Bool = false {
@@ -306,6 +332,8 @@ final class EditorViewModel {
 
     @ObservationIgnored lazy var proxyManager = ProxyManager(editor: self)
     @ObservationIgnored lazy var stabilizationManager = StabilizationManager(editor: self)
+    @ObservationIgnored lazy var shotLibraryManager = ShotLibraryManager(editor: self)
+    @ObservationIgnored lazy var storyGraphManager = StoryGraphManager(editor: self)
 
     /// Set by VideoProject to mark the document dirty for non-undoable persistent
     /// changes (e.g. proxy generation/toggle). nil outside a document window.

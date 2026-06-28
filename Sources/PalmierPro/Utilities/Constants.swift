@@ -110,10 +110,18 @@ enum Project {
     static let timelineFilename = "project.json"
     static let manifestFilename = "media.json"
     static let generationLogFilename = "generation-log.json"
+    /// Per-footage shot analysis library (descriptions, labels, meaningful names).
+    static let shotLibraryFilename = "shot-library.json"
+    /// Story-development graph (directions, structures, acts, beats wired to footage).
+    static let storyGraphFilename = "story-graph.json"
+    /// Last-session editor view state (playhead, zoom, scroll, selection).
+    static let viewStateFilename = "view-state.json"
     static let thumbnailFilename = "thumbnail.jpg"
     static let mediaDirectoryName = "media"
     /// Subdirectory of `media/` holding generated proxy movies.
     static let proxiesDirname = "proxies"
+    /// Subdirectory of `media/` holding per-shot sampled JPEG thumbnails for the Shot Library.
+    static let shotsDirname = "shots"
     /// Subdirectory of `media/` holding per-asset stabilization analysis sidecars.
     static let stabilizationDirname = "stabilization"
     /// Subdirectory of `media/` holding ffmpeg-baked stabilized movies.

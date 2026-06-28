@@ -144,3 +144,30 @@ enum Project {
 func gcd(_ a: Int, _ b: Int) -> Int {
     b == 0 ? a : gcd(b, a % b)
 }
+
+/// Filesystem locations for the local OmniVoice runtime.
+enum OmniVoicePaths {
+    /// ~/Library/Application Support/PalmierPro/OmniVoice
+    static var installRoot: URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("\(Log.subsystem)/OmniVoice", isDirectory: true)
+    }
+
+    /// The provisioned venv's python interpreter.
+    static var provisionedPython: URL {
+        installRoot.appendingPathComponent(".venv/bin/python3", isDirectory: false)
+    }
+
+    /// Known developer install (reused so we don't re-download on dev machines).
+    static var devPython: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Documents/OmniVoice/.venv/bin/python3", isDirectory: false)
+    }
+
+    /// HuggingFace cache kept inside the install root so weights are local + removable.
+    static var hfCache: URL { installRoot.appendingPathComponent("hf-cache", isDirectory: true) }
+
+    static let pythonPin = "3.13"
+    static let omniVoiceVersion = "0.1.5"
+}

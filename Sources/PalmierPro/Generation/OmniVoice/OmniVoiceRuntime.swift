@@ -32,7 +32,10 @@ final class OmniVoiceRuntime {
 
     /// Cheap-ish disk/import probe (no network). Updates `state`.
     func refresh() {
-        if case .provisioning = state { return }
+        switch state {
+        case .provisioning, .ready: return
+        default: break
+        }
         let override = overridePath.map { URL(fileURLWithPath: $0) }
         if let python = OmniVoiceLocator().resolve(override: override) {
             state = .ready(python)

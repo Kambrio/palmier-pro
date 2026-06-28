@@ -8,6 +8,9 @@ struct ShotLibraryView: View {
     @Environment(EditorViewModel.self) private var editor
     @Environment(\.dismiss) private var dismiss
     @State private var selectedAssetId: String?
+    /// Play-vs-frames mode, held here (not in the per-asset detail editor) so switching shots keeps
+    /// play mode and the next shot starts playing instead of snapping back to the frames view.
+    @State private var playing = false
 
     private var manager: ShotLibraryManager { editor.shotLibraryManager }
     private var assets: [MediaAsset] { manager.analyzableAssets }
@@ -155,7 +158,7 @@ struct ShotLibraryView: View {
     @ViewBuilder
     private var detail: some View {
         if let assetId = selectedAssetId, let asset = editor.mediaAssetsById[assetId] {
-            ShotDetailEditor(asset: asset)
+            ShotDetailEditor(asset: asset, playing: $playing)
                 .id(assetId)
         } else {
             Text("Select footage")
@@ -171,8 +174,8 @@ struct ShotLibraryView: View {
 private struct ShotDetailEditor: View {
     @Environment(EditorViewModel.self) private var editor
     let asset: MediaAsset
+    @Binding var playing: Bool
     @State private var customLabel = ""
-    @State private var playing = false
 
     private var manager: ShotLibraryManager { editor.shotLibraryManager }
     private var entry: ShotEntry? { manager.entry(assetId: asset.id) }

@@ -116,7 +116,18 @@ final class ToolExecutor {
         case .deleteFolder:  return try deleteFolder(editor, args)
         case .setProjectSettings: return try setProjectSettings(editor, args)
         case .sendFeedback:  return try await sendFeedback(editor, args)
+        case .readSkill:     return readSkill(args)
         }
+    }
+
+    func readSkill(_ args: [String: Any]) -> ToolResult {
+        guard let id = args.string("id") else {
+            return .error("read_skill requires an 'id'.")
+        }
+        guard let body = SkillStore.shared.body(for: id) else {
+            return .error("Unknown skill: \(id)")
+        }
+        return .ok(body)
     }
 
     /// Reverts the assistant's most recent timeline edit. Refuses to undo the user's own edits.
@@ -258,6 +269,16 @@ func parseAlignment(_ raw: String?, path: String) throws -> TextStyle.Alignment?
     return a
 }
 
+// Untrusted Double→Int: nil on NaN/Inf/overflow instead of trapping.
+func safeInt(_ d: Double) -> Int? { Int(exactly: d.rounded(.towardZero)) }
+
+// Clamp before converting so the Int(...) can't overflow.
+func clampInt(_ d: Double, min lo: Int, max hi: Int) -> Int {
+    if d.isNaN || d <= Double(lo) { return lo }
+    if d >= Double(hi) { return hi }
+    return Int(d.rounded())
+}
+
 extension Dictionary where Key == String, Value == Any {
     func string(_ key: String) -> String? {
         if let v = self[key] as? String, !v.isEmpty { return v }
@@ -265,7 +286,7 @@ extension Dictionary where Key == String, Value == Any {
     }
     func int(_ key: String) -> Int? {
         if let v = self[key] as? Int { return v }
-        if let v = self[key] as? Double { return Int(v) }
+        if let v = self[key] as? Double { return safeInt(v) }
         if let v = self[key] as? NSNumber { return v.intValue }
         if let v = self[key] as? String { return Int(v) }
         return nil

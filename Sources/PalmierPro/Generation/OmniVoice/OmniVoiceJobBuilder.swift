@@ -5,6 +5,7 @@ import Foundation
 /// at an existing file; otherwise cloning is skipped (plain TTS / voice design).
 enum OmniVoiceJobBuilder {
     static func build(genInput: GenerationInput, outputPath: String) -> OmniVoiceJob {
+        // OmniVoice accepts a language name or ISO code, so pass it through unmapped.
         let language = genInput.language?.isEmpty == false ? genInput.language! : "English"
         let instruct = genInput.styleInstructions?.isEmpty == false ? genInput.styleInstructions : nil
         let refAudio: String? = {

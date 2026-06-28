@@ -52,3 +52,48 @@ enum ClaudeCLIModelPreference {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 }
+
+/// How much tool-result detail to keep in the saved chat transcript. Conversation continuity for the
+/// CLI backend is via `--resume` (the CLI keeps its own transcript), so this only affects what the app
+/// stores/shows for the user's history — it never changes what's sent to the model or token cost.
+/// Images in results are always kept as a compact `[image]` marker (base64 would bloat the project).
+enum ChatTranscriptDetail: String, CaseIterable, Sendable {
+    case minimal   // just Done/Failed markers (smallest)
+    case capped    // tool-result text, truncated (default)
+    case full      // full tool-result text
+
+    var displayName: String {
+        switch self {
+        case .minimal: "Minimal (status only)"
+        case .capped:  "Capped (truncated results)"
+        case .full:    "Full (complete results)"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .minimal: "Save only whether each tool succeeded or failed. Smallest project files."
+        case .capped:  "Save tool-result text, truncated to keep project files small. Recommended."
+        case .full:    "Save complete tool-result text. Larger project files."
+        }
+    }
+
+    /// Character cap applied to a stored tool result (0 = status only, nil = no cap).
+    var textCap: Int? {
+        switch self {
+        case .minimal: 0
+        case .capped:  2_000
+        case .full:    nil
+        }
+    }
+
+    private static let key = "io.palmier.pro.chat.transcriptDetail"
+    static var selected: ChatTranscriptDetail {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: key),
+               let v = ChatTranscriptDetail(rawValue: raw) { return v }
+            return .capped
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}

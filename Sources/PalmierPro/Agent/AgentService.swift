@@ -409,8 +409,8 @@ final class AgentService {
                     appendTextDelta(chunk, toAssistant: assistantID)
                 case .toolUseComplete(let id, let name, let inputJSON):
                     appendToolUse(id: id, name: name, inputJSON: inputJSON, toAssistant: assistantID)
-                case .toolResult(let id, let isError):
-                    recordCLIToolResult(toolUseId: id, isError: isError, resultsMessageID: &resultsMessageID)
+                case .toolResult(let id, let isError, let resultText):
+                    recordCLIToolResult(toolUseId: id, isError: isError, resultText: resultText, resultsMessageID: &resultsMessageID)
                 case .messageStop:
                     break
                 }
@@ -429,9 +429,11 @@ final class AgentService {
 
     /// Records a CLI tool_result into a single trailing user message (created lazily),
     /// so the matching tool_use card flips to done/failed the moment its result streams.
-    private func recordCLIToolResult(toolUseId: String, isError: Bool, resultsMessageID: inout UUID?) {
+    private func recordCLIToolResult(toolUseId: String, isError: Bool, resultText: String? = nil, resultsMessageID: inout UUID?) {
         let block = AgentContentBlock.toolResult(
-            toolUseId: toolUseId, content: [.text(isError ? "Failed" : "Done")], isError: isError)
+            toolUseId: toolUseId,
+            content: [.text(Self.transcriptResultText(resultText, isError: isError))],
+            isError: isError)
         if let mid = resultsMessageID, let idx = messages.firstIndex(where: { $0.id == mid }) {
             let already = messages[idx].blocks.contains {
                 if case let .toolResult(rid, _, _) = $0 { return rid == toolUseId }
@@ -443,6 +445,18 @@ final class AgentService {
             resultsMessageID = msg.id
             messages.append(msg)
         }
+    }
+
+    /// Applies the user's transcript-detail preference to a streamed tool result. Falls back to a
+    /// Done/Failed status when there's no captured text (or the preference is Minimal).
+    private static func transcriptResultText(_ resultText: String?, isError: Bool) -> String {
+        let status = isError ? "Failed" : "Done"
+        guard let cap = ChatTranscriptDetail.selected.textCap, cap > 0,
+              let text = resultText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return status
+        }
+        if text.count > cap { return String(text.prefix(cap)) + "… (truncated)" }
+        return text
     }
 
     /// Fills in results for any tool_use markers the CLI didn't stream a result for, so none

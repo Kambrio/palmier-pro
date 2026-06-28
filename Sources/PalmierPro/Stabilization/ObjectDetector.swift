@@ -67,7 +67,8 @@ final class ObjectDetector {
         // Map Vision results to Sendable DetectedObjects inside the worker so nothing non-Sendable crosses back.
         return try await withCheckedThrowingContinuation { cont in
             // Vision inference is CPU/ANE-heavy — keep it (and the model compile) off the main actor.
-            DispatchQueue.global(qos: .userInitiated).async { [self] in
+            // .utility so background footage analysis lands on efficiency cores and never starves the UI.
+            DispatchQueue.global(qos: .utility).async { [self] in
                 let request: VNCoreMLRequest
                 do {
                     request = VNCoreMLRequest(model: try loadModel())

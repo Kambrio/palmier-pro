@@ -7,12 +7,16 @@ private struct ProjectPackageContents: Sendable {
     var timeline: Timeline
     var manifest: MediaManifest?
     var generationLog: GenerationLog?
+    var shotLibrary: ShotLibrary?
+    var storyGraph: StoryGraph?
 }
 
 private struct ProjectPackageSnapshot: Sendable {
     var timeline: Data
     var manifest: Data?
     var generationLog: Data?
+    var shotLibrary: Data?
+    var storyGraph: Data?
     var thumbnail: Data?
     var chatSessionFiles: [(name: String, data: Data)]
 }
@@ -33,11 +37,15 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var loadedTimeline: Timeline?
     private nonisolated(unsafe) var loadedManifest: MediaManifest?
     private nonisolated(unsafe) var loadedGenerationLog: GenerationLog?
+    private nonisolated(unsafe) var loadedShotLibrary: ShotLibrary?
+    private nonisolated(unsafe) var loadedStoryGraph: StoryGraph?
 
     /// Captured on main thread before writes may continue off-main.
     private nonisolated(unsafe) var snapshotTimeline: Data?
     private nonisolated(unsafe) var snapshotManifest: Data?
     private nonisolated(unsafe) var snapshotGenerationLog: Data?
+    private nonisolated(unsafe) var snapshotShotLibrary: Data?
+    private nonisolated(unsafe) var snapshotStoryGraph: Data?
     private nonisolated(unsafe) var snapshotThumbnail: Data?
     private nonisolated(unsafe) var snapshotChatSessionFiles: [(name: String, data: Data)] = []
     private nonisolated(unsafe) var snapshotSourceProjectURL: URL?
@@ -67,6 +75,8 @@ final class VideoProject: NSDocument {
         loadedTimeline = contents.timeline
         loadedManifest = contents.manifest
         loadedGenerationLog = contents.generationLog
+        loadedShotLibrary = contents.shotLibrary
+        loadedStoryGraph = contents.storyGraph
         Log.project.notice(
             "read ok tracks=\(self.loadedTimeline?.tracks.count ?? 0)",
             telemetry: "Project read",
@@ -104,10 +114,18 @@ final class VideoProject: NSDocument {
         let generationLog = try optionalData(Project.generationLogFilename, in: url)
             .flatMap { try? JSONDecoder().decode(GenerationLog.self, from: $0) }
 
+        let shotLibrary = try optionalData(Project.shotLibraryFilename, in: url)
+            .flatMap { try? JSONDecoder().decode(ShotLibrary.self, from: $0) }
+
+        let storyGraph = try optionalData(Project.storyGraphFilename, in: url)
+            .flatMap { try? JSONDecoder().decode(StoryGraph.self, from: $0) }
+
         return ProjectPackageContents(
             timeline: timeline,
             manifest: manifest,
-            generationLog: generationLog
+            generationLog: generationLog,
+            shotLibrary: shotLibrary,
+            storyGraph: storyGraph
         )
     }
 
@@ -146,6 +164,8 @@ final class VideoProject: NSDocument {
                 timeline: data,
                 manifest: snapshotManifest,
                 generationLog: snapshotGenerationLog,
+                shotLibrary: snapshotShotLibrary,
+                storyGraph: snapshotStoryGraph,
                 thumbnail: snapshotThumbnail,
                 chatSessionFiles: snapshotChatSessionFiles
             ),
@@ -158,6 +178,10 @@ final class VideoProject: NSDocument {
         snapshotTimeline = try? JSONEncoder().encode(editorViewModel.timeline)
         snapshotManifest = try? JSONEncoder().encode(editorViewModel.mediaManifest)
         snapshotGenerationLog = try? JSONEncoder().encode(editorViewModel.generationLog)
+        snapshotShotLibrary = editorViewModel.shotLibrary.entries.isEmpty
+            ? nil : try? JSONEncoder().encode(editorViewModel.shotLibrary)
+        snapshotStoryGraph = editorViewModel.storyGraph.isEmpty
+            ? nil : try? JSONEncoder().encode(editorViewModel.storyGraph)
         snapshotThumbnail = captureThumbnail()
         snapshotChatSessionFiles = editorViewModel.agentService.sessions
             .filter { !$0.messages.isEmpty }
@@ -191,6 +215,20 @@ final class VideoProject: NSDocument {
         }
         if let log = snapshot.generationLog {
             try log.write(to: packageURL.appendingPathComponent(Project.generationLogFilename), options: .atomic)
+        }
+        // Write when present; DELETE when empty/nil — an in-place autosave reuses the package dir,
+        // so a stale non-empty file would otherwise resurrect cleared data on reopen.
+        let shotLibraryURL = packageURL.appendingPathComponent(Project.shotLibraryFilename)
+        if let shotLibrary = snapshot.shotLibrary {
+            try shotLibrary.write(to: shotLibraryURL, options: .atomic)
+        } else {
+            try? fm.removeItem(at: shotLibraryURL)
+        }
+        let storyGraphURL = packageURL.appendingPathComponent(Project.storyGraphFilename)
+        if let storyGraph = snapshot.storyGraph {
+            try storyGraph.write(to: storyGraphURL, options: .atomic)
+        } else {
+            try? fm.removeItem(at: storyGraphURL)
         }
         if let thumbnail = snapshot.thumbnail {
             try thumbnail.write(to: packageURL.appendingPathComponent(Project.thumbnailFilename), options: .atomic)
@@ -331,6 +369,14 @@ final class VideoProject: NSDocument {
                 DocumentReaderView(url: doc.url)
                     .environment(editorViewModel)
             }
+            .sheet(isPresented: Bindable(editorViewModel).showShotLibrary) { [editorViewModel] in
+                ShotLibraryView()
+                    .environment(editorViewModel)
+            }
+            .sheet(isPresented: Bindable(editorViewModel).showStoryGraph) { [editorViewModel] in
+                StoryGraphView()
+                    .environment(editorViewModel)
+            }
             .overlay {
                 TourOverlay()
                     .environment(editorViewModel)
@@ -379,6 +425,14 @@ final class VideoProject: NSDocument {
             loadedGenerationLog = nil
         } else {
             editorViewModel.seedGenerationLogFromAssets()
+        }
+        if let shotLibrary = loadedShotLibrary {
+            editorViewModel.shotLibrary = shotLibrary
+            loadedShotLibrary = nil
+        }
+        if let storyGraph = loadedStoryGraph {
+            editorViewModel.storyGraph = storyGraph
+            loadedStoryGraph = nil
         }
         editorViewModel.searchIndex.projectOpened()
         editorViewModel.updateTelemetryContext()

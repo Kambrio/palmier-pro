@@ -451,9 +451,14 @@ final class VideoEngine {
         return CMTime(seconds: seconds, preferredTimescale: 600)
     }
 
+    /// Memo for the scrub layer-count scan, invalidated when the timeline changes (revision bump).
+    private var layerCountMemo: (frame: Int, revision: Int, count: Int)?
+
     private func activeVideoLayerCount(at frame: Int, editor: EditorViewModel) -> Int {
         guard editor.activePreviewTab == .timeline else { return 1 }
-        return editor.timeline.tracks.count { track in
+        let revision = editor.timelineRenderRevision
+        if let memo = layerCountMemo, memo.frame == frame, memo.revision == revision { return memo.count }
+        let count = editor.timeline.tracks.count { track in
             guard track.type == .video, !track.hidden else { return false }
             return track.clips.contains { clip in
                 (clip.mediaType == .video || clip.mediaType == .image)
@@ -461,6 +466,8 @@ final class VideoEngine {
                     && frame < clip.endFrame
             }
         }
+        layerCountMemo = (frame, revision, count)
+        return count
     }
 
     // MARK: - Time Observer

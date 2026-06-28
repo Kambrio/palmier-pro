@@ -1,6 +1,18 @@
 import AppKit
 
+/// Cached, laid-out clip label (attributed string + measured size). Keyed by the rendered text so it
+/// survives across redraws — building/measuring text per visible clip per frame was a scroll/playback
+/// hot-path cost on dense timelines.
+private final class CachedClipLabel {
+    let attributed: NSAttributedString
+    let size: NSSize
+    init(attributed: NSAttributedString, size: NSSize) { self.attributed = attributed; self.size = size }
+}
+
 enum ClipRenderer {
+
+    /// NSCache is thread-safe; timeline drawing is on the main thread regardless.
+    nonisolated(unsafe) private static let labelCache = NSCache<NSString, CachedClipLabel>()
 
     static let labelBarHeight: CGFloat = 16
 
@@ -161,6 +173,9 @@ enum ClipRenderer {
 
     /// Volume kfs render on the rubber band, not here.
     private static func drawKeyframeMarkers(clip: Clip, in rect: NSRect, context: CGContext) {
+        // Common case: no keyframes → skip before allocating/sorting (runs per visible clip per redraw).
+        guard clip.opacityTrack != nil || clip.positionTrack != nil
+            || clip.scaleTrack != nil || clip.cropTrack != nil else { return }
         var frameSet = Set<Int>()
         let absStart = clip.startFrame
         for kf in clip.opacityTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
@@ -507,6 +522,10 @@ enum ClipRenderer {
         let aspectRatio = CGFloat(firstThumb.width) / CGFloat(firstThumb.height)
         let thumbDisplayWidth = max(1, drawRect.height * aspectRatio)
 
+        // Too thin to show even a third of a frame — skip the (clip + image-draw) cost; the colored
+        // fill already communicates the clip. Big win on dense, zoomed-out timelines.
+        guard drawRect.width >= thumbDisplayWidth / 3 else { return }
+
         // Visible time range based on trim
         let fpsD = Double(max(1, fps))
         let visibleStartSec = Double(clip.trimStartFrame) / fpsD
@@ -547,6 +566,8 @@ enum ClipRenderer {
         guard drawRect.width > 4, drawRect.height > 4 else { return }
         let aspectRatio = CGFloat(image.width) / CGFloat(image.height)
         let thumbDisplayWidth = max(1, drawRect.height * aspectRatio)
+        // Skip when too thin to show even a third of the image (just keep the colored fill).
+        guard drawRect.width >= thumbDisplayWidth / 3 else { return }
 
         context.saveGState()
         let clipPath = CGPath(roundedRect: clipRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
@@ -598,25 +619,36 @@ enum ClipRenderer {
         let rawName = displayName ?? clip.mediaRef
         let name = rawName.firstNonEmptyLine()
         let text = "\(name)  \(timecode)"
+        let linked = clip.linkGroupId != nil
 
-        let baseAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: AppTheme.FontSize.xs, weight: .medium),
-            .foregroundColor: AppTheme.Text.primary,
-        ]
-        let attributed = NSMutableAttributedString(string: text, attributes: baseAttrs)
-        if clip.linkGroupId != nil {
-            attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: (name as NSString).length))
+        // Reuse the laid-out label across redraws — building + measuring text per visible clip per
+        // frame is otherwise a scroll/playback hot-path cost. Keyed by the exact rendered content, so
+        // renames/duration changes naturally produce a fresh entry.
+        let cacheKey = "\(linked ? "L|" : "")\(text)" as NSString
+        let label: CachedClipLabel
+        if let hit = Self.labelCache.object(forKey: cacheKey) {
+            label = hit
+        } else {
+            let baseAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: AppTheme.FontSize.xs, weight: .medium),
+                .foregroundColor: AppTheme.Text.primary,
+            ]
+            let attributed = NSMutableAttributedString(string: text, attributes: baseAttrs)
+            if linked {
+                attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: (name as NSString).length))
+            }
+            label = CachedClipLabel(attributed: attributed, size: attributed.size())
+            Self.labelCache.setObject(label, forKey: cacheKey)
         }
-        let size = attributed.size()
         let inset: CGFloat = 6
         let origin = NSPoint(
             x: labelRect.minX + inset,
-            y: labelRect.minY + (labelRect.height - size.height) / 2
+            y: labelRect.minY + (labelRect.height - label.size.height) / 2
         )
 
         context.saveGState()
         context.clip(to: labelRect.insetBy(dx: inset, dy: 0))
-        attributed.draw(at: origin)
+        label.attributed.draw(at: origin)
         context.restoreGState()
     }
 

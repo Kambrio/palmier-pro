@@ -41,7 +41,7 @@ struct AnthropicToolSchema: @unchecked Sendable {
 enum AnthropicStreamEvent: Sendable {
     case textDelta(String)
     case toolUseComplete(id: String, name: String, inputJSON: String)
-    case toolResult(toolUseId: String, isError: Bool)
+    case toolResult(toolUseId: String, isError: Bool, resultText: String?)
     case messageStop(stopReason: AnthropicStopReason)
 }
 

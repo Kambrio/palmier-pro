@@ -61,6 +61,25 @@ final class MediaVisualCache {
         return asset.url
     }
 
+    /// Drop in-memory visuals for one asset so the next draw regenerates them — e.g. after
+    /// its proxy finishes, so the filmstrip/waveform switch to the lighter proxy. The disk
+    /// cache is keyed by URL, so it's left intact (proxy + source keep separate entries).
+    func invalidate(_ assetId: String) {
+        waveformSamples[assetId] = nil
+        videoThumbnails[assetId] = nil
+        imageThumbnails[assetId] = nil
+        timelineView?.needsDisplay = true
+    }
+
+    /// Drop all in-memory visuals — used when the proxy preference toggles so visible clips
+    /// re-decode from the now-preferred source.
+    func invalidateAll() {
+        waveformSamples.removeAll()
+        videoThumbnails.removeAll()
+        imageThumbnails.removeAll()
+        timelineView?.needsDisplay = true
+    }
+
     func generateWaveform(for asset: MediaAsset) {
         guard asset.type == .audio || (asset.type == .video && asset.hasAudio) else { return }
         let key = asset.id

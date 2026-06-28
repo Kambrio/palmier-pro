@@ -98,6 +98,7 @@ final class ProxyManager {
         for asset in editor.mediaAssets where asset.proxyState != .none { asset.proxyState = .none }
         editor.proxyBackedMediaRefs.removeAll()
         editor.onPersistentStateChanged?()
+        editor.mediaVisualCache.invalidateAll()   // proxies gone — revert timeline visuals to source
         if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
     }
 
@@ -229,7 +230,10 @@ final class ProxyManager {
             editor.onPersistentStateChanged?()
             bytesThisRun += (try? out.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             completed += 1; processedDuration += max(0, asset.duration)
-            if editor.mediaManifest.useProxies { editor.videoEngine?.rebuild() }
+            if editor.mediaManifest.useProxies {
+                editor.videoEngine?.rebuild()
+                editor.mediaVisualCache.invalidate(asset.id)   // refresh filmstrip/waveform onto the new proxy
+            }
         } catch is CancellationError {
             asset.proxyState = .none
             completed += 1

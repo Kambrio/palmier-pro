@@ -344,7 +344,8 @@ final class EditorViewModel {
         set { guard newValue != mediaManifest.useProxies else { return }
               mediaManifest.useProxies = newValue
               onPersistentStateChanged?()
-              videoEngine?.rebuild() }
+              videoEngine?.rebuild()
+              mediaVisualCache.invalidateAll() }   // re-decode timeline visuals from the now-preferred source
     }
     var proxyResolution: ProxyResolution {
         get { mediaManifest.proxyResolution }

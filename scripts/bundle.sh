@@ -116,6 +116,20 @@ else
   exit 1
 fi
 
+if [ -d "$RES_BUNDLE/OmniVoice" ]; then
+  cp -R "$RES_BUNDLE/OmniVoice" "$APP/Contents/Resources/"
+else
+  echo "!! missing OmniVoice/ in SwiftPM resource bundle at $RES_BUNDLE" >&2
+  exit 1
+fi
+if [ -d "$RES_BUNDLE/bin" ]; then
+  cp -R "$RES_BUNDLE/bin" "$APP/Contents/Resources/"
+  chmod +x "$APP/Contents/Resources/bin/uv"
+else
+  echo "!! missing bin/ (uv) in SwiftPM resource bundle at $RES_BUNDLE" >&2
+  exit 1
+fi
+
 if ! ls "$RES_BUNDLE"/*.metallib >/dev/null 2>&1; then
   echo "!! no .metallib in SwiftPM resource bundle at $RES_BUNDLE — Metal effects would be missing" >&2
   exit 1
@@ -185,6 +199,10 @@ fi
 cp "$PROVISION_PROFILE" "$APP/Contents/embedded.provisionprofile"
 inject_plist PalmierClerkKeychainAccessGroup "$KEYCHAIN_ACCESS_GROUP"
 
+echo "==> Codesigning bundled uv binary"
+codesign --force --options runtime --timestamp \
+  --sign "$SIGNING_IDENTITY" \
+  "$APP/Contents/Resources/bin/uv"
 echo "==> Codesigning main app"
 codesign --force --options runtime --timestamp \
   --entitlements "$ENTITLEMENTS" \

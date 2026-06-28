@@ -27,23 +27,18 @@ enum PathSmoother {
         return StabFrameTransform(m: [cs, -sn, tx, sn, cs, ty, 0, 0, 1])
     }
 
-    /// Hampel identifier — replaces transient outliers (sudden one-off bumps) with the local median.
-    /// For each sample, `sigma = 1.4826·MAD` over a window; samples beyond `nSigma·sigma` from the
-    /// local median are anomalies. Leaves normal motion (and degenerate flat windows) untouched.
-    static func hampel(_ xs: [Double], halfWindow: Int = 4, nSigma: Double = 3) -> [Double] {
-        let n = xs.count
-        guard halfWindow > 0, n > 2 * halfWindow + 1 else { return xs }
-        func median(_ a: [Double]) -> Double { a.sorted()[a.count / 2] }
-        var out = xs
-        for i in 0..<n {
-            let lo = max(0, i - halfWindow), hi = min(n - 1, i + halfWindow)
-            let window = Array(xs[lo...hi])
-            let med = median(window)
-            let mad = median(window.map { abs($0 - med) })
-            let sigma = 1.4826 * mad
-            if sigma > 0, abs(xs[i] - med) > nSigma * sigma { out[i] = med }
-        }
-        return out
+    static func median(_ a: [Double]) -> Double {
+        guard !a.isEmpty else { return 0 }
+        return a.sorted()[a.count / 2]
+    }
+
+    /// Soft threshold (shrinkage): zero within ±t, otherwise shifted toward zero by t. Continuous, so
+    /// it removes small deviations (noise) and keeps large ones (bumps) without a discontinuity.
+    static func softThreshold(_ r: Double, _ t: Double) -> Double {
+        guard t > 0 else { return r }
+        if r > t { return r - t }
+        if r < -t { return r + t }
+        return 0
     }
 
     /// Gaussian low-pass — organic smoothing that follows the camera more loosely than L1.
@@ -86,16 +81,19 @@ enum PathSmoother {
         var path = rawPath          // smoothing input (target is computed from this)
         var baseline = rawPath      // what the correction differences against (output = raw + (target − baseline))
 
-        // Object tracking: clean the measured path. `path` (cleaned+denoised) feeds the target so
-        // tracking jitter and spikes don't shape it. `baseline` is denoised normally — so steady
-        // tracking noise isn't reinjected as vibration — but uses the RAW value at Hampel-flagged spike
-        // frames, so an occasional hand-bump IS corrected (pulled back) instead of riding through.
-        // No-op for camera engines, whose homography path is already accurate.
+        // Object tracking: clean the measured path. `path` (denoised) feeds the smoothing target so
+        // jitter doesn't shape it. `baseline` is what the correction differences against: the denoised
+        // path PLUS the soft-thresholded residual — small deviations (steady tracking noise) are
+        // dropped so they aren't reinjected as vibration, while large deviations (occasional bumps) are
+        // KEPT so they get corrected. Soft (continuous) thresholding avoids the per-frame jumps a hard
+        // spike/no-spike switch produced. No-op for camera engines (accurate homography path).
         if denoiseRaw > 0, path.count > 2 {
             func clean(_ ch: [Double]) -> (target: [Double], base: [Double]) {
-                let h = hampel(ch)                                   // spikes → local median
-                let d = gaussianSmooth(h, sigma: denoiseRaw)         // low-pass the de-spiked channel
-                let base = d.indices.map { h[$0] == ch[$0] ? d[$0] : ch[$0] }   // raw at spikes
+                let d = gaussianSmooth(ch, sigma: denoiseRaw)
+                let resid = ch.indices.map { ch[$0] - d[$0] }
+                let mad = median(resid.map { abs($0) })              // robust noise scale (resid ~ 0-mean)
+                let t = 2.5 * 1.4826 * mad                           // keep residual beyond ~2.5σ (bumps)
+                let base = ch.indices.map { d[$0] + softThreshold(resid[$0], t) }
                 return (d, base)
             }
             let (txT, txB) = clean(rawPath.map(\.tx))

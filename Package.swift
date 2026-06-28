@@ -49,6 +49,8 @@ let package = Package(
                 .copy("Resources/Changelog"),
                 .copy("Resources/Skills"),
                 .copy("Resources/Models"),
+                .copy("Resources/OmniVoice"),
+                .copy("Resources/bin"),
             ],
             plugins: ["MetalCIKernelPlugin"]
         ),

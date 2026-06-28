@@ -4,6 +4,7 @@ struct ModelsPane: View {
     private var prefs = ModelPreferences.shared
     private var catalog = ModelCatalog.shared
     private var higgsfield = HiggsfieldCatalog.shared
+    private var runtime = OmniVoiceRuntime.shared
 
     @State private var query = ""
     @State private var provider: GenerationProvider = GenerationProvider.selected
@@ -41,8 +42,10 @@ struct ModelsPane: View {
             Divider().overlay(AppTheme.Border.subtleColor)
             if provider == .palmier {
                 palmierContent
-            } else {
+            } else if provider == .higgsfield {
                 higgsfieldContent
+            } else {
+                omniVoiceContent
             }
         }
         .task(id: provider) { if provider == .higgsfield { await refreshHiggsfield() } }
@@ -148,6 +151,69 @@ struct ModelsPane: View {
                 .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.md)
                     .strokeBorder(AppTheme.Border.primaryColor, lineWidth: AppTheme.BorderWidth.thin))
             }
+        }
+    }
+
+    @ViewBuilder
+    private var omniVoiceContent: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                Circle().fill(omniStatusColor).frame(width: 8, height: 8)
+                Text(omniStatusText)
+                    .font(.system(size: AppTheme.FontSize.sm))
+                    .foregroundStyle(AppTheme.Text.secondaryColor)
+                Spacer()
+                omniActionButton
+            }
+            if case .provisioning(let value, let label) = runtime.state {
+                ProgressView(value: value) {
+                    Text(label).font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                }
+            }
+            Text("On-device text-to-speech (646 languages, voice cloning). Runs locally — no sign-in, no credits. First install downloads ~3.5 GB.")
+                .font(.system(size: AppTheme.FontSize.xs))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+        }
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.vertical, AppTheme.Spacing.smMd)
+        .background(RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
+            .fill(Color.black.opacity(AppTheme.Opacity.muted)))
+        .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
+            .strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.thin))
+        .task { runtime.refresh() }
+    }
+
+    @ViewBuilder
+    private var omniActionButton: some View {
+        switch runtime.state {
+        case .ready:
+            EmptyView()
+        case .provisioning:
+            Button("Installing…") {}.disabled(true)
+                .buttonStyle(.capsule(.secondary, size: .regular)).controlSize(.small)
+        default:
+            Button("Install runtime") { Task { try? await runtime.provision() } }
+                .buttonStyle(.capsule(.secondary, size: .regular)).controlSize(.small)
+        }
+    }
+
+    private var omniStatusColor: Color {
+        switch runtime.state {
+        case .ready: return .green
+        case .provisioning: return .orange
+        case .error: return .red
+        default: return AppTheme.Text.mutedColor
+        }
+    }
+
+    private var omniStatusText: String {
+        switch runtime.state {
+        case .ready: return "OmniVoice runtime ready"
+        case .provisioning: return "Installing runtime…"
+        case .error(let m): return "Error: \(m)"
+        case .notInstalled: return "Runtime not installed"
+        case .unknown: return "Checking…"
         }
     }
 

@@ -303,6 +303,13 @@ final class GenerationService {
         onComplete: (@MainActor (MediaAsset) -> Void)?,
         onFailure: (@MainActor () -> Void)?
     ) async {
+        if GenerationProvider.selected == .omnivoice || genInput.model == OmniVoiceCatalog.modelId {
+            await runOmniVoiceJob(
+                placeholders: placeholders, genInput: genInput,
+                editor: editor, onComplete: onComplete, onFailure: onFailure)
+            return
+        }
+
         if GenerationProvider.selected == .higgsfield {
             await runHiggsfieldJob(
                 placeholders: placeholders, genInput: genInput,
@@ -401,6 +408,64 @@ final class GenerationService {
             Log.generation.error("higgsfield generate failed: \(message)")
             for placeholder in placeholders { placeholder.generationStatus = .failed(message) }
             onFailure?()
+        }
+    }
+
+    /// Runs OmniVoice locally (bundled worker) and finalizes the produced WAV.
+    private func runOmniVoiceJob(
+        placeholders: [MediaAsset],
+        genInput: GenerationInput,
+        editor: EditorViewModel,
+        onComplete: (@MainActor (MediaAsset) -> Void)?,
+        onFailure: (@MainActor () -> Void)?
+    ) async {
+        guard let placeholder = placeholders.first else { onFailure?(); return }
+        do {
+            placeholder.generationStatus = .generating
+            let python = try await OmniVoiceRuntime.shared.ensureReady()
+            let out = FileManager.default.temporaryDirectory
+                .appendingPathComponent("omnivoice-\(UUID().uuidString).wav")
+            let job = OmniVoiceJobBuilder.build(genInput: genInput, outputPath: out.path)
+
+            let produced = try await OmniVoiceGenerationProvider.generate(job: job, python: python)
+            guard let firstPath = produced.first else {
+                throw OmniVoiceError.generationFailed("No audio produced.")
+            }
+            if await finalizeLocalFile(asset: placeholder, localURL: URL(fileURLWithPath: firstPath), editor: editor) {
+                onComplete?(placeholder)
+                AppNotifications.generationComplete(
+                    assetId: placeholder.id, projectURL: editor.projectURL,
+                    assetName: placeholder.name, assetType: placeholder.type, count: 1)
+            } else {
+                onFailure?()
+            }
+        } catch {
+            let message = error.localizedDescription
+            Log.generation.error("omnivoice generate failed: \(message)")
+            placeholder.generationStatus = .failed(message)
+            onFailure?()
+        }
+    }
+
+    /// Like `downloadAndFinalize` but the source is already a local file (no network).
+    @discardableResult
+    private func finalizeLocalFile(asset: MediaAsset, localURL: URL, editor: EditorViewModel) async -> Bool {
+        asset.generationStatus = .downloading
+        do {
+            let destinationURL = asset.url
+            try await Task.detached(priority: .utility) {
+                _ = try FileIO.moveReplacingDestination(from: localURL, to: destinationURL)
+            }.value
+            asset.pendingDownloadURL = nil
+            asset.generationStatus = .none
+            editor.importMediaAsset(asset, skipAppend: true)
+            editor.appendGenerationLog(for: asset)
+            await editor.finalizeImportedAsset(asset)
+            return true
+        } catch {
+            Log.generation.error("omnivoice finalize failed: \(error.localizedDescription)")
+            asset.generationStatus = .failed(error.localizedDescription)
+            return false
         }
     }
 

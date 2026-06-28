@@ -103,9 +103,15 @@ final class TimelineView: NSView {
                     editor.timelineVisibleWidth = newVisibleWidth
                     let minZoom = editor.minZoomScale
                     if isFirstLayout {
-                        editor.zoomScale = editor.timeline.totalFrames == 0
-                            ? Defaults.pixelsPerFrame
-                            : minZoom
+                        if let restored = editor.restoredSessionZoom {
+                            // Resume last session's zoom (clamped now that minZoom is known).
+                            editor.zoomScale = min(Zoom.max, max(minZoom, restored))
+                            editor.restoredSessionZoom = nil
+                        } else {
+                            editor.zoomScale = editor.timeline.totalFrames == 0
+                                ? Defaults.pixelsPerFrame
+                                : minZoom
+                        }
                     } else if editor.zoomScale < minZoom {
                         editor.zoomScale = minZoom
                     }

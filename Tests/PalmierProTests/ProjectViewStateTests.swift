@@ -51,6 +51,7 @@ struct ProjectViewStateApplyTests {
         #expect(editor.currentFrame == editor.timeline.totalFrames)
         #expect(editor.currentFrame <= editor.timeline.totalFrames)
         #expect(editor.zoomScale == 12)
+        #expect(editor.restoredSessionZoom == 12)         // stashed so first layout won't fit-to-window
         #expect(editor.selectedClipIds == [clip.id])      // stale id dropped
         #expect(editor.selectedMediaAssetIds.isEmpty)     // stale asset dropped
         #expect(editor.pendingTimelineScroll?.x == 250)   // deferred to the view layer

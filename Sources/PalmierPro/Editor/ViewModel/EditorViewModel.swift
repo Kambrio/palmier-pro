@@ -98,6 +98,9 @@ final class EditorViewModel {
     @ObservationIgnored var timelineScrollY: Double = 0
     /// One-shot scroll restore applied by TimelineContainerView once the content is sized.
     @ObservationIgnored var pendingTimelineScroll: CGPoint?
+    /// One-shot zoom restore honored by the timeline's first layout (when minZoom is finally known),
+    /// instead of the default fit-to-window. Cleared once applied.
+    @ObservationIgnored var restoredSessionZoom: Double?
 
     /// Live caption-generation progress, surfaced by the app-level CaptionProgressHUD.
     /// nil when idle. Managed by startCaptionGeneration / cancelCaptionGeneration.

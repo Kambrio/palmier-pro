@@ -3,11 +3,13 @@ import Foundation
 enum GenerationProvider: String, CaseIterable, Sendable {
     case palmier
     case higgsfield
+    case omnivoice
 
     var displayName: String {
         switch self {
         case .palmier: "Palmier"
         case .higgsfield: "Higgsfield (CLI)"
+        case .omnivoice: "OmniVoice (Local)"
         }
     }
 
@@ -29,6 +31,10 @@ enum GenerationProvider: String, CaseIterable, Sendable {
         switch selected {
         case .palmier: return AccountService.shared.isSignedIn && AccountService.shared.hasCredits
         case .higgsfield: return HiggsfieldCLI.isAvailable
+        case .omnivoice:
+            OmniVoiceRuntime.shared.refresh()
+            if case .ready = OmniVoiceRuntime.shared.state { return true }
+            return OmniVoiceRuntime.bundledUV() != nil
         }
     }
 
@@ -39,6 +45,8 @@ enum GenerationProvider: String, CaseIterable, Sendable {
             return "Generation needs a Palmier account with credits — tell the user to sign in to Palmier and subscribe, or switch the generation provider to Higgsfield in Settings → Models."
         case .higgsfield:
             return "The Higgsfield CLI isn't installed. Tell the user to install it (and run `higgsfield auth login`), or switch the generation provider to Palmier in Settings → Models."
+        case .omnivoice:
+            return "The OmniVoice runtime isn't ready. Tell the user to open Settings → Models and install the OmniVoice (Local) runtime."
         }
     }
 }

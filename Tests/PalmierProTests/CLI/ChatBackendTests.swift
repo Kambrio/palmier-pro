@@ -59,4 +59,16 @@ struct ChatBackendTests {
             #expect(!b.shortName.isEmpty)
         }
     }
+
+    @Test func zaiModelDefaultsToGlm46() {
+        UserDefaults.standard.removeObject(forKey: "io.palmier.pro.chat.zai.model")
+        #expect(ZaiModelPreference.value == .glm46)
+    }
+
+    @Test func zaiModelRawValuesAndDisplayNames() {
+        #expect(ZaiModel.glm46.rawValue == "glm-4.6")
+        #expect(ZaiModel.glm52.rawValue == "glm-5.2")
+        #expect(ZaiModel.glm47.rawValue == "glm-4.7")
+        #expect(ZaiModel.allCases.count == 3)
+    }
 }

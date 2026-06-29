@@ -57,8 +57,34 @@ enum ClaudeCLIModelPreference {
     static var value: AnthropicModel {
         get {
             if let raw = UserDefaults.standard.string(forKey: key),
-               let m = AnthropicModel(rawValue: raw) { return m }
+                let m = AnthropicModel(rawValue: raw) { return m }
             return .haiku45
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+
+enum ZaiModel: String, CaseIterable, Sendable {
+    case glm46 = "glm-4.6"
+    case glm52 = "glm-5.2"
+    case glm47 = "glm-4.7"
+
+    var displayName: String {
+        switch self {
+        case .glm46: "GLM-4.6"
+        case .glm52: "GLM-5.2"
+        case .glm47: "GLM-4.7"
+        }
+    }
+}
+
+enum ZaiModelPreference {
+    private static let key = "io.palmier.pro.chat.zai.model"
+    static var value: ZaiModel {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: key),
+                let m = ZaiModel(rawValue: raw) { return m }
+            return .glm46
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }

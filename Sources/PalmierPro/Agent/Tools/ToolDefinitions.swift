@@ -853,9 +853,10 @@ enum ToolDefinitions {
                     "mediaRef": ["type": "string", "description": "The video asset id (must already be analyzed)."],
                     "name": ["type": "string", "description": "A short, meaningful name for the footage, shown on the timeline (e.g. 'Founder interview — medium')."],
                     "description": ["type": "string", "description": "Overall description of what the footage shows and how it could be used."],
-                    "labels": ["type": "array", "items": ["type": "string"], "description": "Replace ALL labels with this set. Built-ins: key, skip, hero, broll, interview, establishing, reaction, transition; custom strings allowed."],
+                    "labels": ["type": "array", "items": ["type": "string"], "description": "Replace ALL labels with this set. Built-ins: key, skip, hero, broll, interview, establishing, reaction, transition, food, walk; custom strings allowed."],
                     "addLabels": ["type": "array", "items": ["type": "string"], "description": "Labels to add (merge), leaving existing ones in place."],
                     "removeLabels": ["type": "array", "items": ["type": "string"], "description": "Labels to remove."],
+                    "shotSize": ["type": "string", "enum": ShotSize.selectable.map(\.rawValue), "description": "Correct the detected shot scale (overrides auto-detect; sticks across re-analysis). extremeCloseUp, closeUp, mediumCloseUp, mediumFull, full, wide, establishing, master — tight to wide."],
                     "frameDescriptions": [
                         "type": "array",
                         "description": "Per-frame descriptions for the sampled frames.",

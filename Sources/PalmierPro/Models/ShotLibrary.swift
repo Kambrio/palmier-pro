@@ -22,18 +22,67 @@ enum ShotPosition: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// Coarse cinematographic shot scale, derived on-device from the largest subject's frame coverage.
+/// Cinematographic shot scale. The 8 image-backed cases (tight → wide) are the canonical set
+/// offered in the editor and used as the targets for on-device detection; `.unknown` means "not set".
+/// Tolerant decode maps the legacy `medium` value onto `mediumFull` so older projects still load.
 enum ShotSize: String, Codable, Sendable, CaseIterable {
-    case closeUp, medium, wide, establishing, unknown
+    case extremeCloseUp, closeUp, mediumCloseUp, mediumFull, full, wide, establishing, master, unknown
 
     var displayName: String {
         switch self {
-        case .closeUp:      "Close-up"
-        case .medium:       "Medium"
-        case .wide:         "Wide"
-        case .establishing: "Establishing"
-        case .unknown:      "—"
+        case .extremeCloseUp: "Extreme close-up"
+        case .closeUp:        "Close-up"
+        case .mediumCloseUp:  "Medium close-up"
+        case .mediumFull:     "Medium full"
+        case .full:           "Full"
+        case .wide:           "Wide"
+        case .establishing:   "Establishing"
+        case .master:         "Master"
+        case .unknown:        "—"
         }
+    }
+
+    /// Image asset basename in `Resources/Images/ShotSizes/`. Empty for `.unknown`.
+    var imageName: String {
+        switch self {
+        case .extremeCloseUp: "extremeCloseUp"
+        case .closeUp:        "closeUp"
+        case .mediumCloseUp:  "mediumCloseUp"
+        case .mediumFull:     "mediumFull"
+        case .full:           "full"
+        case .wide:           "wide"
+        case .establishing:   "establishing"
+        case .master:         "master"
+        case .unknown:        ""
+        }
+    }
+
+    /// Tight → wide, excluding `.unknown`; the order shown in the picker.
+    static let selectable: [ShotSize] = [
+        .extremeCloseUp, .closeUp, .mediumCloseUp, .mediumFull, .full, .wide, .establishing, .master,
+    ]
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ShotSize(rawValue: raw) ?? ShotSize.legacy(raw) ?? .unknown
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+
+    /// Maps removed raw values onto the canonical scale (currently just the legacy `medium`).
+    private static func legacy(_ raw: String) -> ShotSize? {
+        switch raw {
+        case "medium": return .mediumFull
+        default:       return nil
+        }
+    }
+
+    /// Parse a raw string (current or legacy) into a size. Used by the agent tool.
+    static func parse(_ raw: String) -> ShotSize? {
+        ShotSize(rawValue: raw) ?? legacy(raw)
     }
 }
 
@@ -61,6 +110,8 @@ enum ShotLabels {
         .init(id: "establishing", title: "Establishing", hint: "Sets the scene or location.", systemImage: "mountain.2.fill", colorToken: "green"),
         .init(id: "reaction", title: "Reaction", hint: "Emotional or reaction beat.", systemImage: "face.smiling", colorToken: "pink"),
         .init(id: "transition", title: "Transition", hint: "Movement useful as a cut point.", systemImage: "arrow.left.arrow.right", colorToken: "purple"),
+        .init(id: "food", title: "Food", hint: "Food showcase or eating reaction.", systemImage: "fork.knife", colorToken: "orange"),
+        .init(id: "walk", title: "Walk", hint: "Person walking / on-foot movement.", systemImage: "figure.walk", colorToken: "green"),
     ]
 
     static func def(_ id: String) -> ShotLabelDef? { all.first { $0.id == normalize(id) } }

@@ -31,6 +31,17 @@ open .build/PalmierPro.app
 
 (On the user's own machine `./scripts/dev.sh --no-stream` works directly — it has the keychain identity.)
 
+## Git & PRs
+
+This is the **Kambrio fork** of `palmier-io/palmier-pro`. All work goes to the fork — **never push or open PRs against `upstream` (`palmier-io`)**. `origin` (`Kambrio`) is the remote you commit, push, and PR against; `upstream` is read-only (fetch only, for syncing).
+
+- Branch off `origin/main`, push to `origin`, and open PRs with `base: main` on **`Kambrio/palmier-pro`**:
+  ```bash
+  gh pr create --repo Kambrio/palmier-pro --base main --head <branch>
+  ```
+  (Without `--repo`, `gh` targets the upstream parent and fails with "No commits between main and …".)
+- Commit style: Conventional Commits with a scope — `feat(shots):`, `fix(stab):`, `feat(timeline):`, `docs:`, …
+
 ## Architecture
 
 The whole editor revolves around one observable model and one shared command surface.

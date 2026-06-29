@@ -66,7 +66,7 @@ fi
 inject_plist() {
   local key="$1" value="$2"
   if [ -z "$value" ]; then
-    echo "!! $key not set in $ENV_FILE — app will fatalError on launch" >&2
+    echo "!! $key not set in $ENV_FILE — cloud/account features (Palmier sign-in, Convex generation) disabled; local editing runs without it" >&2
     return
   fi
   /usr/libexec/PlistBuddy -c "Delete :$key" "$APP/Contents/Info.plist" 2>/dev/null || true

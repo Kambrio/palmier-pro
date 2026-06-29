@@ -66,6 +66,7 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var snapshotPreparedForWrite = false
     private nonisolated(unsafe) var snapshotSkipShotLibrary = false
     private nonisolated(unsafe) var snapshotSkipStoryGraph = false
+    private var projectCheckpointAutosaveScheduled = false
 
     // MARK: - Persistence
 
@@ -355,6 +356,21 @@ final class VideoProject: NSDocument {
         editorViewModel.isDocumentEdited = isDocumentEdited
     }
 
+    private func scheduleProjectCheckpointAutosave() {
+        guard fileURL != nil, !projectCheckpointAutosaveScheduled else { return }
+        projectCheckpointAutosaveScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.projectCheckpointAutosaveScheduled = false
+            guard self.fileURL != nil else { return }
+            self.autosave(withImplicitCancellability: false) { error in
+                if let error {
+                    Log.project.error("project checkpoint autosave failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     override var displayName: String! {
         get { fileURL?.deletingPathExtension().lastPathComponent ?? Project.defaultProjectName }
         set { super.displayName = newValue }
@@ -415,6 +431,9 @@ final class VideoProject: NSDocument {
         }
         editorViewModel.onPersistentStateChanged = { [weak self] in
             self?.updateChangeCount(.changeDone)
+        }
+        editorViewModel.onProjectCheckpointRequired = { [weak self] in
+            self?.scheduleProjectCheckpointAutosave()
         }
 
         if let manifest = loadedManifest {
@@ -647,10 +666,37 @@ final class VideoProject: NSDocument {
         for candidate in candidates {
             guard let asset = assetsByID[candidate.id] else { continue }
             guard existingRefs.contains(candidate.id) else {
+                if asset.importInput != nil {
+                    switch asset.generationStatus {
+                    case .failed:
+                        break
+                    default:
+                        asset.generationStatus = .failed("Import interrupted")
+                        editorViewModel.updateManifestMetadata(for: asset)
+                    }
+                    continue
+                }
+                if asset.isRecoveringGeneration {
+                    asset.generationStatus = .generating
+                    editorViewModel.updateManifestMetadata(for: asset)
+                    continue
+                }
                 Log.project.warning("restore: media file missing id=\(candidate.id) name=\(candidate.name) path=\(candidate.url.path)")
                 missing += 1
                 missingRefs.insert(candidate.id)
                 continue
+            }
+            if asset.importInput != nil {
+                if case .failed = asset.generationStatus {
+                    continue
+                }
+                asset.importInput = nil
+                asset.generationStatus = .none
+                editorViewModel.updateManifestMetadata(for: asset)
+            }
+            if asset.generationStatus != .none, !asset.canResumeGeneration {
+                asset.generationStatus = .none
+                editorViewModel.updateManifestMetadata(for: asset)
             }
             restored += 1
             // Thumbnails / waveforms / metadata are generated lazily when a media tile or

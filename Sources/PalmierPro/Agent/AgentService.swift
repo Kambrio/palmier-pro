@@ -7,6 +7,8 @@ final class AgentService {
 
     private var apiKey: String = ""
     private var apiKeyObserver: NSObjectProtocol?
+    private var zaiKey: String = ""
+    private var zaiKeyObserver: NSObjectProtocol?
 
     init() {
         reloadAPIKey()
@@ -17,6 +19,16 @@ final class AgentService {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.reloadAPIKey()
+            }
+        }
+        reloadZaiKey()
+        zaiKeyObserver = NotificationCenter.default.addObserver(
+            forName: .zaiAPIKeyChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.reloadZaiKey()
             }
         }
     }
@@ -30,13 +42,26 @@ final class AgentService {
         }
     }
 
+    private func reloadZaiKey() {
+        Task { [weak self] in
+            let key = await Task.detached(priority: .utility) {
+                ZaiKeychain.load() ?? ""
+            }.value
+            self?.zaiKey = key
+        }
+    }
+
     isolated deinit {
         if let token = apiKeyObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
+        if let token = zaiKeyObserver {
             NotificationCenter.default.removeObserver(token)
         }
     }
 
     var hasApiKey: Bool { !apiKey.isEmpty }
+    var hasZaiKey: Bool { !zaiKey.isEmpty }
 
     private static let claudeLocator = CLILocator(tool: "claude")
     private var claudePath: String? { Self.claudeLocator.resolve(override: nil) }
@@ -45,6 +70,7 @@ final class AgentService {
     var availableBackends: Set<ChatBackend> {
         var set: Set<ChatBackend> = []
         if hasApiKey { set.insert(.apiKey) }
+        if hasZaiKey { set.insert(.zai) }
         let account = AccountService.shared
         if account.isSignedIn && account.hasCredits { set.insert(.palmier) }
         if isClaudeCLIAvailable { set.insert(.claudeCLI) }
@@ -67,13 +93,21 @@ final class AgentService {
         }
     }
 
+    var zaiModel: ZaiModel { ZaiModelPreference.value }
+
     private func selectClient() -> (any AgentClient)? {
         let chosen = effectiveModel
-        if hasApiKey { return AnthropicClient(apiKey: apiKey, model: chosen) }
-        if AccountService.shared.isSignedIn {
-            return PalmierClient(model: chosen)
+        switch effectiveBackend {
+        case .apiKey:
+            return AnthropicClient(apiKey: apiKey, model: chosen)
+        case .palmier:
+            return AccountService.shared.isSignedIn ? PalmierClient(model: chosen) : nil
+        case .zai:
+            guard hasZaiKey else { return nil }
+            return ZaiClient(apiKey: zaiKey, model: zaiModel)
+        case .claudeCLI, .none:
+            return nil
         }
-        return nil
     }
 
     var effectiveModel: AnthropicModel {
@@ -316,7 +350,7 @@ final class AgentService {
 
     func send(text: String, mentions: [AgentMention]) {
         guard canStream else {
-            streamError = .upstream("Sign in, add an Anthropic API key, or install the Claude Code CLI to start.")
+            streamError = .upstream("Sign in, add an Anthropic or z.ai API key, or install the Claude Code CLI to start.")
             return
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

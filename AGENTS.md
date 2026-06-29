@@ -16,6 +16,21 @@ swift test --filter PalmierProTests.TimeFormattingTests # fully-qualified
 
 `scripts/bundle.sh` builds the `.app`; `scripts/release.sh` builds + notarizes for Developer ID distribution (Sparkle `appcast.xml`).
 
+## Restarting after a build
+
+After every successful build, **restart the running app** so the user sees the change — `open` alone reactivates the old instance. Quit first (the app sometimes ignores the graceful ask, so `kill` the pid), rebuild, then relaunch.
+
+In the agent's sandboxed shell the Developer ID identity isn't in the keychain, so `bundle.sh`/`dev.sh` `--fast` signing fails and leaves the bundle unlaunchable. Re-sign ad-hoc before opening:
+
+```bash
+kill $(pgrep -f PalmierPro.app/Contents/MacOS/PalmierPro) 2>/dev/null; sleep 1
+swift build && ./scripts/bundle.sh debug --fast
+codesign --force --deep --sign - .build/PalmierPro.app
+open .build/PalmierPro.app
+```
+
+(On the user's own machine `./scripts/dev.sh --no-stream` works directly — it has the keychain identity.)
+
 ## Architecture
 
 The whole editor revolves around one observable model and one shared command surface.
@@ -35,6 +50,8 @@ The whole editor revolves around one observable model and one shared command sur
   - **Generation** (`GenerationProvider`): the **Higgsfield CLI** provider (`Generation/Higgsfield/`) replaces the Convex submit/upload/poll with `higgsfield generate create … --wait --json` (local refs auto-upload), then reuses the existing download/finalize path. Picked in `Settings/ModelsPane`.
 
 **Rendering/preview** (`Preview/`): `CompositionBuilder` turns the frame-based timeline into an `AVComposition` + Core Animation layers; `VideoEngine` plays it; text/Lottie/image clips are rendered to video by their generators. **Export** (`Export/`) reuses the composition path and also writes FCP `XMLExporter` and `.palmier` bundles.
+
+**Stabilization** (`Stabilization/`): all on-device, no round-trip. `StabilizationManager` (on `EditorViewModel`) drives four modes: native path smoothing (`PathSmoother`/`TrackPath` — locked/cinematic/organic), FFmpeg `vid.stab` (`VidStab`/`FFmpegStabService`), **Subject Lock** (`SubjectTracker` + the YOLO `ObjectDetector` keeps a person/object steady), **Point Track** (`PointSetTracker` holds position/rotation/scale). Results persist as sidecars (`StabilizationSidecar`). Agent/MCP tool: `stabilize_clips`.
 
 **Other subsystems:** `Generation/` (closed-source generative AI — Seedance/Kling/Nano Banana via `GenerationService`), `Search/` (on-device SigLIP2 visual search + transcript search, models under `models/`), `Transcription/` (captions/transcripts), `Account/` (Clerk + Convex auth, gates generative features).
 

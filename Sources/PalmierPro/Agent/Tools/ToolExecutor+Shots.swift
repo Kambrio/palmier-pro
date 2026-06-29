@@ -21,8 +21,9 @@ fileprivate struct SetShotInput: DecodableToolArgs {
     let labels: [String]?
     let addLabels: [String]?
     let removeLabels: [String]?
+    let shotSize: String?
     let frameDescriptions: [FrameDesc]?
-    static let allowedKeys: Set<String> = ["mediaRef", "name", "description", "labels", "addLabels", "removeLabels", "frameDescriptions"]
+    static let allowedKeys: Set<String> = ["mediaRef", "name", "description", "labels", "addLabels", "removeLabels", "shotSize", "frameDescriptions"]
 
     struct FrameDesc: Decodable {
         let position: String
@@ -136,6 +137,13 @@ extension ToolExecutor {
             }
         }
         if input.removeLabels?.isEmpty == false { changed.append("removeLabels") }
+        if let sizeRaw = input.shotSize {
+            guard let size = ShotSize.parse(sizeRaw) else {
+                throw ToolError("shotSize: '\(sizeRaw)' is not a known size. Valid: \(ShotSize.selectable.map(\.rawValue).joined(separator: ", ")).")
+            }
+            manager.setShotSize(assetId: input.mediaRef, size)
+            changed.append("shotSize")
+        }
         for fd in input.frameDescriptions ?? [] {
             guard let pos = ShotPosition(rawValue: fd.position) else {
                 throw ToolError("frameDescriptions: invalid position '\(fd.position)'. Expected q10, median, or q90.")

@@ -108,22 +108,25 @@ enum ShotAnalyzer {
     }
 
     /// Blends direct geometric evidence (face / person coverage — authoritative when a subject is
-    /// present) with SigLIP's zero-shot guess (used when no subject anchors the scale).
+    /// present) with SigLIP's zero-shot guess (used when no subject anchors the scale). Maps onto the
+    /// canonical 8-size scale (`ShotSize.selectable`).
     private static func shotSize(faceFraction: Double, objects: [DetectedObject], sceneLabels: [String], siglip: SigLIPShotSignal?) -> ShotSize {
         if faceFraction > 0 {
             switch faceFraction {
-            case 0.18...:      return .closeUp
-            case 0.06..<0.18:  return .medium
-            case 0.012..<0.06: return .wide
-            default:           return .establishing
+            case 0.40...:       return .extremeCloseUp
+            case 0.18..<0.40:   return .closeUp
+            case 0.09..<0.18:   return .mediumCloseUp
+            case 0.04..<0.09:   return .mediumFull
+            default:            return .full
             }
         }
         let personHeights = objects.filter { $0.label == "person" }.map { $0.box.height }
         if let tallest = personHeights.max() {
             switch tallest {
-            case 0.8...:     return .medium
-            case 0.4..<0.8:  return .wide
-            default:         return .establishing
+            case 0.85...:       return .full
+            case 0.5..<0.85:    return .mediumFull
+            case 0.25..<0.5:    return .wide
+            default:            return .establishing
             }
         }
         // No subject to measure → trust SigLIP's semantic guess when available (best remaining signal).

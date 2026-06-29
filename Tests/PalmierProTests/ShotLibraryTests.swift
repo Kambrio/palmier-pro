@@ -8,7 +8,7 @@ struct ShotLibraryModelTests {
         entry.displayName = "Founder interview"
         entry.summary = "Medium shot, 1 person, office."
         entry.labels = ["key", "interview"]
-        entry.shotSize = .medium
+        entry.shotSize = .mediumFull
         entry.people = 1
         entry.hasSpeech = true
         entry.transcriptExcerpt = "We started this in 2024"
@@ -17,7 +17,7 @@ struct ShotLibraryModelTests {
         var frame = ShotFrame(position: .median, timeSeconds: 6.25)
         frame.sceneLabels = ["office", "indoor"]
         frame.objects = ["person", "laptop"]
-        frame.shotSize = .medium
+        frame.shotSize = .mediumFull
         frame.people = 1
         frame.description = "A person at a desk."
         frame.thumbnailRelPath = "media/shots/asset-1.median.jpg"
@@ -31,7 +31,7 @@ struct ShotLibraryModelTests {
         let back = try #require(decoded.entry(assetId: "asset-1"))
         #expect(back.displayName == "Founder interview")
         #expect(back.labels == ["key", "interview"])
-        #expect(back.shotSize == .medium)
+        #expect(back.shotSize == .mediumFull)
         #expect(back.frames.first?.objects == ["person", "laptop"])
         #expect(back.isKey)
         #expect(!back.isSkipped)
@@ -46,6 +46,25 @@ struct ShotLibraryModelTests {
         #expect(entry.labels.isEmpty)
         #expect(entry.frames.isEmpty)
         #expect(entry.shotSize == nil)
+    }
+
+    @Test func decodesLegacyShotSizeStrings() throws {
+        // Older projects stored the legacy `medium` size and the still-current raw values.
+        let json = #"""
+        {"version":1,"entries":[
+            {"assetId":"legacy","shotSize":"medium","frames":[{"position":"median","timeSeconds":1,"shotSize":"medium"}]},
+            {"assetId":"current","shotSize":"wide","frames":[{"position":"median","timeSeconds":1,"shotSize":"closeUp"}]}
+        ]}
+        """#
+        let decoded = try JSONDecoder().decode(ShotLibrary.self, from: Data(json.utf8))
+        let legacy = try #require(decoded.entry(assetId: "legacy"))
+        #expect(legacy.shotSize == .mediumFull)
+        #expect(legacy.frames.first?.shotSize == .mediumFull)
+        let current = try #require(decoded.entry(assetId: "current"))
+        #expect(current.shotSize == .wide)
+        #expect(current.frames.first?.shotSize == .closeUp)
+        #expect(ShotSize.parse("medium") == .mediumFull)
+        #expect(ShotSize.parse("bogus") == nil)
     }
 
     @Test func upsertReplacesAndRemoveDrops() {

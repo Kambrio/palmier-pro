@@ -270,6 +270,7 @@ private struct ShotDetailEditor: View {
                     Text(pos.label)
                         .font(.system(size: AppTheme.FontSize.xxs, weight: AppTheme.FontWeight.medium))
                         .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    ShotSizePicker(assetId: asset.id, position: pos, size: frame?.shotSize ?? .unknown, manager: manager)
                     if let frame, let desc = frame.description, !desc.isEmpty {
                         Text(desc)
                             .font(.system(size: AppTheme.FontSize.xxs))
@@ -384,6 +385,69 @@ private struct ShotDetailEditor: View {
 }
 
 // MARK: - Small components
+
+/// A {image + text} dropdown to view/correct a frame's detected shot size. Each option shows the
+/// canonical shot-size preview so the user can pick by eye when auto-detect is wrong.
+private struct ShotSizePicker: View {
+    let assetId: String
+    let position: ShotPosition
+    let size: ShotSize
+    let manager: ShotLibraryManager
+
+    var body: some View {
+        Menu {
+            ForEach(ShotSize.selectable, id: \.self) { s in
+                Button {
+                    manager.setFrameShotSize(assetId: assetId, position: position, s)
+                } label: {
+                    Label {
+                        Text(s.displayName)
+                    } icon: {
+                        ShotSizeGlyph(size: s, height: 14)
+                    }
+                }
+                .disabled(s == size)
+            }
+        } label: {
+            HStack(spacing: AppTheme.Spacing.xxs) {
+                ShotSizeGlyph(size: size, height: 16)
+                Text(size == .unknown ? "Shot size" : size.displayName)
+                    .font(.system(size: AppTheme.FontSize.xxs, weight: AppTheme.FontWeight.medium))
+                    .foregroundStyle(size == .unknown ? AppTheme.Text.tertiaryColor : AppTheme.Text.secondaryColor)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 7, weight: AppTheme.FontWeight.semibold))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+            .padding(.horizontal, AppTheme.Spacing.xs)
+            .padding(.vertical, AppTheme.Spacing.xxs)
+            .background(RoundedRectangle(cornerRadius: AppTheme.Radius.xs).fill(AppTheme.Background.raisedColor))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.Radius.xs).strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.hairline))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+}
+
+/// A shot-size preview glyph loaded from the bundle, sized to fit inline. Both axes are bounded so
+/// the resizable image's natural pixel size can't inflate its ideal size (which `.fixedSize()` on
+/// the picker, and the frames-strip column width, would otherwise adopt).
+private struct ShotSizeGlyph: View {
+    let size: ShotSize
+    var height: CGFloat = 16
+
+    var body: some View {
+        Group {
+            if let img = ShotSizeArtwork.image(for: size) {
+                Image(nsImage: img).resizable().scaledToFit()
+            } else {
+                Image(systemName: "crop")
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+        }
+        .frame(width: height * 2, height: height)
+    }
+}
 
 /// Resolves a label id to its color-coding hue: the catalog token for built-ins, or a stable
 /// hash into the palette for custom labels.

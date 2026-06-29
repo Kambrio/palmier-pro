@@ -17,14 +17,16 @@ actor SigLIPShotClassifier {
 
     /// (label, prompt) banks. Prompts are written in the "a photo of …" style CLIP-likes expect.
     private static let shotSizePrompts: [(ShotSize, String)] = [
-        (.closeUp, "a close-up shot of a person's face"),
-        (.closeUp, "an extreme close-up of a face filling the frame"),
-        (.medium, "a medium shot of a person from the waist up"),
-        (.medium, "a medium close-up of one person talking to camera"),
-        (.wide, "a wide shot showing a person's full body"),
-        (.wide, "a wide shot of several people in a location"),
-        (.establishing, "an establishing wide landscape shot with no people"),
-        (.establishing, "an aerial drone establishing shot of a place"),
+        (.extremeCloseUp, "an extreme close-up of a face filling the frame"),
+        (.extremeCloseUp, "an extreme close-up of an eye or a small detail"),
+        (.closeUp,        "a close-up shot of a person's face and shoulders"),
+        (.mediumCloseUp,  "a medium close-up of one person talking to camera, chest up"),
+        (.mediumFull,     "a medium full shot of a person from the knees up"),
+        (.full,           "a full shot showing a person's entire body head to toe"),
+        (.wide,           "a wide shot of several people in a location with surroundings"),
+        (.establishing,   "an establishing wide landscape shot with no people"),
+        (.establishing,   "an aerial drone establishing shot of a place"),
+        (.master,         "a master shot of an entire scene showing where everyone is"),
     ]
 
     private static let scenePrompts: [String] = [

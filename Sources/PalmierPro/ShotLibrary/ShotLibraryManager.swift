@@ -117,14 +117,16 @@ final class ShotLibraryManager {
             Log.project.error("shot analysis produced no result id=\(assetId.prefix(8))")
             return
         }
-        // Preserve user edits to name/summary/labels/per-frame descriptions across a re-analysis.
+        // Preserve user edits to name/summary/labels/per-frame descriptions/shot sizes across a re-analysis.
         if let prior = editor.shotLibrary.entry(assetId: assetId), prior.edited {
             entry.summary = prior.summary
             entry.displayName = prior.displayName
             entry.labels = prior.labels
+            entry.shotSize = prior.shotSize
             for pf in prior.frames {
                 if let i = entry.frames.firstIndex(where: { $0.position == pf.position }) {
                     entry.frames[i].description = pf.description
+                    entry.frames[i].shotSize = pf.shotSize
                 }
             }
             entry.edited = true
@@ -153,6 +155,18 @@ final class ShotLibraryManager {
         }
     }
 
+    /// Override the detected shot size for one frame (the user's correction beats auto-detect). The
+    /// entry's representative size tracks the middle frame. Sticks across re-analysis via `edited`.
+    func setFrameShotSize(assetId: String, position: ShotPosition, _ size: ShotSize) {
+        mutate(assetId) { entry in
+            if let i = entry.frames.firstIndex(where: { $0.position == position }) {
+                entry.frames[i].shotSize = size
+            }
+            if position == .median { entry.shotSize = size }
+            entry.edited = true
+        }
+    }
+
     func toggleLabel(assetId: String, _ rawLabel: String) {
         let label = ShotLabels.normalize(rawLabel)
         guard !label.isEmpty else { return }
@@ -171,6 +185,18 @@ final class ShotLibraryManager {
             editor.shotLibrary.upsert(ShotEntry(assetId: assetId))
         }
         toggleLabel(assetId: assetId, rawLabel)
+    }
+
+    /// Override the representative shot size for the footage (entry + middle frame). Sticks across
+    /// re-analysis via `edited`.
+    func setShotSize(assetId: String, _ size: ShotSize) {
+        mutate(assetId) { entry in
+            entry.shotSize = size
+            if let i = entry.frames.firstIndex(where: { $0.position == .median }) {
+                entry.frames[i].shotSize = size
+            }
+            entry.edited = true
+        }
     }
 
     func setLabels(assetId: String, _ labels: [String]) {

@@ -39,7 +39,7 @@ struct SecureAPIKeyRow: View {
                 Button(action: {
                     NSWorkspace.shared.open(getKeyURL, configuration: .init(), completionHandler: nil)
                 }) {
-                    HStack(spacing: 2) {
+                    HStack(spacing: AppTheme.Spacing.xxs) {
                         Text(getKeyLabel)
                         Image(systemName: "arrow.up.right")
                             .font(.system(size: AppTheme.FontSize.xs, weight: .semibold))

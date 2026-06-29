@@ -37,4 +37,26 @@ struct ChatBackendTests {
         UserDefaults.standard.removeObject(forKey: "io.palmier.pro.chat.cli.model")
         #expect(ClaudeCLIModelPreference.value == .haiku45)
     }
+
+    @Test func zaiParticipatesInEffectiveSelection() {
+        #expect(ChatBackend.effective(selected: .zai, available: [.zai]) == .zai)
+    }
+
+    @Test func fallbackPlacesZaiAfterApiKeyBeforePalmier() {
+        #expect(ChatBackend.effective(selected: .palmier,
+                                      available: [.apiKey, .zai]) == .apiKey)
+        #expect(ChatBackend.effective(selected: .palmier,
+                                      available: [.zai]) == .zai)
+    }
+
+    @Test func zaiHasDisplayAndShortNames() {
+        #expect(ChatBackend.zai.displayName == "z.ai (GLM Plan)")
+        #expect(ChatBackend.zai.shortName == "z.ai")
+    }
+
+    @Test func everyBackendHasAShortName() {
+        for b in ChatBackend.allCases {
+            #expect(!b.shortName.isEmpty)
+        }
+    }
 }

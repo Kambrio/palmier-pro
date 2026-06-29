@@ -62,6 +62,7 @@ final class AgentService {
         case .apiKey: return AnthropicModel.allCases
         case .claudeCLI: return [.haiku45, .sonnet46, .opus48]   // Haiku first = default
         case .palmier: return AccountService.shared.isPaid ? [.sonnet46] : [.haiku45]
+        case .zai: return [.sonnet46]
         case .none: return [.sonnet46]
         }
     }

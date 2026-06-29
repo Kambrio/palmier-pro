@@ -3,21 +3,27 @@ import SwiftUI
 
 struct AgentPane: View {
     @Bindable private var appState = AppState.shared
-    @State private var hasKey: Bool = false
-    @State private var maskedKey: String = ""
-    @State private var draft: String = ""
-    @FocusState private var isFocused: Bool
+    @State private var anthropicHasKey: Bool = false
+    @State private var anthropicMasked: String = ""
+    @State private var anthropicDraft: String = ""
+    @State private var zaiHasKey: Bool = false
+    @State private var zaiMasked: String = ""
+    @State private var zaiDraft: String = ""
     @State private var backend: ChatBackend = ChatBackend.selected
     @State private var claudeFound: Bool = false
     @State private var cliModel: AnthropicModel = ClaudeCLIModelPreference.value
+    @State private var zaiModel: ZaiModel = ZaiModelPreference.value
 
     private let consoleURL = URL(string: "https://console.anthropic.com/settings/keys")!
+    private let zaiSubscribeURL = URL(string: "https://z.ai/subscribe")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
             backendSection
             Divider().overlay(AppTheme.Border.subtleColor)
             apiKeySection
+            Divider().overlay(AppTheme.Border.subtleColor)
+            zaiKeySection
             Divider().overlay(AppTheme.Border.subtleColor)
             mcpSection
             Divider().overlay(AppTheme.Border.subtleColor)
@@ -97,7 +103,7 @@ struct AgentPane: View {
 
             Picker("", selection: $backend) {
                 ForEach(ChatBackend.allCases, id: \.self) { b in
-                    Text(b.displayName).tag(b)
+                    Text(b.shortName).tag(b)
                 }
             }
             .labelsHidden()
@@ -107,6 +113,8 @@ struct AgentPane: View {
             if backend == .claudeCLI {
                 claudeCLIStatusRow
                 claudeCLIModelPicker
+            } else if backend == .zai {
+                zaiModelPicker
             }
         }
     }
@@ -147,137 +155,110 @@ struct AgentPane: View {
         }
     }
 
-    private var apiKeySection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
-            header
-            keyField
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
-            Text("Anthropic API Key")
-                .font(.system(size: AppTheme.FontSize.md, weight: .medium))
-                .foregroundStyle(AppTheme.Text.primaryColor)
-
-            HStack(alignment: .firstTextBaseline, spacing: AppTheme.Spacing.sm) {
-                Text("Used your own API key for the AI chat. Stored in your macOS Keychain.")
-                    .font(.system(size: AppTheme.FontSize.sm))
-                    .foregroundStyle(AppTheme.Text.tertiaryColor)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button(action: { NSWorkspace.shared.open(consoleURL, configuration: .init(), completionHandler: nil) }) {
-                    HStack(spacing: 2) {
-                        Text("Get Anthropic API key")
-                        Image(systemName: "arrow.up.right")
-                            .font(.system(size: AppTheme.FontSize.xs, weight: .semibold))
-                    }
-                    .font(.system(size: AppTheme.FontSize.sm))
-                    .foregroundStyle(AppTheme.Accent.primary)
-                }
-                .buttonStyle(.plain)
-                .fixedSize()
-            }
-        }
-    }
-
-    private var keyField: some View {
+    private var zaiModelPicker: some View {
         HStack(spacing: AppTheme.Spacing.sm) {
-            fieldBox
-            trailingControl
-        }
-    }
-
-    private var fieldBox: some View {
-        SecureField(placeholder, text: $draft)
-            .textFieldStyle(.plain)
-            .focused($isFocused)
-            .font(.system(size: AppTheme.FontSize.sm, design: .monospaced))
-            .foregroundStyle(AppTheme.Text.primaryColor)
-            .onSubmit(save)
-            .padding(.horizontal, AppTheme.Spacing.md)
-            .padding(.vertical, AppTheme.Spacing.smMd)
-            .background(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                    .fill(Color.black.opacity(AppTheme.Opacity.muted))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                    .strokeBorder(
-                        isFocused ? AppTheme.Border.primaryColor : AppTheme.Border.subtleColor,
-                        lineWidth: AppTheme.BorderWidth.thin
-                    )
-            )
-            .animation(.easeOut(duration: AppTheme.Anim.hover), value: isFocused)
-    }
-
-    private var placeholder: String {
-        hasKey ? maskedKey : "sk-ant-..."
-    }
-
-    @ViewBuilder
-    private var trailingControl: some View {
-        let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        if !trimmed.isEmpty {
-            Button("Save", action: save)
-                .buttonStyle(.capsule(.prominent, size: .regular))
-                .controlSize(.large)
-        } else if hasKey {
-            Button(action: remove) {
-                Image(systemName: "trash")
-                    .font(.system(size: AppTheme.FontSize.md))
-                    .foregroundStyle(AppTheme.Text.secondaryColor)
-                    .frame(width: AppTheme.IconSize.md, height: AppTheme.IconSize.md)
+            Text("Model")
+                .font(.system(size: AppTheme.FontSize.sm))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+            Picker("", selection: $zaiModel) {
+                ForEach(ZaiModel.allCases, id: \.self) { m in
+                    Text(m.displayName).tag(m)
+                }
             }
-            .buttonStyle(.capsule(.secondary, size: .regular))
-            .controlSize(.large)
-            .help("Remove API key")
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .onChange(of: zaiModel) { _, v in ZaiModelPreference.value = v }
         }
+    }
+
+    private var apiKeySection: some View {
+        SecureAPIKeyRow(
+            title: "Anthropic API Key",
+            description: "Used your own API key for the AI chat. Stored in your macOS Keychain.",
+            getKeyURL: consoleURL,
+            getKeyLabel: "Get Anthropic API key",
+            placeholderPrefix: "sk-ant-...",
+            hasKey: anthropicHasKey,
+            maskedKey: anthropicMasked,
+            draft: $anthropicDraft,
+            onSave: saveAnthropic,
+            onRemove: removeAnthropic
+        )
+    }
+
+    private var zaiKeySection: some View {
+        SecureAPIKeyRow(
+            title: "z.ai API Key",
+            description: "Use the GLM Coding Plan for the AI chat. Stored in your macOS Keychain.",
+            getKeyURL: zaiSubscribeURL,
+            getKeyLabel: "Get z.ai key",
+            placeholderPrefix: "...",
+            hasKey: zaiHasKey,
+            maskedKey: zaiMasked,
+            draft: $zaiDraft,
+            onSave: saveZai,
+            onRemove: removeZai
+        )
     }
 
     private func refresh() {
         Task { @MainActor in
-            let key = await Self.loadKey()
-            applyKey(key)
+            async let aKey = Self.load(AnthropicKeychain.load)
+            async let zKey = Self.load(ZaiKeychain.load)
+            let (a, z) = (await aKey, await zKey)
+            anthropicHasKey = !a.isEmpty
+            anthropicMasked = Self.mask(a)
+            zaiHasKey = !z.isEmpty
+            zaiMasked = Self.mask(z)
+            claudeFound = CLILocator(tool: "claude").resolve(override: nil) != nil
         }
     }
 
-    private func applyKey(_ key: String) {
-        hasKey = !key.isEmpty
-        maskedKey = mask(key)
-        claudeFound = CLILocator(tool: "claude").resolve(override: nil) != nil
+    private static func load(_ loader: @escaping @Sendable () -> String?) async -> String {
+        await Task.detached(priority: .utility) { loader() ?? "" }.value
     }
 
-    private func save() {
-        let key = draft.trimmingCharacters(in: .whitespaces)
+    private func saveAnthropic() {
+        let key = anthropicDraft.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return }
-        draft = ""
-        isFocused = false
+        anthropicDraft = ""
         Task { @MainActor in
-            await Task.detached(priority: .userInitiated) {
-                AnthropicKeychain.save(key)
-            }.value
-            applyKey(key)
+            await Task.detached(priority: .userInitiated) { AnthropicKeychain.save(key) }.value
+            anthropicHasKey = true
+            anthropicMasked = Self.mask(key)
         }
     }
 
-    private func remove() {
-        draft = ""
+    private func removeAnthropic() {
+        anthropicDraft = ""
         Task { @MainActor in
-            await Task.detached(priority: .userInitiated) {
-                AnthropicKeychain.delete()
-            }.value
-            applyKey("")
+            await Task.detached(priority: .userInitiated) { AnthropicKeychain.delete() }.value
+            anthropicHasKey = false
+            anthropicMasked = ""
         }
     }
 
-    private static func loadKey() async -> String {
-        await Task.detached(priority: .utility) {
-            AnthropicKeychain.load() ?? ""
-        }.value
+    private func saveZai() {
+        let key = zaiDraft.trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return }
+        zaiDraft = ""
+        Task { @MainActor in
+            await Task.detached(priority: .userInitiated) { ZaiKeychain.save(key) }.value
+            zaiHasKey = true
+            zaiMasked = Self.mask(key)
+        }
     }
 
-    private func mask(_ key: String) -> String {
+    private func removeZai() {
+        zaiDraft = ""
+        Task { @MainActor in
+            await Task.detached(priority: .userInitiated) { ZaiKeychain.delete() }.value
+            zaiHasKey = false
+            zaiMasked = ""
+        }
+    }
+
+    private static func mask(_ key: String) -> String {
         guard key.count > 4 else { return String(repeating: "\u{2022}", count: 32) }
         return String(repeating: "\u{2022}", count: 36) + key.suffix(4)
     }

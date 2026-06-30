@@ -20,18 +20,41 @@ struct AgentPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
             backendSection
-            Divider().overlay(AppTheme.Border.subtleColor)
-            apiKeySection
-            Divider().overlay(AppTheme.Border.subtleColor)
-            zaiKeySection
+            if showsKeySection {
+                Divider().overlay(AppTheme.Border.subtleColor)
+                keySection
+            }
             Divider().overlay(AppTheme.Border.subtleColor)
             mcpSection
-            Divider().overlay(AppTheme.Border.subtleColor)
-            skillsSection
+            if showsSkillsSection {
+                Divider().overlay(AppTheme.Border.subtleColor)
+                skillsSection
+            }
             Divider().overlay(AppTheme.Border.subtleColor)
             transcriptSection
         }
         .onAppear(perform: refresh)
+    }
+
+    private var showsKeySection: Bool {
+        backend == .apiKey || backend == .zai
+    }
+
+    /// Skills global-install only matters for the Claude Code CLI path (terminal `claude`
+    /// discovers skills from ~/.claude/skills). The in-app API/z.ai agent gets skills via the
+    /// system-prompt index, so the toggle is irrelevant there — hide it unless the CLI is in use
+    /// or installed on PATH.
+    private var showsSkillsSection: Bool {
+        backend == .claudeCLI || claudeFound
+    }
+
+    @ViewBuilder
+    private var keySection: some View {
+        switch backend {
+        case .apiKey: apiKeySection
+        case .zai: zaiKeySection
+        default: EmptyView()
+        }
     }
 
     @State private var transcriptDetail = ChatTranscriptDetail.selected

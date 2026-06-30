@@ -438,6 +438,11 @@ struct GenerationView: View {
 
     private var aiAllowed: Bool { account.aiAllowed }
 
+    /// OmniVoice is on-device and free, so it must not be gated behind Palmier sign-in
+    /// (the agent path already skips the check for omnivoice).
+    private var isOmniVoice: Bool { selectedType == .audio && audioModel.id == OmniVoiceCatalog.modelId }
+    private var canRunGeneration: Bool { aiAllowed || isOmniVoice }
+
     private var catalogLoadingView: some View {
         VStack(spacing: AppTheme.Spacing.md) {
             ProgressView()
@@ -1296,10 +1301,10 @@ struct GenerationView: View {
 
     private var submitButton: some View {
         Button {
-            if aiAllowed { submitGeneration() }
+            if canRunGeneration { submitGeneration() }
             else if !account.isMisconfigured { Task { await account.signInWithGoogle() } }
         } label: {
-            Image(systemName: aiAllowed ? "arrow.up" : "person.crop.circle")
+            Image(systemName: canRunGeneration ? "arrow.up" : "person.crop.circle")
                 .font(.system(size: AppTheme.FontSize.sm, weight: .bold))
                 .frame(width: AppTheme.IconSize.sm, height: AppTheme.IconSize.sm)
         }
@@ -1307,9 +1312,9 @@ struct GenerationView: View {
         .buttonBorderShape(.circle)
         .controlSize(.regular)
         .tint(AppTheme.Accent.primary)
-        .disabled(aiAllowed ? !canSubmit : account.isMisconfigured || account.isSigningIn)
-        .opacity((aiAllowed ? canSubmit : !account.isMisconfigured && !account.isSigningIn) ? AppTheme.Opacity.opaque : AppTheme.Opacity.strong)
-        .help(aiAllowed ? "" : (account.isMisconfigured ? "AI is unavailable" : account.isSigningIn ? "Opening Google" : "Sign in to generate"))
+        .disabled(canRunGeneration ? !canSubmit : account.isMisconfigured || account.isSigningIn)
+        .opacity((canRunGeneration ? canSubmit : !account.isMisconfigured && !account.isSigningIn) ? AppTheme.Opacity.opaque : AppTheme.Opacity.strong)
+        .help(canRunGeneration ? "" : (account.isMisconfigured ? "AI is unavailable" : account.isSigningIn ? "Opening Google" : "Sign in to generate"))
     }
 
     // MARK: - Type picker

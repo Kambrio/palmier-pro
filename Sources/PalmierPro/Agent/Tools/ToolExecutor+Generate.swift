@@ -252,6 +252,17 @@ extension ToolExecutor {
             }
         }
 
+        // OmniVoice runs locally and must provision before it can synthesize. If a prior
+        // provisioning attempt left the runtime in an error state, refuse now — otherwise the
+        // generation starts, the agent places a clip, and a silent placeholder is left when the
+        // doomed job fails in the background. Re-provision via Settings → Models to clear this.
+        if useOmniVoice {
+            OmniVoiceRuntime.shared.refresh()
+            if case .error(let message) = OmniVoiceRuntime.shared.state {
+                throw ToolError("OmniVoice runtime isn't available: \(message). Tell the user to open Settings → Models, reinstall the OmniVoice (Local) runtime, then try again.")
+            }
+        }
+
         let defaultModelId = useOmniVoice ? OmniVoiceCatalog.modelId : AudioModelConfig.allModels.first?.id
         guard let modelId = args.string("model") ?? defaultModelId else {
             throw ToolError("Model catalog not loaded yet. Try again in a moment.")
@@ -317,16 +328,27 @@ extension ToolExecutor {
             throw ToolError(err)
         }
 
-        // OmniVoice: resolve a voice-reference asset (for cloning) to a local file path.
+        // OmniVoice: resolve a voice-reference asset (for cloning) to a local audio file.
+        // Accepts audio OR video assets — video is demuxed to a mono WAV via ffmpeg, and
+        // resolution is proxy-aware so cloning works while the footage drive is offline.
         var omniVoiceRefPath: String?
         var omniVoiceLanguage: String?
         if useOmniVoice {
             omniVoiceLanguage = args.string("language") ?? "English"
             if let voiceRef = args.string("voice"),
                let voiceAsset = try? asset(voiceRef, editor: editor, label: "Voice reference"),
-               voiceAsset.type == .audio,
-               let url = editor.mediaResolver.resolveURL(for: voiceAsset.id) {
-                omniVoiceRefPath = url.path
+               voiceAsset.type == .audio || voiceAsset.type == .video {
+                let refId = voiceAsset.id
+                let isVideo = voiceAsset.type == .video
+                if let refURL = try? await OmniVoiceCloneResolver.makeRefAudio(
+                    mediaRef: refId,
+                    isVideo: isVideo,
+                    startSeconds: 0,
+                    durationSeconds: 30,
+                    resolver: editor.mediaResolver,
+                    ffmpegPath: VidStab.ffmpegPath()) {
+                    omniVoiceRefPath = refURL.path
+                }
             }
         }
 

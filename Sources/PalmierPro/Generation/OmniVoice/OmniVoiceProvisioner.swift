@@ -56,7 +56,11 @@ struct OmniVoiceProvisioner: Sendable {
 
         for (i, item) in steps.enumerated() {
             progress(Double(i) / Double(steps.count), item.1)
-            try await run(item.0)
+            do {
+                try await run(item.0)
+            } catch {
+                throw OmniVoiceError.runtimeUnavailable("'\(item.1)' failed: \(error.localizedDescription)")
+            }
         }
         progress(1.0, "Ready")
         return venvPython

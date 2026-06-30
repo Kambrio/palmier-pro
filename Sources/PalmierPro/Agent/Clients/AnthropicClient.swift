@@ -2,6 +2,7 @@ import Foundation
 
 extension Notification.Name {
     static let anthropicAPIKeyChanged = Notification.Name("anthropicAPIKeyChanged")
+    static let zaiAPIKeyChanged = Notification.Name("zaiAPIKeyChanged")
 }
 
 enum AnthropicKeychain {
@@ -26,6 +27,31 @@ enum AnthropicKeychain {
     static func delete() {
         KeychainStore.delete(account: account)
         NotificationCenter.default.post(name: .anthropicAPIKeyChanged, object: nil)
+    }
+}
+
+enum ZaiKeychain {
+    private static let account = "zai-api-key"
+
+    static func save(_ key: String) {
+        KeychainStore.save(key, account: account)
+        NotificationCenter.default.post(name: .zaiAPIKeyChanged, object: nil)
+    }
+
+    static func load() -> String? {
+        #if DEBUG
+        if let env = ProcessInfo.processInfo.environment["ZAI_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !env.isEmpty {
+            return env
+        }
+        #endif
+        return KeychainStore.load(account: account)
+    }
+
+    static func delete() {
+        KeychainStore.delete(account: account)
+        NotificationCenter.default.post(name: .zaiAPIKeyChanged, object: nil)
     }
 }
 
@@ -70,7 +96,7 @@ struct AnthropicClient: AgentClient {
         request.setValue("text/event-stream", forHTTPHeaderField: "accept")
         request.httpBody = try JSONSerialization.data(
             withJSONObject: AnthropicRequestBody.build(
-                model: model, maxTokens: maxTokens, system: system, tools: tools, messages: messages
+                model: model.rawValue, maxTokens: maxTokens, system: system, tools: tools, messages: messages
             ),
             options: [.sortedKeys]
         )

@@ -37,4 +37,38 @@ struct ChatBackendTests {
         UserDefaults.standard.removeObject(forKey: "io.palmier.pro.chat.cli.model")
         #expect(ClaudeCLIModelPreference.value == .haiku45)
     }
+
+    @Test func zaiParticipatesInEffectiveSelection() {
+        #expect(ChatBackend.effective(selected: .zai, available: [.zai]) == .zai)
+    }
+
+    @Test func fallbackPlacesZaiAfterApiKeyBeforePalmier() {
+        #expect(ChatBackend.effective(selected: .palmier,
+                                      available: [.apiKey, .zai]) == .apiKey)
+        #expect(ChatBackend.effective(selected: .palmier,
+                                      available: [.zai]) == .zai)
+    }
+
+    @Test func zaiHasDisplayAndShortNames() {
+        #expect(ChatBackend.zai.displayName == "z.ai (GLM Plan)")
+        #expect(ChatBackend.zai.shortName == "z.ai")
+    }
+
+    @Test func everyBackendHasAShortName() {
+        for b in ChatBackend.allCases {
+            #expect(!b.shortName.isEmpty)
+        }
+    }
+
+    @Test func zaiModelDefaultsToGlm46() {
+        UserDefaults.standard.removeObject(forKey: "io.palmier.pro.chat.zai.model")
+        #expect(ZaiModelPreference.value == .glm46)
+    }
+
+    @Test func zaiModelRawValuesAndDisplayNames() {
+        #expect(ZaiModel.glm46.rawValue == "glm-4.6")
+        #expect(ZaiModel.glm52.rawValue == "glm-5.2")
+        #expect(ZaiModel.glm47.rawValue == "glm-4.7")
+        #expect(ZaiModel.allCases.count == 3)
+    }
 }

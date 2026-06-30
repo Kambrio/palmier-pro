@@ -36,10 +36,12 @@ struct OmniVoiceGenerationProvider {
         )
 
         var completed = false
+        var segmentErrors: [String] = []
         for try await line in proc.streamLines() {
             guard let progress = OmniVoiceProgress.parse(line) else { continue }
             onProgress?(progress)
             if case .complete = progress { completed = true }
+            if case .segmentError(_, let message) = progress { segmentErrors.append(message) }
         }
 
         let produced = job.segments
@@ -47,9 +49,17 @@ struct OmniVoiceGenerationProvider {
             .filter { FileManager.default.fileExists(atPath: $0) }
 
         guard completed, !produced.isEmpty else {
-            throw OmniVoiceError.generationFailed("Worker produced no audio.")
+            throw OmniVoiceError.generationFailed(Self.noAudioFailureMessage(errors: segmentErrors))
         }
         return produced
+    }
+
+    /// Message thrown when the worker finishes without usable output. Includes any per-segment
+    /// errors the worker reported (e.g. a rejected voice-design `instruct`) so the cause is
+    /// actionable instead of an opaque "no audio" that surfaces as a silent clip.
+    static func noAudioFailureMessage(errors: [String]) -> String {
+        guard !errors.isEmpty else { return "Worker produced no audio." }
+        return "Worker produced no audio. " + errors.joined(separator: " | ")
     }
 
     private static func shQuote(_ s: String) -> String {

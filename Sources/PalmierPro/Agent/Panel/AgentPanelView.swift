@@ -27,7 +27,7 @@ struct AgentPanelView: View {
         AgentStarterPrompt(
             title: "Create a voiceover",
             systemImage: "waveform",
-            prompt: "Create a voiceover for my timeline. Draft concise narration for the current edit, generate the voiceover, and add it to an audio track aligned with the timeline."
+            prompt: "Create a voiceover for my timeline. Draft concise narration for the current edit, then generate it with the local OmniVoice model — clone a speaker's voice from my footage if there's a clear on-camera voice (pick the clip and pass its mediaRef as voice), otherwise use a fitting preset voice and the right language. Add it to an audio track aligned with the timeline."
         ),
         AgentStarterPrompt(
             title: "Generate music and sync to my timeline",

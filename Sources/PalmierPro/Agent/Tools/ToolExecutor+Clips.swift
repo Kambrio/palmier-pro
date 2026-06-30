@@ -273,6 +273,10 @@ extension ToolExecutor {
             return (createdTracks, summaries)
         }
         editor.notifyTimelineChanged()
+        // Clip edits must persist like imports do — mark the document dirty and schedule a
+        // checkpoint autosave, otherwise agent/MCP timeline edits never reach disk.
+        editor.onPersistentStateChanged?()
+        editor.onProjectCheckpointRequired?()
 
         var prefix = createdTracks.isEmpty ? "" : "Created \(createdTracks.joined(separator: ", ")). "
         if let note = settingsNote { prefix = "\(note) \(prefix)" }
@@ -352,6 +356,8 @@ extension ToolExecutor {
         let tracksBefore = Set(editor.timeline.tracks.map(\.id))
         editor.removeClips(ids: expanded)
         let prunedCount = tracksBefore.subtracting(editor.timeline.tracks.map(\.id)).count
+        editor.onPersistentStateChanged?()
+        editor.onProjectCheckpointRequired?()
 
         let extras = expanded.count - clipIds.count
         let linkedNote = extras > 0 ? " (+\(extras) linked)" : ""

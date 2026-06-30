@@ -4,12 +4,23 @@ enum ChatBackend: String, CaseIterable, Sendable {
     case palmier
     case apiKey
     case claudeCLI
+    case zai
 
     var displayName: String {
         switch self {
         case .palmier: "Palmier (sign in)"
         case .apiKey: "Anthropic API key"
         case .claudeCLI: "Claude Code CLI"
+        case .zai: "z.ai (GLM Plan)"
+        }
+    }
+
+    var shortName: String {
+        switch self {
+        case .palmier: "Palmier"
+        case .apiKey: "Anthropic"
+        case .claudeCLI: "Claude CLI"
+        case .zai: "z.ai"
         }
     }
 
@@ -27,11 +38,11 @@ enum ChatBackend: String, CaseIterable, Sendable {
     }
 
     /// The selected backend if available, else the first available in priority order
-    /// (claudeCLI, apiKey, palmier) — the local CLI is preferred when installed.
+    /// (claudeCLI, apiKey, zai, palmier) — the local CLI is preferred when installed.
     /// Nil if none available.
     static func effective(selected: ChatBackend, available: Set<ChatBackend>) -> ChatBackend? {
         if available.contains(selected) { return selected }
-        for candidate in [ChatBackend.claudeCLI, .apiKey, .palmier] where available.contains(candidate) {
+        for candidate in [ChatBackend.claudeCLI, .apiKey, .zai, .palmier] where available.contains(candidate) {
             return candidate
         }
         return nil
@@ -46,8 +57,34 @@ enum ClaudeCLIModelPreference {
     static var value: AnthropicModel {
         get {
             if let raw = UserDefaults.standard.string(forKey: key),
-               let m = AnthropicModel(rawValue: raw) { return m }
+                let m = AnthropicModel(rawValue: raw) { return m }
             return .haiku45
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+
+enum ZaiModel: String, CaseIterable, Sendable {
+    case glm46 = "glm-4.6"
+    case glm52 = "glm-5.2"
+    case glm47 = "glm-4.7"
+
+    var displayName: String {
+        switch self {
+        case .glm46: "GLM-4.6"
+        case .glm52: "GLM-5.2"
+        case .glm47: "GLM-4.7"
+        }
+    }
+}
+
+enum ZaiModelPreference {
+    private static let key = "io.palmier.pro.chat.zai.model"
+    static var value: ZaiModel {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: key),
+                let m = ZaiModel(rawValue: raw) { return m }
+            return .glm46
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }

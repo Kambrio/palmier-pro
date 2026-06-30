@@ -48,7 +48,7 @@ struct PalmierClient: AgentClient {
         request.setValue("text/event-stream", forHTTPHeaderField: "accept")
         request.httpBody = try JSONSerialization.data(
             withJSONObject: AnthropicRequestBody.build(
-                model: model, maxTokens: maxTokens, system: system, tools: tools, messages: messages
+                model: model.rawValue, maxTokens: maxTokens, system: system, tools: tools, messages: messages
             ),
             options: [.sortedKeys]
         )

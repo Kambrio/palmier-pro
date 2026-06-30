@@ -215,8 +215,15 @@ enum AgentInstructions {
 
         # Audio generation
         - Two categories, distinguished by model (see list_models type='audio'):
-          • TTS: the prompt is the exact text to speak. Pass a `voice` the model supports; \
-            some models accept `styleInstructions` for delivery (e.g. "warm and slow").
+          • TTS: the prompt is the exact text to speak. For omnivoice-local (on-device, free, \
+            no sign-in): pass `language` (e.g. "ru", "English") so it's spoken in the right \
+            language, and either clone a speaker by passing `voice` = the mediaRef of a clip \
+            containing their voice (audio OR video — audio is extracted, and the local proxy is \
+            used when the source footage is offline), or design a voice with `styleInstructions` \
+            using ONLY the accepted tokens (female, male, child, elderly, middle-aged, british \
+            accent, american accent, …). Cloning usually sounds more like the real person than \
+            a designed preset — prefer it when you have footage of the speaker. Other TTS models \
+            take a `voice` preset name and optional `styleInstructions` for delivery.
           • Music: the prompt describes style, mood, and genre. Some music models accept \
             `lyrics` with [Verse]/[Chorus] section tags. For Lyria 3 Pro, include lyrics, \
             tempo, language, and vocal style directly in the prompt. Set `instrumental` true \

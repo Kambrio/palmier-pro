@@ -104,7 +104,7 @@ struct VoiceoverTab: View {
 
     private var voiceSection: some View {
         InspectorSection("Voice") {
-            InspectorRow(icon: "person.wave.2", label: "Input") {
+            InspectorRow(label: "Input") {
                 Menu {
                     Button("Clone from clip") { cloneMode = true }
                     Button("Preset voice") { cloneMode = false }
@@ -113,13 +113,11 @@ struct VoiceoverTab: View {
             }
             if cloneMode {
                 InspectorRow(
-                    icon: "film",
                     label: "Reference clip",
                     labelHelp: "Select a clip on the timeline whose voice to clone. Works from the local proxy when the original footage is offline."
                 ) { valueText(voiceSummary) }
             } else {
                 InspectorRow(
-                    icon: "slider.horizontal.3",
                     label: "Style",
                     labelHelp: "Voice-design tokens OmniVoice accepts, e.g. “female”, “male”, “british accent”, “child”, “elderly”."
                 ) {
@@ -135,7 +133,7 @@ struct VoiceoverTab: View {
 
     private var languageSection: some View {
         InspectorSection("Language") {
-            InspectorRow(icon: "globe", label: "Language") {
+            InspectorRow(label: "Language") {
                 Menu {
                     ForEach(languages, id: \.self) { lang in
                         Button(lang) { language = lang }
@@ -167,7 +165,7 @@ struct VoiceoverTab: View {
 
     private var modelSection: some View {
         InspectorSection("Model") {
-            InspectorRow(icon: "waveform", label: "Model") { valueText(model.displayName) }
+            InspectorRow(label: "Model") { valueText(model.displayName) }
         }
     }
 
@@ -316,5 +314,25 @@ struct VoiceoverTab: View {
         let m = Int(seconds) / 60
         let s = Int(seconds) % 60
         return String(format: "%d:%02d", m, s)
+    }
+}
+
+/// Titled group of inspector rows, matching the editor-panel section styling.
+private struct InspectorSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
+            Text(title)
+                .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.semibold))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+            content()
+        }
     }
 }

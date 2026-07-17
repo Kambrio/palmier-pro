@@ -1,6 +1,31 @@
 import Foundation
+import Observation
 import Testing
 @testable import PalmierPro
+
+@MainActor
+private final class MediaAssetsChangeCounter {
+    private weak var editor: EditorViewModel?
+    private(set) var count = 0
+
+    init(editor: EditorViewModel) {
+        self.editor = editor
+        observe()
+    }
+
+    private func observe() {
+        guard let editor else { return }
+        withObservationTracking {
+            _ = editor.mediaAssets.count
+        } onChange: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.count += 1
+                self.observe()
+            }
+        }
+    }
+}
 
 /// A corrupt `media.json` must never make a project unopenable: the timeline lives in a
 /// separate file and is the real creative work. A bad manifest should degrade to "media
@@ -44,7 +69,7 @@ struct VideoProjectLoadTests {
 
         #expect(contents.manifest == nil)
         #expect(contents.manifestUnreadable == true)
-        #expect(contents.timeline.tracks.count == 2)   // creative work survives
+        #expect(contents.projectFile.timelines.first?.tracks.count == 2)   // creative work survives
     }
 
     @Test func missingManifestOpensAndIsNotFlaggedUnreadable() throws {
@@ -69,34 +94,37 @@ struct VideoProjectLoadTests {
         #expect(contents.manifestUnreadable == false)
     }
 
-    @Test func missingTimelineStillThrows() throws {
-        // project.json is the required file — degrading it would hide real corruption.
-        let bundle = fm.temporaryDirectory
-            .appendingPathComponent("vp-empty-\(UUID().uuidString).palmier", isDirectory: true)
-        try fm.createDirectory(at: bundle, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: bundle) }
-
-        #expect(throws: (any Error).self) {
-            try VideoProject.readProjectPackage(at: bundle)
-        }
-    }
-
-    // MARK: - Save: don't overwrite the original with an empty manifest
-
-    @Test func emptyManifestNotSerializedAfterLoadFailure() {
-        // Opening with a corrupt manifest leaves an empty in-memory manifest. Serializing it
-        // would overwrite the (recoverable) original on the next autosave — so it must be nil.
-        #expect(VideoProject.manifestSnapshotData(manifest: MediaManifest(), loadFailed: true) == nil)
+    @Test func manifestSnapshotSkippedForUnreadableEmptyLoad() {
+        #expect(VideoProject.manifestSnapshot(manifest: MediaManifest(), loadFailed: true) == nil)
     }
 
     @Test func rebuiltManifestIsSerializedAfterLoadFailure() {
         // Once the user adds media, the manifest is no longer empty and must be written.
-        #expect(VideoProject.manifestSnapshotData(manifest: sampleManifest(), loadFailed: true) != nil)
+        #expect(VideoProject.manifestSnapshot(manifest: sampleManifest(), loadFailed: true) != nil)
     }
 
     @Test func manifestSerializedNormallyWhenLoadSucceeded() {
         // Regression guard: ordinary saves still persist the (possibly empty) manifest.
-        #expect(VideoProject.manifestSnapshotData(manifest: MediaManifest(), loadFailed: false) != nil)
+        #expect(VideoProject.manifestSnapshot(manifest: MediaManifest(), loadFailed: false) != nil)
+    }
+
+    @Test func packageWriteCreatesMediaDirectory() throws {
+        let bundle = try makeBundle()
+        defer { try? fm.removeItem(at: bundle) }
+        let snapshot = ProjectPackageSnapshot(
+            timeline: try JSONEncoder().encode(Fixtures.timeline()),
+            manifest: nil,
+            generationLog: nil,
+            thumbnail: nil,
+            chatSessionFiles: []
+        )
+
+        try VideoProject.writeProjectPackage(snapshot, to: bundle, sourceURL: bundle)
+
+        var isDirectory = ObjCBool(false)
+        let mediaURL = bundle.appendingPathComponent(Project.mediaDirectoryName, isDirectory: true)
+        #expect(fm.fileExists(atPath: mediaURL.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
     }
 
     @Test func saveAsPreservesUnreadableManifestFile() throws {

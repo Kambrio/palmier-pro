@@ -168,7 +168,7 @@ struct AgentPane: View {
                 .font(.system(size: AppTheme.FontSize.sm))
                 .foregroundStyle(AppTheme.Text.tertiaryColor)
             Picker("", selection: $cliModel) {
-                ForEach([AnthropicModel.haiku45, .sonnet46, .opus48], id: \.self) { m in
+                ForEach([AnthropicModel.haiku45, .sonnet5, .opus48], id: \.self) { m in
                     Text(m.displayName).tag(m)
                 }
             }
@@ -298,7 +298,7 @@ struct AgentPane: View {
     private var mcpHeader: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
             Text("MCP Server")
-                .font(.system(size: AppTheme.FontSize.md, weight: .medium))
+                .font(.system(size: AppTheme.FontSize.md, weight: AppTheme.FontWeight.medium))
                 .foregroundStyle(AppTheme.Text.primaryColor)
 
             HStack(alignment: .firstTextBaseline, spacing: AppTheme.Spacing.sm) {
@@ -308,16 +308,17 @@ struct AgentPane: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 Button(action: openInstructions) {
-                    HStack(spacing: 2) {
+                    HStack(spacing: AppTheme.Spacing.xxs) {
                         Text("Setup instructions")
                         Image(systemName: "arrow.up.right")
-                            .font(.system(size: AppTheme.FontSize.xs, weight: .semibold))
+                            .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.semibold))
                     }
                     .font(.system(size: AppTheme.FontSize.sm))
-                    .foregroundStyle(AppTheme.Accent.primary)
+                    .foregroundStyle(AppTheme.Accent.link)
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
+                .pointerStyle(.link)
             }
         }
     }
@@ -326,12 +327,12 @@ struct AgentPane: View {
         HStack(spacing: AppTheme.Spacing.sm) {
             HStack(spacing: AppTheme.Spacing.sm) {
                 Circle()
-                    .fill((appState.mcpService?.isRunning ?? false) ? Color.green : AppTheme.Text.mutedColor)
-                    .frame(width: 8, height: 8)
+                    .fill((appState.mcpService?.isRunning ?? false) ? AppTheme.Status.successColor : AppTheme.Text.mutedColor)
+                    .frame(width: AppTheme.Spacing.smMd, height: AppTheme.Spacing.smMd)
 
                 if appState.mcpService?.isRunning ?? false {
-                    HStack(alignment: .firstTextBaseline, spacing: 0) {
-                        Text("Running on ")
+                    HStack(alignment: .firstTextBaseline, spacing: AppTheme.Spacing.xxs) {
+                        Text("Running on")
                             .foregroundStyle(AppTheme.Text.secondaryColor)
                         Text("127.0.0.1:\(String(MCPService.port))")
                             .font(.system(size: AppTheme.FontSize.sm, design: .monospaced))
@@ -355,18 +356,10 @@ struct AgentPane: View {
             )
             .labelsHidden()
             .toggleStyle(.switch)
-            .controlSize(.small)
+            .controlSize(.mini)
+            .accessibilityLabel("MCP Server")
         }
-        .padding(.horizontal, AppTheme.Spacing.md)
-        .padding(.vertical, AppTheme.Spacing.smMd)
-        .background(
-            RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                .fill(Color.black.opacity(AppTheme.Opacity.muted))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                .strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.thin)
-        )
+        .padding(.top, AppTheme.Spacing.xs)
     }
 
     private func openInstructions() {

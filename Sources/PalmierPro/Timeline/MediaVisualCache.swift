@@ -14,6 +14,27 @@ final class MediaVisualCache {
     /// Cap concurrent waveform extractions to avoid starving playback.
     private static let waveformGate = AsyncSemaphore(value: 2)
 
+    // MARK: - Speech masks
+
+    let speech = SpeechMaskStore()
+    /// 32 ms cells, value = global speaker id, -1 = none. Session-scoped, set by identifySpeakers.
+    var speakerMasks: [String: [Int]] = [:]
+
+    nonisolated func speakerMask(for mediaRef: String) -> [Int]? {
+        MainActor.assumeIsolated { speakerMasks[mediaRef] }
+    }
+
+    let beats = BeatStore()
+
+    nonisolated func beatAnalysis(for mediaRef: String) -> BeatAnalysis? {
+        beats.analysis(for: mediaRef)
+    }
+
+    init() {
+        speech.onMaskReady = { [weak self] in self?.timelineView?.needsDisplay = true }
+        beats.onBeatsReady = { [weak self] in self?.timelineView?.needsDisplay = true }
+    }
+
     // MARK: - Video thumbnails (sorted by time)
 
     private var videoThumbnails: [String: [(time: Double, image: CGImage)]] = [:]
@@ -38,6 +59,10 @@ final class MediaVisualCache {
 
     nonisolated func samples(for mediaRef: String) -> [Float]? {
         MainActor.assumeIsolated { waveformSamples[mediaRef] }
+    }
+
+    nonisolated func deadAirMask(for mediaRef: String) -> [Bool]? {
+        speech.deadAirMask(for: mediaRef, samples: samples(for: mediaRef))
     }
 
     nonisolated func thumbnails(for mediaRef: String) -> [(time: Double, image: CGImage)]? {
@@ -65,9 +90,12 @@ final class MediaVisualCache {
     /// its proxy finishes, so the filmstrip/waveform switch to the lighter proxy. The disk
     /// cache is keyed by URL, so it's left intact (proxy + source keep separate entries).
     func invalidate(_ assetId: String) {
-        waveformSamples[assetId] = nil
-        videoThumbnails[assetId] = nil
-        imageThumbnails[assetId] = nil
+        waveformSamples.removeValue(forKey: assetId)
+        videoThumbnails.removeValue(forKey: assetId)
+        imageThumbnails.removeValue(forKey: assetId)
+        speakerMasks.removeValue(forKey: assetId)
+        speech.invalidate(assetId)
+        beats.invalidate(assetId)
         timelineView?.needsDisplay = true
     }
 
@@ -82,6 +110,8 @@ final class MediaVisualCache {
 
     func generateWaveform(for asset: MediaAsset) {
         guard asset.type == .audio || (asset.type == .video && asset.hasAudio) else { return }
+        speech.generate(for: asset)
+        beats.hydrate(for: asset)
         let key = asset.id
         guard waveformSamples[key] == nil, !waveformInFlight.contains(key) else { return }
         waveformInFlight.insert(key)
@@ -101,6 +131,17 @@ final class MediaVisualCache {
                 }
             }
         }
+    }
+
+    /// Drops all in-memory state after a disk-cache clear so everything regenerates.
+    func resetSessionState() {
+        waveformSamples.removeAll()
+        speakerMasks.removeAll()
+        speech.reset()
+        beats.reset()
+        videoThumbnails.removeAll()
+        imageThumbnails.removeAll()
+        timelineView?.needsDisplay = true
     }
 
     func generateImageThumbnail(for asset: MediaAsset) {

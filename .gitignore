@@ -37,3 +37,4 @@ models/*/convert*.log
 
 # git worktrees for isolated implementation
 .worktrees/
+AUDIO_SUITE_*

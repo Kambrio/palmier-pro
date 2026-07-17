@@ -53,34 +53,55 @@ enum TimelineExportFormat: String, CaseIterable, Identifiable {
 
 struct ExportView: View {
     @Environment(EditorViewModel.self) var editor
-    @State private var service = ExportService()
+    @State private var exportQueue = ExportQueue.shared
     @State private var destination: ExportDestination = .video
     @State private var timelineFormat: TimelineExportFormat = .fcpxml
     @State private var fcpxmlVersion: FCPXMLVersion = .default
+    @State private var fcpxmlTarget: FCPXMLTarget = .default
     @State private var codec: VideoCodec = .h264
     @State private var resolution: ExportResolution = .matchTimeline
-    @State private var palmierResult: String?
+    @State private var submissionError: String?
     @State private var palmierSummary: (collect: Int, missing: Int, bytes: Int64) = (0, 0, 0)
+    @State private var selectedTimelineId: String?
+
+    private var exportTimeline: Timeline {
+        selectedTimelineId.flatMap { editor.timeline(for: $0) } ?? editor.timeline
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            settingsPanel
-            bottomBar
+        HStack(spacing: AppTheme.Spacing.zero) {
+            VStack(spacing: AppTheme.Spacing.zero) {
+                settingsHeader
+                settingsPanel
+                settingsBottomBar
+            }
+            .frame(width: AppTheme.Export.sheetWidth)
+
+            Divider()
+
+            VStack(spacing: AppTheme.Spacing.zero) {
+                logHeader
+                Divider().opacity(AppTheme.Opacity.moderate)
+                exportLog
+            }
+            .frame(width: AppTheme.Export.logPaneWidth)
+            .background(AppTheme.Background.raisedColor)
         }
-        .frame(width: AppTheme.Export.sheetWidth, height: AppTheme.Export.sheetHeight)
+        .frame(width: AppTheme.Export.sheetWidthWithLog, height: AppTheme.Export.sheetHeight)
         .presentationBackground {
-            AppTheme.Background.surfaceColor.opacity(0.85)
+            AppTheme.Background.surfaceColor.opacity(AppTheme.Opacity.prominent)
                 .background(.ultraThinMaterial)
         }
         .task {
+            selectedTimelineId = editor.activeTimelineId
             palmierSummary = computePalmierSummary()
         }
     }
 
-    private func panelHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: AppTheme.FontSize.title2, weight: .light))
-            .tracking(AppTheme.Tracking.tight)
+    private var settingsHeader: some View {
+        Text("Export")
+            .font(.system(size: AppTheme.FontSize.title2, weight: AppTheme.FontWeight.regular))
+            .tracking(AppTheme.Tracking.normal)
             .foregroundStyle(AppTheme.Text.primaryColor)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, AppTheme.Spacing.xl)
@@ -90,14 +111,26 @@ struct ExportView: View {
     // MARK: - Settings
 
     private var settingsPanel: some View {
-        VStack(spacing: 0) {
-            panelHeader("Export")
-
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: AppTheme.Spacing.zero) {
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.zero) {
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.zero) {
                     destinationPicker
 
                     Divider().opacity(AppTheme.Opacity.moderate)
+
+                    if editor.timelines.count > 1, destination != .palmierProject {
+                        settingRow(label: "Timeline") {
+                            Picker("", selection: $selectedTimelineId) {
+                                ForEach(editor.timelines) { timeline in
+                                    Text(timeline.name).tag(timeline.id as String?)
+                                }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                        }
+
+                        Divider().opacity(AppTheme.Opacity.moderate)
+                    }
 
                     switch destination {
                     case .video:
@@ -109,29 +142,10 @@ struct ExportView: View {
                     }
                 }
 
-                if service.isExporting {
-                    VStack(spacing: AppTheme.Spacing.xs) {
-                        ProgressView(value: service.progress)
-                            .progressViewStyle(.linear)
-                        Text("\(Int(service.progress * 100))%")
-                            .font(.system(size: AppTheme.FontSize.xs))
-                            .monospacedDigit()
-                            .foregroundStyle(AppTheme.Text.secondaryColor)
-                    }
-                    .padding(.top, AppTheme.Spacing.md)
-                }
-
-                if let error = service.error {
-                    Text(error)
+                if let submissionError {
+                    Text(submissionError)
                         .font(.system(size: AppTheme.FontSize.xs))
                         .foregroundStyle(AppTheme.Status.errorColor)
-                        .padding(.top, AppTheme.Spacing.sm)
-                }
-
-                if let palmierResult {
-                    Text(palmierResult)
-                        .font(.system(size: AppTheme.FontSize.xs))
-                        .foregroundStyle(AppTheme.Text.secondaryColor)
                         .padding(.top, AppTheme.Spacing.sm)
                 }
 
@@ -159,7 +173,7 @@ struct ExportView: View {
     }
 
     private var videoSettings: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: AppTheme.Spacing.zero) {
             settingRow(label: "Codec") {
                 Picker("", selection: $codec) {
                     ForEach(VideoCodec.allCases) { codec in
@@ -190,7 +204,7 @@ struct ExportView: View {
             Divider().opacity(AppTheme.Opacity.moderate)
 
             settingRow(label: "Frame Rate") {
-                Text("\(editor.timeline.fps) fps")
+                Text("\(exportTimeline.fps) fps")
                     .foregroundStyle(AppTheme.Text.tertiaryColor)
             }
         }
@@ -216,6 +230,18 @@ struct ExportView: View {
     private var fcpxmlVersionRow: some View {
         Divider().opacity(AppTheme.Opacity.moderate)
         HStack(spacing: AppTheme.Spacing.sm) {
+            Text("For")
+                .font(.system(size: AppTheme.FontSize.xs))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+            Picker("", selection: $fcpxmlTarget) {
+                ForEach(FCPXMLTarget.allCases) { target in
+                    Text(target.displayName).tag(target)
+                }
+            }
+            .labelsHidden()
+            .controlSize(.small)
+            .font(.system(size: AppTheme.FontSize.xs))
+            .fixedSize()
             Text("Version")
                 .font(.system(size: AppTheme.FontSize.xs))
                 .foregroundStyle(AppTheme.Text.tertiaryColor)
@@ -232,7 +258,7 @@ struct ExportView: View {
                 .font(.system(size: AppTheme.FontSize.xs))
                 .foregroundStyle(AppTheme.Text.tertiaryColor)
                 .lineLimit(1)
-            Spacer(minLength: 0)
+            Spacer(minLength: AppTheme.Spacing.zero)
         }
         .padding(.leading, AppTheme.IconSize.sm + AppTheme.Spacing.md)
     }
@@ -253,51 +279,218 @@ struct ExportView: View {
         .padding(.vertical, AppTheme.Spacing.sm)
     }
 
-    // MARK: - Bottom bar
+    // MARK: - Export queue
 
-    private var bottomBar: some View {
-        HStack {
-            let duration = formatTimecode(frame: editor.timeline.totalFrames, fps: editor.timeline.fps)
-            HStack(spacing: AppTheme.Spacing.lg) {
-                HStack(spacing: AppTheme.Spacing.xs) {
-                    Image(systemName: "clock")
-                    Text(duration)
-                }
-                switch destination {
-                case .video:
-                    HStack(spacing: AppTheme.Spacing.xs) {
-                        Image(systemName: "doc")
-                        Text("~\(estimatedFileSize)")
-                    }
-                    let out = resolution.renderSize(for: CGSize(width: editor.timeline.width, height: editor.timeline.height))
-                    Text("\(Int(out.width))×\(Int(out.height))")
-                    Text(codec.containerLabel)
-                case .timeline:
-                    Text("\(editor.timeline.width)×\(editor.timeline.height)")
-                    Text(timelineFormat.extensionLabel)
-                case .palmierProject:
-                    HStack(spacing: AppTheme.Spacing.xs) {
-                        Image(systemName: "shippingbox")
-                        Text("~\(ByteCountFormatter.string(fromByteCount: palmierSummary.bytes, countStyle: .file))")
-                    }
-                    Text(".\(Project.fileExtension)")
-                }
+    private var projectQueueID: String {
+        editor.exportQueueProjectID
+    }
+
+    private var projectJobs: [ExportJob] {
+        exportQueue.jobs(for: projectQueueID)
+    }
+
+    private var logHeader: some View {
+        let pendingCount = projectJobs.count { $0.status.isPending }
+        return HStack(spacing: AppTheme.Spacing.sm) {
+            Text("Export Queue")
+                .font(.system(size: AppTheme.FontSize.md, weight: AppTheme.FontWeight.semibold))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+
+            if pendingCount > 0 {
+                Text("\(pendingCount)")
+                    .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.semibold))
+                    .foregroundStyle(AppTheme.Text.secondaryColor)
             }
-            .font(.system(size: AppTheme.FontSize.xs))
-            .foregroundStyle(AppTheme.Text.mutedColor)
 
             Spacer()
 
-            Button("Cancel") { editor.showExportDialog = false }
+            exportIconButton("trash", help: "Clear Finished") {
+                exportQueue.clearFinished(for: projectQueueID)
+            }
+            .disabled(!projectJobs.contains { $0.status.isFinished })
+        }
+        .padding(.horizontal, AppTheme.Spacing.lg)
+        .padding(.vertical, AppTheme.Spacing.md)
+    }
+
+    private var exportLog: some View {
+        Group {
+            if projectJobs.isEmpty {
+                Text("No exports yet")
+                    .font(.system(size: AppTheme.FontSize.sm))
+                    .foregroundStyle(AppTheme.Text.mutedColor)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: AppTheme.Spacing.zero) {
+                        ForEach(exportLogJobs) { exportLogRow($0) }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var exportLogJobs: [ExportJob] {
+        Array(projectJobs.reversed())
+    }
+
+    private func exportLogRow(_ job: ExportJob) -> some View {
+        HStack(spacing: AppTheme.Spacing.sm) {
+            Text(job.createdAt.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: AppTheme.FontSize.xxs))
+                .foregroundStyle(AppTheme.Text.mutedColor)
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(width: AppTheme.Export.queueTimestampWidth, alignment: .leading)
+
+            exportStatusIcon(job.status)
+                .font(.system(size: AppTheme.FontSize.xs))
+                .frame(width: AppTheme.IconSize.xs, height: AppTheme.IconSize.xs)
+                .accessibilityLabel(job.status.rawValue.capitalized)
+
+            Text(job.filename)
+                .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.medium))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+            HStack(spacing: AppTheme.Spacing.xxs) {
+                Group {
+                    if job.status == .exporting {
+                        ProgressView(value: job.progress)
+                            .progressViewStyle(.linear)
+                            .tint(AppTheme.Accent.primary)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: AppTheme.Export.queueProgressBarWidth)
+
+                Group {
+                    if job.status == .exporting {
+                        Text("\(Int(job.progress * 100))%")
+                            .foregroundStyle(AppTheme.Text.secondaryColor)
+                            .monospacedDigit()
+                    } else {
+                        Color.clear
+                    }
+                }
+                .font(.system(size: AppTheme.FontSize.xs))
+                .lineLimit(1)
+                .frame(width: AppTheme.Export.queueProgressWidth, alignment: .trailing)
+            }
+
+            exportAction(job)
+                .frame(width: AppTheme.IconSize.sm, height: AppTheme.IconSize.sm)
+        }
+        .padding(.horizontal, AppTheme.Spacing.lg)
+        .padding(.vertical, AppTheme.Spacing.sm)
+        .help(job.error ?? job.outputURL.path)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(AppTheme.Opacity.moderate)
+        }
+    }
+
+    @ViewBuilder
+    private func exportStatusIcon(_ status: ExportJobStatus) -> some View {
+        switch status {
+        case .waiting:
+            Image(systemName: "clock").foregroundStyle(AppTheme.Text.tertiaryColor)
+        case .preparing, .canceling:
+            ProgressView().controlSize(.small)
+        case .exporting:
+            Image(systemName: "arrow.up.circle.fill").foregroundStyle(AppTheme.Accent.primary)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(AppTheme.Status.successColor)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(AppTheme.Status.errorColor)
+        case .canceled:
+            Image(systemName: "xmark.circle").foregroundStyle(AppTheme.Text.mutedColor)
+        }
+    }
+
+    @ViewBuilder
+    private func exportAction(_ job: ExportJob) -> some View {
+        switch job.status {
+        case .waiting:
+            exportIconButton("xmark", help: "Remove from Queue") { exportQueue.cancel(job.id) }
+        case .preparing, .exporting:
+            exportIconButton("stop.fill", help: "Cancel Export") { exportQueue.cancel(job.id) }
+        case .completed:
+            exportIconButton("folder", help: "Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([job.outputURL])
+            }
+        case .failed, .canceled:
+            exportIconButton("xmark", help: "Dismiss") { exportQueue.remove(job.id) }
+        case .canceling:
+            EmptyView()
+        }
+    }
+
+    private func exportIconButton(
+        _ systemName: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: AppTheme.IconSize.sm, height: AppTheme.IconSize.sm)
+                .hoverHighlight()
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    // MARK: - Bottom bar
+
+    private var settingsBottomBar: some View {
+        HStack {
+            exportSummary
+            Spacer()
+            Button("Close") { editor.showExportDialog = false }
                 .keyboardShortcut(.cancelAction)
-            Button("Export") { startExport() }
+            Button(exportQueue.hasActivity ? "Add to Queue" : "Export") { startExport() }
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.capsule)
-                .disabled(service.isExporting)
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, AppTheme.Spacing.xl)
         .padding(.vertical, AppTheme.Spacing.lg)
+    }
+
+    private var exportSummary: some View {
+        let duration = formatTimecode(frame: exportTimeline.totalFrames, fps: exportTimeline.fps)
+        return HStack(spacing: AppTheme.Spacing.lg) {
+            HStack(spacing: AppTheme.Spacing.xs) {
+                Image(systemName: "clock")
+                Text(duration)
+            }
+            switch destination {
+            case .video:
+                HStack(spacing: AppTheme.Spacing.xs) {
+                    Image(systemName: "doc")
+                    Text("~\(estimatedFileSize)")
+                }
+                let out = resolution.renderSize(for: CGSize(width: exportTimeline.width, height: exportTimeline.height))
+                Text("\(Int(out.width))×\(Int(out.height))")
+                Text(codec.containerLabel)
+            case .timeline:
+                Text("\(exportTimeline.width)×\(exportTimeline.height)")
+                Text(timelineFormat.extensionLabel)
+            case .palmierProject:
+                HStack(spacing: AppTheme.Spacing.xs) {
+                    Image(systemName: "shippingbox")
+                    Text("~\(ByteCountFormatter.string(fromByteCount: palmierSummary.bytes, countStyle: .file))")
+                }
+                Text(".\(Project.fileExtension)")
+            }
+        }
+        .font(.system(size: AppTheme.FontSize.xs))
+        .foregroundStyle(AppTheme.Text.mutedColor)
     }
 
     // MARK: - Helpers
@@ -319,7 +512,7 @@ struct ExportView: View {
             destination = option
         } label: {
             HStack(spacing: AppTheme.Spacing.sm) {
-                radioIndicator(selected: selected)
+                RadioIndicator(selected: selected)
 
                 Text(option.rawValue)
                     .font(.system(size: AppTheme.FontSize.md, weight: selected ? AppTheme.FontWeight.semibold : AppTheme.FontWeight.medium))
@@ -333,20 +526,6 @@ struct ExportView: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
-    }
-
-    private func radioIndicator(selected: Bool) -> some View {
-        ZStack {
-            Circle()
-                .strokeBorder(selected ? AppTheme.Accent.primary : AppTheme.Text.mutedColor, lineWidth: AppTheme.BorderWidth.thin)
-
-            if selected {
-                Circle()
-                    .fill(AppTheme.Accent.primary)
-                    .padding(AppTheme.Spacing.xs)
-            }
-        }
-        .frame(width: AppTheme.IconSize.sm, height: AppTheme.IconSize.sm)
     }
 
     private func timelineFormatButton(_ format: TimelineExportFormat) -> some View {
@@ -404,14 +583,15 @@ struct ExportView: View {
     }
 
     private var estimatedFileSize: String {
-        let seconds = Double(editor.timeline.totalFrames) / Double(max(1, editor.timeline.fps))
+        let seconds = Double(exportTimeline.totalFrames) / Double(max(1, exportTimeline.fps))
         // Bitrate scales with output pixel area, so any resolution (incl. 2K / native) is covered.
-        let out = resolution.renderSize(for: CGSize(width: editor.timeline.width, height: editor.timeline.height))
+        let out = resolution.renderSize(for: CGSize(width: exportTimeline.width, height: exportTimeline.height))
         let megapixels = Double(out.width * out.height) / 1_000_000
         let bytesPerSecPerMP: Double = switch codec {
         case .h264:   0.63e6
         case .h265:   0.32e6
         case .prores: 9.0e6
+        case .hdr:    0.45e6
         }
         let bytesPerSec = bytesPerSecPerMP * max(0.1, megapixels)
         return ByteCountFormatter.string(fromByteCount: Int64(bytesPerSec * seconds), countStyle: .file)
@@ -443,6 +623,7 @@ struct ExportView: View {
 
     private func startExport() {
         if destination == .palmierProject { startPalmierExport(); return }
+        submissionError = nil
         let format = exportFormat
         let panel = NSSavePanel()
         let contentType: UTType = switch format {
@@ -450,36 +631,39 @@ struct ExportView: View {
             .xml
         case .fcpxml:
             UTType(filenameExtension: "fcpxml") ?? .xml
-        case .prores:
+        case .prores, .hevcHDR:
             .movie
         case .h264, .h265:
             .mpeg4Movie
         }
         panel.allowedContentTypes = [contentType]
-        panel.nameFieldStringValue = "export.\(format.fileExtension)"
+        panel.nameFieldStringValue = "\(exportTimeline.name).\(format.fileExtension)"
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            Task {
-                await service.export(
-                    timeline: editor.timeline,
+            do {
+                try exportQueue.enqueueVideo(
+                    timeline: exportTimeline,
                     resolver: editor.mediaResolver,
+                    resolveTimeline: editor.timelineResolver(),
                     format: format,
                     resolution: resolution,
                     fcpxmlVersion: fcpxmlVersion,
+                    fcpxmlTarget: fcpxmlTarget,
                     missingMediaRefs: editor.missingMediaRefs,
                     outputURL: url,
-                    stabilization: editor.stabilizationManager
+                    source: .manual,
+                    projectID: editor.exportQueueProjectID,
+                    analyticsProjectID: editor.projectId
                 )
-                if service.error == nil {
-                    editor.showExportDialog = false
-                }
+            } catch {
+                submissionError = error.localizedDescription
             }
         }
     }
 
     private func startPalmierExport() {
-        palmierResult = nil
+        submissionError = nil
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(Project.typeIdentifier) ?? .package]
         let base = editor.projectURL?.deletingPathExtension().lastPathComponent ?? Project.defaultProjectName
@@ -487,22 +671,19 @@ struct ExportView: View {
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            Task {
-                let report = await service.exportPalmierProject(
-                    timeline: editor.timeline,
+            do {
+                try exportQueue.enqueuePalmierProject(
+                    projectFile: editor.projectFileSnapshot(),
                     manifest: editor.mediaManifest,
                     generationLog: editor.generationLog,
                     sourceProjectURL: editor.projectURL,
-                    outputURL: url
+                    outputURL: url,
+                    source: .manual,
+                    projectID: editor.exportQueueProjectID,
+                    analyticsProjectID: editor.projectId
                 )
-                guard let report, service.error == nil else { return }
-                if report.missing.isEmpty {
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                    editor.showExportDialog = false
-                } else {
-                    // Keep the dialog open so the user sees what couldn't be included.
-                    palmierResult = "Exported, but \(report.missing.count) media file\(report.missing.count == 1 ? "" : "s") were missing and couldn't be included."
-                }
+            } catch {
+                submissionError = error.localizedDescription
             }
         }
     }

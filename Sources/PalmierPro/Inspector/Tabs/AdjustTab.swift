@@ -73,9 +73,7 @@ extension InspectorView {
 
     private var chromaKeyControls: [EffectControl] {
         [
-            EffectControl(effectId: "key.chroma", paramKey: "keyHue", label: "Key Hue"),
-            EffectControl(effectId: "key.chroma", paramKey: "tolerance", label: "Tolerance"),
-            EffectControl(effectId: "key.chroma", paramKey: "softness", label: "Softness"),
+            EffectControl(effectId: "key.chroma", paramKey: "tolerance", label: "Range"),
             EffectControl(effectId: "key.chroma", paramKey: "spill", label: "Spill"),
         ]
     }
@@ -158,9 +156,9 @@ extension InspectorView {
                 sectionTitleLabel(title: title)
                 Spacer(minLength: AppTheme.Spacing.sm)
                 if hasEffects {
-                    resetButton(
-                        onReset: { resetEffects(effectIds, clips: clips, actionName: "Reset \(title)") },
-                        help: "Reset \(title.lowercased())"
+                    EditorResetButton(
+                        title: title,
+                        action: { resetEffects(effectIds, clips: clips, actionName: "Reset \(title)") }
                     )
                 }
                 Toggle("", isOn: Binding(
@@ -171,18 +169,16 @@ extension InspectorView {
                 .labelsHidden()
                 .disabled(!hasEffects)
                 .help(hasEffects ? "Enable \(title.lowercased())" : "No adjustments yet")
+                .accessibilityLabel("Enable \(title)")
             }
             .padding(.horizontal, AppTheme.Spacing.lg)
             .padding(.vertical, AppTheme.Spacing.smMd)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.Background.raisedColor)
+            .background(AppTheme.Background.surfaceColor)
             .contentShape(Rectangle())
             .onTapGesture {
                 if expanded { collapsedAdjustSections.insert(title) }
                 else { collapsedAdjustSections.remove(title) }
-            }
-            .overlay(alignment: .bottom) {
-                if expanded { sectionDivider }
             }
             if expanded {
                 VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
@@ -199,7 +195,7 @@ extension InspectorView {
     private var sectionDivider: some View {
         Rectangle()
             .fill(AppTheme.Border.primaryColor)
-            .frame(height: AppTheme.BorderWidth.hairline)
+            .frame(height: AppTheme.BorderWidth.thin)
     }
 
     @ViewBuilder
@@ -213,6 +209,17 @@ extension InspectorView {
                     .frame(width: AppTheme.IconSize.xxs, alignment: .center)
                 sectionTitleLabel(title: title)
                 Spacer(minLength: 0)
+                if title == "Chroma Key", clips.count == 1, let clip = clips.first {
+                    let sampling = editor.chromaKeySamplingClipId == clip.id
+                    Button { editor.toggleChromaKeySampling(clipId: clip.id) } label: {
+                        Image(systemName: "eyedropper")
+                            .foregroundStyle(sampling ? AppTheme.Accent.primary : AppTheme.Text.secondaryColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(editor.activePreviewTab != .timeline)
+                    .help(sampling ? "Cancel key color sampling" : "Sample key color")
+                    .accessibilityLabel(sampling ? "Cancel Key Color Sampling" : "Sample Key Color")
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture {
@@ -425,7 +432,7 @@ extension InspectorView {
             )
             ScrubbableNumberField(
                 value: value, range: range, displayMultiplier: 100, format: "%.0f",
-                valueSuffix: "%", dragSensitivity: 0.5, fieldWidth: 50,
+                valueSuffix: "%", dragSensitivity: 0.5, fieldWidth: AppTheme.EditorPanel.numericFieldWidth,
                 onChanged: { setLUTIntensity($0 / 100, clips: clips, commit: false) }
             ) { setLUTIntensity($0 / 100, clips: clips, commit: true) }
         }
@@ -507,7 +514,7 @@ extension InspectorView {
                     format: effectParamFormat(spec),
                     valueSuffix: spec.unit.isEmpty ? "" : " \(spec.unit)",
                     dragSensitivity: effectParamSensitivity(spec),
-                    fieldWidth: 50,
+                    fieldWidth: AppTheme.EditorPanel.numericFieldWidth,
                     onChanged: { setControlParam(control, label: label, value: $0, clips: clips, commit: false) }
                 ) { setControlParam(control, label: label, value: $0, clips: clips, commit: true) }
             }
@@ -600,13 +607,10 @@ extension InspectorView {
     private func commitEffects(
         _ clips: [Clip], actionName: String, _ mutate: @escaping (inout [Effect]) -> Void
     ) {
-        editor.undoManager?.beginUndoGrouping()
-        editor.commitClipProperties(clipIds: clips.map(\.id)) { c in
+        editor.commitClipProperties(clipIds: clips.map(\.id), actionName: actionName) { c in
             var effects = c.effects ?? []
             mutate(&effects)
             c.effects = effects.isEmpty ? nil : effects
         }
-        editor.undoManager?.endUndoGrouping()
-        editor.undoManager?.setActionName(actionName)
     }
 }

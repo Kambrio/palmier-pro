@@ -28,8 +28,8 @@ enum Layout {
     static let mediaPanelMin: CGFloat = 280
 
     // Inspector
-    static let inspectorDefault: CGFloat = 260
-    static let inspectorMin: CGFloat = 150
+    static let inspectorDefault: CGFloat = AppTheme.EditorPanel.defaultWidth
+    static let inspectorMin: CGFloat = AppTheme.EditorPanel.minimumWidth
 
     // Agent panel
     static let agentPanelMin: CGFloat = 240
@@ -44,7 +44,6 @@ enum Layout {
 
     // Timeline
     static let timelineMinHeight: CGFloat = 100
-    static let timelineMaxHeight: CGFloat = 700
     static let trackHeight: CGFloat = 50
     static let rulerHeight: CGFloat = 24
     static let trackHeaderWidth: CGFloat = 100
@@ -99,7 +98,7 @@ enum TimelineAutoScroll {
 
 enum Trim {
     static let handleWidth: CGFloat = 4.0
-    static let clipCornerRadius: CGFloat = 3.0
+    static let clipCornerRadius: CGFloat = AppTheme.Radius.xsSm
 }
 
 enum Project {

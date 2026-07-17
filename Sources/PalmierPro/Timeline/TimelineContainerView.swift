@@ -38,6 +38,7 @@ struct TimelineContainerView: NSViewRepresentable {
         context.coordinator.headerView = headerView
         context.coordinator.timelineView = timelineView
         context.coordinator.scrollView = scrollView
+        context.coordinator.editor = editor
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.contentView.postsFrameChangedNotifications = true
@@ -71,6 +72,13 @@ struct TimelineContainerView: NSViewRepresentable {
             context.coordinator.timelineView?.updateContentSize()
             context.coordinator.timelineView?.needsDisplay = true
             context.coordinator.headerView?.needsDisplay = true
+        }
+
+        if let x = editor.timelineScrollRestoreX,
+           let scrollView = context.coordinator.scrollView {
+            let y = scrollView.contentView.bounds.origin.y
+            scrollView.contentView.setBoundsOrigin(NSPoint(x: max(0, x), y: y))
+            DispatchQueue.main.async { editor.timelineScrollRestoreX = nil }
         }
 
         if editor.isPlaying,
@@ -113,6 +121,7 @@ struct TimelineContainerView: NSViewRepresentable {
         var headerView: TimelineHeaderView?
         var timelineView: TimelineView?
         var scrollView: NSScrollView?
+        weak var editor: EditorViewModel?
         private var renderState: RenderState?
 
         func needsRender(for next: RenderState) -> Bool {

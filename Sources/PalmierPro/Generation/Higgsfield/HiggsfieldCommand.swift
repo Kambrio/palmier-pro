@@ -29,7 +29,7 @@ enum HiggsfieldCommand {
             }
         case .audio:
             for path in referencePaths { argv.append(contentsOf: ["--audio", path]) }
-        case .text, .lottie:
+        case .text, .lottie, .sequence:
             break
         }
 

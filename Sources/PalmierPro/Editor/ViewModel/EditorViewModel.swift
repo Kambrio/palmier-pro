@@ -24,8 +24,33 @@ final class EditorViewModel {
 
     // MARK: - Persisted state (synced with VideoProject)
 
-    var timeline = Timeline() {
+    var timelines: [Timeline] {
         didSet { timelineRenderRevision &+= 1 }
+    }
+    var activeTimelineId: String
+    var openTimelineIds: [String]
+    @ObservationIgnored var liveViewStates: [String: TimelineViewState] = [:]
+    var timelineTabRenameRequest: String?
+
+    /// Active-timeline proxy; assignment routes by id and activates so undo lands on its timeline.
+    var timeline: Timeline {
+        get { timelines.first(where: { $0.id == activeTimelineId }) ?? timelines[0] }
+        set {
+            if let i = timelines.firstIndex(where: { $0.id == newValue.id }) {
+                timelines[i] = newValue
+            } else {
+                let i = timelines.firstIndex(where: { $0.id == activeTimelineId }) ?? 0
+                let oldId = timelines[i].id
+                timelines[i] = newValue
+                openTimelineIds = openTimelineIds.map { $0 == oldId ? newValue.id : $0 }
+            }
+            activeTimelineId = newValue.id
+            if !openTimelineIds.contains(newValue.id) { openTimelineIds.append(newValue.id) }
+        }
+        _modify {
+            let i = timelines.firstIndex(where: { $0.id == activeTimelineId }) ?? 0
+            yield &timelines[i]
+        }
     }
     var mediaManifest = MediaManifest()
     var generationLog = GenerationLog()
@@ -38,6 +63,19 @@ final class EditorViewModel {
     @ObservationIgnored var shotDisplayNameByAsset: [String: String] = [:]
     /// Story-development graph (directions → structures → beats wired to footage). Persisted as story-graph.json.
     var storyGraph = StoryGraph()
+
+    // MARK: - Denoise bake state (session-scoped, keyed by mediaRef)
+
+    var denoiseInFlight: Set<String> = []
+    var denoiseFailed: Set<String> = []
+    var denoiseBaked: Set<String> = []
+    var speechAnalyzingCount: Int = 0
+    var speakerRegistry: [SpeakerRegistryEntry] = []
+    var multicamGroups: [MulticamSource] = []
+    var speakerAssignments: [String: [String: Int]] = [:]
+    var speakerIdentifyPhase: String?
+    var speakerIdentifyInFlight: Bool { speakerIdentifyPhase != nil }
+    var speakerIdentifyError: String?
 
     // MARK: - Panel focus
 
@@ -79,6 +117,7 @@ final class EditorViewModel {
     var selectedTimelineRange: TimelineRangeSelection?
     var selectedMediaAssetIds: Set<String> = []
     var selectedFolderIds: Set<String> = []
+    var selectedTimelineIds: Set<String> = []
     var pendingSwapClipId: String?
     var clipClipboard: [ClipClipboardEntry] = []
     var zoomScale: Double = Defaults.pixelsPerFrame
@@ -90,6 +129,9 @@ final class EditorViewModel {
     var canvasOffset: CGSize = .zero
     var timelineVisibleWidth: Double = 0
     var timelineRenderRevision: Int = 0
+    /// Live horizontal scroll of the timeline panel, mirrored from AppKit for view-state stash.
+    @ObservationIgnored var timelineScrollOffsetX: Double = 0
+    var timelineScrollRestoreX: Double?
     var isScrubbing: Bool = false
 
     /// Live timeline scroll offset, mirrored from the scroll view (ObservationIgnored so per-scroll
@@ -136,6 +178,7 @@ final class EditorViewModel {
     /// Clip ids currently awaiting an AI-generated replacement.
     var pendingReplacements: Set<String> = []
     var cropEditingActive: Bool = false
+    var chromaKeySamplingClipId: String?
     var cropAspectLock: CropAspectLock = .free
     /// Active Subject Lock pick session (nil unless the user is choosing a subject on the preview).
     var subjectPicker: SubjectPickerSession?
@@ -208,15 +251,14 @@ final class EditorViewModel {
     var projectURL: URL? {
         didSet {
             guard projectURL != oldValue else { return }
-            projectId = projectURL.flatMap { url in
-                let resolved = url.standardizedFileURL
-                return ProjectRegistry.shared.entries
-                    .first(where: { $0.url.standardizedFileURL == resolved })?
-                    .id.uuidString
-            }
+            refreshProjectId()
         }
     }
     private(set) var projectId: String?
+    private let editorSessionID = UUID().uuidString
+    var exportQueueProjectID: String {
+        projectId ?? projectURL?.standardizedFileURL.path ?? editorSessionID
+    }
     // Placeholder replaced in init() — @Observable doesn't support lazy var
     private(set) var mediaResolver: MediaResolver = MediaResolver(
         manifest: { MediaManifest() }, projectURL: { nil }
@@ -249,6 +291,33 @@ final class EditorViewModel {
         didSet { UserDefaults.standard.set(keyframesPanelVisible, forKey: "keyframesPanelVisible") }
     }
 
+    var markDeadAir: Bool = {
+        UserDefaults.standard.object(forKey: "markDeadAir") as? Bool ?? true
+    }() {
+        didSet {
+            UserDefaults.standard.set(markDeadAir, forKey: "markDeadAir")
+            mediaVisualCache.timelineView?.needsDisplay = true
+        }
+    }
+
+    var markBeats: Bool = {
+        UserDefaults.standard.object(forKey: "markBeats") as? Bool ?? true
+    }() {
+        didSet {
+            UserDefaults.standard.set(markBeats, forKey: "markBeats")
+            mediaVisualCache.timelineView?.needsDisplay = true
+        }
+    }
+
+    var markSpeakers: Bool = {
+        UserDefaults.standard.object(forKey: "markSpeakers") as? Bool ?? true
+    }() {
+        didSet {
+            UserDefaults.standard.set(markSpeakers, forKey: "markSpeakers")
+            syncSpeakerColors()
+        }
+    }
+
     // MARK: - Media panel navigation routing
 
     var mediaPanelOrderedItemIds: [String] = []
@@ -260,8 +329,10 @@ final class EditorViewModel {
     var mediaPanelPasteRequestTick: Int = 0
     var mediaPanelShowMediaTabTick: Int = 0
     var mediaPanelToast: MediaPanelToast?
-    @ObservationIgnored var mediaImportTail: Task<MediaImportSummary, Never>?
+    @ObservationIgnored var mediaImportTail: Task<MediaImportSummary, Error>?
     @ObservationIgnored var mediaImportSequence: Int = 0
+    @ObservationIgnored var pendingManifestMetadataUpdates: [String: MediaAsset] = [:]
+    @ObservationIgnored var pendingManifestMetadataFlushTask: Task<Void, Never>?
 
     func showMediaPanelMediaTab() {
         mediaPanelShowMediaTabTick += 1
@@ -271,6 +342,10 @@ final class EditorViewModel {
     }
 
     init() {
+        let first = Timeline()
+        timelines = [first]
+        activeTimelineId = first.id
+        openTimelineIds = [first.id]
         mediaResolver = MediaResolver(
             manifest: { [weak self] in self?.mediaManifest ?? MediaManifest() },
             projectURL: { [weak self] in self?.projectURL }
@@ -278,6 +353,9 @@ final class EditorViewModel {
         agentService.editor = self
         mediaVisualCache.editor = self
         searchIndex.assetsProvider = { [weak self] in self?.mediaAssets ?? [] }
+        mediaVisualCache.speech.onAnalyzingCountChange = { [weak self] count in
+            self?.speechAnalyzingCount = count
+        }
 
         // Re-check media presence when the app regains focus: a user may have
         // deleted/moved backing files in Finder (or ejected a volume) while we
@@ -299,7 +377,8 @@ final class EditorViewModel {
 
     // MARK: - Document bridge
 
-    weak var undoManager: UndoManager?
+    @ObservationIgnored let undo = EditorUndo()
+    @ObservationIgnored let projectPackageCoordinator = ProjectPackageCoordinator()
     @ObservationIgnored var onProjectCheckpointRequired: (() -> Void)?
     var isDocumentEdited: Bool = false
 
@@ -324,6 +403,16 @@ final class EditorViewModel {
         ]
     }
 
+    func refreshProjectId() {
+        projectId = projectURL.flatMap { ProjectRegistry.shared.id(for: $0)?.uuidString }
+    }
+
+    func analyticsSnapshot() -> [String: Any] {
+        return [
+            "project_id": projectId ?? "unknown",
+        ]
+    }
+
     func updateTelemetryContext() {
         Telemetry.setExtra(value: telemetrySnapshot(), key: "project")
     }
@@ -335,6 +424,8 @@ final class EditorViewModel {
     @ObservationIgnored lazy var stabilizationManager = StabilizationManager(editor: self)
     @ObservationIgnored lazy var shotLibraryManager = ShotLibraryManager(editor: self)
     @ObservationIgnored lazy var storyGraphManager = StoryGraphManager(editor: self)
+
+    let audioMeter = AudioMeterHub()
 
     /// Set by VideoProject to mark the document dirty for non-undoable persistent
     /// changes (e.g. proxy generation/toggle). nil outside a document window.
@@ -424,10 +515,10 @@ final class EditorViewModel {
         videoEngine?.togglePlayback()
     }
 
-    func stepForward() { seekToFrame(currentFrame + 1) }
-    func stepBackward() { seekToFrame(currentFrame - 1) }
-    func skipForward(frames: Int = 5) { seekToFrame(currentFrame + frames) }
-    func skipBackward(frames: Int = 5) { seekToFrame(currentFrame - frames) }
+    func stepForward() { seekToFrame(currentFrame + 1, mode: .audibleStepForward) }
+    func stepBackward() { seekToFrame(currentFrame - 1, mode: .audibleStepBackward) }
+    func skipForward(frames: Int = 5) { seekToFrame(currentFrame + frames, mode: .audibleStepForward) }
+    func skipBackward(frames: Int = 5) { seekToFrame(currentFrame - frames, mode: .audibleStepBackward) }
 
     // MARK: - Shared infrastructure
 
@@ -443,13 +534,17 @@ final class EditorViewModel {
     /// Coalesces rapid rebuild requests so `replaceCurrentItem` doesn't fire per keystroke.
     var pendingRebuildTask: Task<Void, Never>?
 
-    func notifyTimelineChanged() {
+    func notifyTimelineChanged(refreshVisuals: Bool = true) {
+        guard undo.isRegistrationEnabled else { return }
+        enhancePendingDenoises()
         pendingRebuildTask?.cancel()
         pendingRebuildTask = nil
         if isPlaying {
             videoEngine?.pause()
         }
-        videoEngine?.syncTextLayers()
+        if refreshVisuals {
+            videoEngine?.refreshVisuals()
+        }
         videoEngine?.rebuild()
     }
 
@@ -479,8 +574,10 @@ final class EditorViewModel {
         trimEndFrame: Int? = nil
     ) -> [String] {
         guard timeline.tracks.indices.contains(trackIndex) else { return [] }
+        prepareMediaVisuals(for: asset)
         let targetIsVideo = timeline.tracks[trackIndex].type == .video
-        let shouldLink = addLinkedAudio && targetIsVideo && asset.type == .video && asset.hasAudio
+        let shouldLink = addLinkedAudio && targetIsVideo && asset.hasAudio
+            && (asset.type == .video || asset.type == .sequence)
         let linkGroupId: String? = shouldLink ? UUID().uuidString : nil
         let trimStart = sourceSegment.map { secondsToFrame(seconds: $0.lowerBound, fps: timeline.fps) } ?? 0
         let totalSourceFrames = secondsToFrame(seconds: asset.duration, fps: timeline.fps)
@@ -584,15 +681,23 @@ final class EditorViewModel {
     }
 
     func fitTransform(for clip: Clip) -> Transform {
-        guard let asset = mediaAssets.first(where: { $0.id == clip.mediaRef }) else { return Transform() }
-        return fitTransform(for: asset)
+        guard let dims = sourceDimensions(for: clip) else { return Transform() }
+        return fitTransform(sourceWidth: dims.width, sourceHeight: dims.height)
     }
 
     func fitTransform(for asset: MediaAsset, canvasWidth: Int, canvasHeight: Int) -> Transform {
-        guard let relativeAspect = mediaCanvasAspect(for: asset, canvasWidth: canvasWidth, canvasHeight: canvasHeight) else {
-            return Transform()
-        }
+        guard let sw = asset.sourceWidth, let sh = asset.sourceHeight else { return Transform() }
+        return fitTransform(sourceWidth: sw, sourceHeight: sh, canvasWidth: canvasWidth, canvasHeight: canvasHeight)
+    }
+
+    func fitTransform(sourceWidth: Int, sourceHeight: Int) -> Transform {
+        fitTransform(sourceWidth: sourceWidth, sourceHeight: sourceHeight, canvasWidth: timeline.width, canvasHeight: timeline.height)
+    }
+
+    func fitTransform(sourceWidth: Int, sourceHeight: Int, canvasWidth: Int, canvasHeight: Int) -> Transform {
+        guard sourceWidth > 0, sourceHeight > 0, canvasWidth > 0, canvasHeight > 0 else { return Transform() }
         let canvasAspect = Double(canvasWidth) / Double(canvasHeight)
+        let relativeAspect = (Double(sourceWidth) / Double(sourceHeight)) / canvasAspect
         let sourceAspect = relativeAspect * canvasAspect
         if abs(canvasAspect - sourceAspect) < Defaults.aspectTolerance {
             return Transform()
@@ -610,27 +715,45 @@ final class EditorViewModel {
         return (Double(sw) / Double(sh)) / canvasAspect
     }
 
-    /// Source aspect ratio relative to canvas; nil when source dimensions are unknown.
-    func mediaCanvasAspect(for clip: Clip) -> Double? {
-        guard let asset = mediaAssets.first(where: { $0.id == clip.mediaRef }) else { return nil }
-        return mediaCanvasAspect(for: asset, canvasWidth: timeline.width, canvasHeight: timeline.height)
+    /// Source pixel dimensions for a clip: asset dims, or the child timeline's for nest carriers.
+    func sourceDimensions(for clip: Clip) -> (width: Int, height: Int)? {
+        if let asset = mediaAssets.first(where: { $0.id == clip.mediaRef }),
+           let sw = asset.sourceWidth, let sh = asset.sourceHeight, sw > 0, sh > 0 {
+            return (sw, sh)
+        }
+        if clip.sourceClipType == .sequence, let child = timeline(for: clip.mediaRef),
+           child.width > 0, child.height > 0 {
+            return (child.width, child.height)
+        }
+        return nil
     }
 
-    /// Largest centered crop of `target` aspect inside the source.
-    func cropFittingAspect(for clip: Clip, targetPixelAspect target: Double) -> Crop {
-        guard let asset = mediaAssets.first(where: { $0.id == clip.mediaRef }),
-              let sw = asset.sourceWidth, let sh = asset.sourceHeight,
-              sw > 0, sh > 0, target > 0 else { return Crop() }
-        let sourceAspect = Double(sw) / Double(sh)
+    /// Source aspect ratio relative to canvas; nil when source dimensions are unknown.
+    func mediaCanvasAspect(for clip: Clip) -> Double? {
+        guard let dims = sourceDimensions(for: clip), timeline.width > 0, timeline.height > 0 else { return nil }
+        let canvasAspect = Double(timeline.width) / Double(timeline.height)
+        return (Double(dims.width) / Double(dims.height)) / canvasAspect
+    }
+
+    func cropFittingAspect(
+        for clip: Clip,
+        targetPixelAspect target: Double,
+        anchorX: Double = 0.5,
+        anchorY: Double = 0.5
+    ) -> Crop {
+        guard let dims = sourceDimensions(for: clip), target > 0 else { return Crop() }
+        let sourceAspect = Double(dims.width) / Double(dims.height)
         if abs(sourceAspect - target) < 0.0001 { return Crop() }
+        let ax = min(1, max(0, anchorX))
+        let ay = min(1, max(0, anchorY))
         if sourceAspect > target {
-            let visibleWidthFrac = target / sourceAspect
-            let inset = (1 - visibleWidthFrac) / 2
-            return Crop(left: inset, top: 0, right: inset, bottom: 0)
+            let total = 1 - target / sourceAspect
+            let left = total * ax
+            return Crop(left: left, top: 0, right: total - left, bottom: 0)
         } else {
-            let visibleHeightFrac = sourceAspect / target
-            let inset = (1 - visibleHeightFrac) / 2
-            return Crop(left: 0, top: inset, right: 0, bottom: inset)
+            let total = 1 - sourceAspect / target
+            let top = total * ay
+            return Crop(left: 0, top: top, right: 0, bottom: total - top)
         }
     }
 

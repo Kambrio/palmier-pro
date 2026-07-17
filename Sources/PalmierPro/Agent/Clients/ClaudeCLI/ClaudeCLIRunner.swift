@@ -19,7 +19,7 @@ struct ClaudeCLIRunner {
     static func alias(for model: AnthropicModel) -> String {
         switch model {
         case .opus48: "opus"
-        case .sonnet46: "sonnet"
+        case .sonnet5: "sonnet"
         case .haiku45: "haiku"
         }
     }

@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Combine
+@preconcurrency import ConvexMobile
 
 /// Used by replace-clip callbacks so only the
 /// first successful asset of an N-image generation swaps the clip
@@ -202,17 +203,15 @@ final class GenerationService {
                ClipType(fileExtension: realExt) != nil {
                 asset.url = asset.url.deletingPathExtension().appendingPathExtension(realExt)
             }
-            let destinationURL = asset.url
-            try await Task.detached(priority: .utility) {
-                _ = try FileIO.moveReplacingDestination(from: tempURL, to: destinationURL)
-            }.value
+            asset.url = try await editor.commitStagedProjectMedia(tempURL, filename: asset.url.lastPathComponent)
 
             asset.pendingDownloadURL = nil
-            asset.generationStatus = .none
             editor.importMediaAsset(asset, skipAppend: true)
-            editor.appendGenerationLog(for: asset)
-            await editor.finalizeImportedAsset(asset)
-            return true
+            let finalized = await editor.finalizeImportedAsset(asset)
+            if finalized {
+                editor.appendGenerationLog(for: asset)
+            }
+            return finalized
         } catch {
             let message = error.localizedDescription
             Log.generation.error("download failed url=\(remoteURL.absoluteString) error=\(message)")
@@ -227,6 +226,17 @@ final class GenerationService {
         Task { @MainActor in
             await downloadAndFinalize(asset: asset, remoteURL: remoteURL, editor: editor)
         }
+    }
+
+    private func backendError(_ error: Error) -> (code: String?, message: String) {
+        struct Payload: Decodable { let code: String?; let message: String? }
+        if case let ClientError.ConvexError(data) = error,
+           let json = data.data(using: .utf8),
+           let payload = try? JSONDecoder().decode(Payload.self, from: json),
+           let message = payload.message {
+            return (payload.code, message)
+        }
+        return (nil, error.localizedDescription)
     }
 
     /// Uploads each reference and returns the hosted URLs.
@@ -281,6 +291,7 @@ final class GenerationService {
         case "wav": return "audio/wav"
         case "m4a": return "audio/mp4"
         case "aiff", "aif", "aifc": return "audio/aiff"
+        case "caf": return "audio/x-caf"
         case "flac": return "audio/flac"
         default:
             switch fallback {
@@ -289,6 +300,7 @@ final class GenerationService {
             case .audio: return "audio/mpeg"
             case .text: return "application/octet-stream"
             case .lottie: return "application/json"
+            case .sequence: return "video/mp4"
             }
         }
     }
@@ -329,8 +341,16 @@ final class GenerationService {
                 projectId: editor.projectId,
             )
         } catch {
-            let message = error.localizedDescription
-            Log.generation.error("submit failed model=\(genInput.model) error=\(message)")
+            let (code, message) = backendError(error)
+            let expected: Set<String> = [
+                "insufficient_credits", "subscription_required", "plan_required",
+                "rate_limited", "invalid_params",
+            ]
+            if let code, expected.contains(code) {
+                Log.generation.warning("submit failed model=\(genInput.model) code=\(code) error=\(message)")
+            } else {
+                Log.generation.error("submit failed model=\(genInput.model) error=\(message)")
+            }
             for placeholder in placeholders {
                 placeholder.generationStatus = .failed(message)
             }

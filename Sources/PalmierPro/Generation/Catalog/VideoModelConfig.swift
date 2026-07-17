@@ -13,6 +13,7 @@ struct VideoModelConfig: Identifiable, Sendable {
 
     var id: String { entry.id }
     var displayName: String { entry.displayName }
+    var paidOnly: Bool { entry.paidOnly }
     var creditsPerSecond: [String: Double] { entry.creditsPerSecond ?? [:] }
     var audioDiscountRate: [String: Double]? { entry.audioDiscountRate }
 
@@ -34,11 +35,6 @@ struct VideoModelConfig: Identifiable, Sendable {
 
     var supportsReferences: Bool {
         maxReferenceImages > 0 || maxReferenceVideos > 0 || maxReferenceAudios > 0
-    }
-
-    /// Total reference count available across types. Used by agent tool info.
-    var maxReferences: Int {
-        maxTotalReferences ?? (maxReferenceImages + maxReferenceVideos + maxReferenceAudios)
     }
 
     func audioDiscount(for resolution: String?) -> Double? {
@@ -94,10 +90,6 @@ struct VideoGenerationParams: Encodable, Sendable {
         self.referenceVideoURLs = referenceVideoURLs
         self.referenceAudioURLs = referenceAudioURLs
         self.generateAudio = generateAudio
-    }
-
-    var hasAnyReferences: Bool {
-        !referenceImageURLs.isEmpty || !referenceVideoURLs.isEmpty || !referenceAudioURLs.isEmpty
     }
 
     enum CodingKeys: String, CodingKey {

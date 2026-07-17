@@ -8,6 +8,7 @@ struct PreviewContainerView: View {
     private var isImage: Bool { editor.activePreviewTab.clipType == .image }
 
     @State private var hoveredTabId: String?
+    @State private var failedImagePreviewKey: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,7 +38,9 @@ struct PreviewContainerView: View {
                     if let overlay = offlineOverlay(timelineState: timelineState) {
                         offlinePreview(assetId: overlay.assetId, path: overlay.path, isUnprocessable: overlay.isUnprocessable)
                     }
-                    if editor.cropEditingActive {
+                    if editor.chromaKeySamplingClipId != nil {
+                        ChromaKeySamplerOverlayView()
+                    } else if editor.cropEditingActive {
                         CropOverlayView()
                     } else {
                         TransformOverlayView()
@@ -81,6 +84,9 @@ struct PreviewContainerView: View {
             }
         }
         .background(AppTheme.Background.surfaceColor)
+        .onChange(of: editor.activePreviewTabId) { _, _ in
+            editor.cancelChromaKeySampling()
+        }
     }
 
     // MARK: - Transport bar
@@ -284,16 +290,33 @@ struct PreviewContainerView: View {
     // MARK: - Image preview
 
     private var imagePreview: some View {
-        Group {
-            if let asset = activeMediaAsset, let image = asset.thumbnail ?? NSImage(contentsOf: asset.url) {
+        let assetKey = activeMediaAsset.map {
+            "\($0.id)|\($0.url.path)|\($0.generationStatus.serialized)|\(editor.isMediaOffline($0.id))"
+        }
+        return Group {
+            if let asset = activeMediaAsset, let image = asset.thumbnail {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+            } else if let assetKey, failedImagePreviewKey == assetKey {
+                Image(systemName: "photo")
+                    .font(.system(size: AppTheme.FontSize.xl))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .allowsHitTesting(false)
+        .task(id: assetKey) {
+            failedImagePreviewKey = nil
+            guard let asset = activeMediaAsset else { return }
+            await asset.loadPreviewThumbnail()
+            guard !Task.isCancelled, asset.thumbnail == nil else { return }
+            failedImagePreviewKey = assetKey
+        }
     }
 
     private func fitSize(in container: CGSize, aspect: CGFloat) -> CGSize {
@@ -554,21 +577,8 @@ struct PreviewContainerView: View {
                 }
             }
 
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: AppTheme.Spacing.md) {
-                        ForEach(editor.previewTabs) { tab in
-                            tabItem(for: tab).id(tab.id)
-                        }
-                    }
-                    .padding(.horizontal, AppTheme.Spacing.sm)
-                }
-                .mouseWheelScrollsHorizontally()
-                .onChange(of: editor.activePreviewTabId) { _, newId in
-                    withAnimation(.easeOut(duration: AppTheme.Anim.transition)) {
-                        proxy.scrollTo(newId, anchor: .center)
-                    }
-                }
+            TabStrip(items: editor.previewTabs, activeId: editor.activePreviewTabId) { tab in
+                tabItem(for: tab)
             }
 
             overflowMenu
@@ -579,13 +589,17 @@ struct PreviewContainerView: View {
         let isActive = tab.id == editor.activePreviewTabId
         let isHovered = hoveredTabId == tab.id
         return HStack(spacing: AppTheme.Spacing.xs) {
-            Text(tab.displayName)
+            Text(tab == .timeline ? editor.timeline.name : tab.displayName)
                 .font(.system(size: AppTheme.FontSize.xs, weight: isActive ? .semibold : .medium))
                 .foregroundStyle(isActive || isHovered ? AppTheme.Text.primaryColor : AppTheme.Text.secondaryColor)
                 .lineLimit(1)
 
             if tab.isCloseable {
-                closeButton(tabId: tab.id)
+                TabCloseButton {
+                    withAnimation(.easeInOut(duration: AppTheme.Anim.transition)) {
+                        editor.closePreviewTab(id: tab.id)
+                    }
+                }
             }
         }
         .padding(.horizontal, AppTheme.Spacing.xs)
@@ -642,21 +656,6 @@ struct PreviewContainerView: View {
         .fixedSize()
         .hoverHighlight(cornerRadius: AppTheme.Radius.sm)
         .help("More")
-    }
-
-    private func closeButton(tabId: String) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: AppTheme.Anim.transition)) {
-                editor.closePreviewTab(id: tabId)
-            }
-        } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: AppTheme.FontSize.micro, weight: .bold))
-                .foregroundStyle(AppTheme.Text.tertiaryColor)
-                .frame(width: AppTheme.IconSize.xs, height: AppTheme.IconSize.xs)
-                .hoverHighlight(cornerRadius: 7)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Scrub bar

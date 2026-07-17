@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct FontPickerField: View {
-    let current: String
+    let current: String?
     let onPreview: (String) -> Void
     let onChange: (String) -> Void
     let onCancel: () -> Void
@@ -24,12 +24,8 @@ struct FontPickerField: View {
                     .foregroundStyle(AppTheme.Text.tertiaryColor)
             }
             .padding(.horizontal, AppTheme.Spacing.smMd)
-            .padding(.vertical, AppTheme.Spacing.xs)
-            .frame(maxWidth: 160, alignment: .trailing)
-            .background(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                    .fill(Color.white.opacity(AppTheme.Opacity.hint))
-            )
+            .frame(maxWidth: AppTheme.EditorPanel.fontMenuWidth, alignment: .trailing)
+            .editorValueField()
         }
         .buttonStyle(.plain)
         .fixedSize()
@@ -94,7 +90,8 @@ struct FontPickerField: View {
     }
 
     private var displayName: String {
-        NSFont(name: current, size: 12)?.familyName ?? current
+        guard let current else { return "Mixed" }
+        return NSFont(name: current, size: 12)?.familyName ?? current
     }
 }
 

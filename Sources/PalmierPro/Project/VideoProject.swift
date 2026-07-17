@@ -4,7 +4,7 @@ import AVFoundation
 import UniformTypeIdentifiers
 
 struct ProjectPackageContents: Sendable {
-    var timeline: Timeline
+    var projectFile: ProjectFile
     var manifest: MediaManifest?
     var generationLog: GenerationLog?
     var shotLibrary: ShotLibrary?
@@ -36,6 +36,10 @@ private struct RestoredMediaCandidate: Sendable {
     let url: URL
 }
 
+private typealias DocumentCloseCallback = @convention(c) (
+    AnyObject, Selector, NSDocument, Bool, UnsafeMutableRawPointer?
+) -> Void
+
 final class VideoProject: NSDocument {
 
     static let typeIdentifier = Project.typeIdentifier
@@ -43,7 +47,7 @@ final class VideoProject: NSDocument {
     let editorViewModel = EditorViewModel()
 
     /// Decoded off-main in read(), applied on main in makeWindowControllers.
-    private nonisolated(unsafe) var loadedTimeline: Timeline?
+    private nonisolated(unsafe) var loadedProjectFile: ProjectFile?
     private nonisolated(unsafe) var loadedManifest: MediaManifest?
     private nonisolated(unsafe) var loadedGenerationLog: GenerationLog?
     private nonisolated(unsafe) var loadedShotLibrary: ShotLibrary?
@@ -57,10 +61,11 @@ final class VideoProject: NSDocument {
     /// Set when media.json existed but failed to decode, so saves preserve it instead of clobbering.
     private nonisolated(unsafe) var manifestLoadFailed = false
 
-    /// Captured on main thread before writes may continue off-main.
-    private nonisolated(unsafe) var snapshotTimeline: Data?
-    private nonisolated(unsafe) var snapshotManifest: Data?
-    private nonisolated(unsafe) var snapshotGenerationLog: Data?
+    /// Captured on main thread; value copies encoded off-main in write(), shot-library/story-graph/
+    /// view-state pre-encoded to Data so the skip/preserve logic can run on the main thread.
+    private nonisolated(unsafe) var snapshotProjectFile: ProjectFile?
+    private nonisolated(unsafe) var snapshotManifest: MediaManifest?
+    private nonisolated(unsafe) var snapshotGenerationLog: GenerationLog?
     private nonisolated(unsafe) var snapshotShotLibrary: Data?
     private nonisolated(unsafe) var snapshotStoryGraph: Data?
     private nonisolated(unsafe) var snapshotViewState: Data?
@@ -71,10 +76,14 @@ final class VideoProject: NSDocument {
     private nonisolated(unsafe) var snapshotSkipShotLibrary = false
     private nonisolated(unsafe) var snapshotSkipStoryGraph = false
     private var projectCheckpointAutosaveScheduled = false
+    private var isSavingBeforeClose = false
 
     // MARK: - Persistence
 
     override class var autosavesInPlace: Bool { true }
+
+    // The save snapshot is captured on main before super.save; the encode + disk write run off-main.
+    override func canAsynchronouslyWrite(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) -> Bool { true }
 
     @MainActor
     static func load(from url: URL) async throws -> VideoProject {
@@ -93,7 +102,7 @@ final class VideoProject: NSDocument {
     }
 
     private nonisolated func applyLoadedContents(_ contents: ProjectPackageContents) {
-        loadedTimeline = contents.timeline
+        loadedProjectFile = contents.projectFile
         loadedManifest = contents.manifest
         loadedGenerationLog = contents.generationLog
         loadedShotLibrary = contents.shotLibrary
@@ -102,12 +111,14 @@ final class VideoProject: NSDocument {
         shotLibraryReadFailed = contents.shotLibraryReadFailed
         storyGraphReadFailed = contents.storyGraphReadFailed
         manifestLoadFailed = contents.manifestUnreadable
+        let timelines = loadedProjectFile?.timelines ?? []
         Log.project.notice(
-            "read ok tracks=\(self.loadedTimeline?.tracks.count ?? 0)",
+            "read ok timelines=\(timelines.count)",
             telemetry: "Project read",
             data: [
-                "tracks": loadedTimeline?.tracks.count ?? 0,
-                "clips": loadedTimeline?.tracks.reduce(0) { $0 + $1.clips.count } ?? 0,
+                "timelines": timelines.count,
+                "tracks": timelines.reduce(0) { $0 + $1.tracks.count },
+                "clips": timelines.reduce(0) { $0 + $1.tracks.reduce(0) { $0 + $1.clips.count } },
                 "media": loadedManifest?.entries.count ?? 0,
                 "hasGenerationLog": loadedGenerationLog != nil
             ]
@@ -116,9 +127,9 @@ final class VideoProject: NSDocument {
 
     nonisolated static func readProjectPackage(at url: URL) throws -> ProjectPackageContents {
         let data = try requiredData(Project.timelineFilename, in: url)
-        let timeline: Timeline
+        let projectFile: ProjectFile
         do {
-            timeline = try JSONDecoder().decode(Timeline.self, from: data)
+            projectFile = try ProjectFile.decode(data)
         } catch {
             Log.project.error("read: timeline decode failed: \(String(describing: error))")
             throw error
@@ -172,7 +183,7 @@ final class VideoProject: NSDocument {
             .flatMap { try? JSONDecoder().decode(ProjectViewState.self, from: $0) }
 
         return ProjectPackageContents(
-            timeline: timeline,
+            projectFile: projectFile,
             manifest: manifest,
             generationLog: generationLog,
             shotLibrary: shotLibrary,
@@ -189,9 +200,63 @@ final class VideoProject: NSDocument {
             fileModificationDate = date
         }
 
+        let coordinator = editorViewModel.projectPackageCoordinator
+        coordinator.saveStarted()
         captureSaveSnapshot()
         snapshotSourceProjectURL = fileURL
-        super.save(to: url, ofType: typeName, for: saveOperation, completionHandler: completionHandler)
+        super.save(to: url, ofType: typeName, for: saveOperation) { error in
+            coordinator.saveFinished(success: error == nil)
+            completionHandler(error)
+        }
+    }
+
+    override func canClose(
+        withDelegate delegate: Any,
+        shouldClose shouldCloseSelector: Selector?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        Task { @MainActor in
+            do {
+                try await saveBeforeClosing()
+                super.canClose(
+                    withDelegate: delegate,
+                    shouldClose: shouldCloseSelector,
+                    contextInfo: contextInfo
+                )
+            } catch {
+                presentError(error)
+                guard let shouldCloseSelector else { return }
+                let target = delegate as AnyObject
+                let callback = unsafeBitCast(target.method(for: shouldCloseSelector), to: DocumentCloseCallback.self)
+                callback(target, shouldCloseSelector, self, false, contextInfo)
+            }
+        }
+    }
+
+    @MainActor
+    func saveBeforeClosing() async throws {
+        isSavingBeforeClose = true
+        defer { isSavingBeforeClose = false }
+        let coordinator = editorViewModel.projectPackageCoordinator
+        await coordinator.beginClosing()
+        do {
+            repeat {
+                guard let url = fileURL else { throw CocoaError(.fileNoSuchFile) }
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    save(to: url, ofType: Self.typeIdentifier, for: .saveOperation) { error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
+                    }
+                }
+            } while hasUnautosavedChanges
+            await coordinator.waitUntilIdle()
+        } catch {
+            coordinator.cancelClosing()
+            throw error
+        }
     }
 
     override func write(to url: URL, ofType typeName: String) throws {
@@ -205,39 +270,47 @@ final class VideoProject: NSDocument {
                 snapshotSourceProjectURL = fileURL
             }
         }
-        defer {
-            snapshotPreparedForWrite = false
-            snapshotSourceProjectURL = nil
-        }
-        guard let data = snapshotTimeline else {
-            Log.project.error("save: snapshotTimeline missing at write()")
+
+        let file = snapshotProjectFile
+        let manifest = snapshotManifest
+        let generationLog = snapshotGenerationLog
+        let thumbnail = snapshotThumbnail
+        let chatSessionFiles = snapshotChatSessionFiles
+        let sourceURL = snapshotSourceProjectURL
+        snapshotPreparedForWrite = false
+        snapshotSourceProjectURL = nil
+        unblockUserInteraction()
+
+        guard let file, let data = try? JSONEncoder().encode(file) else {
+            Log.project.error("save: project snapshot missing at write()")
             throw CocoaError(.fileWriteUnknown)
         }
 
         try Self.writeProjectPackage(
             ProjectPackageSnapshot(
                 timeline: data,
-                manifest: snapshotManifest,
-                generationLog: snapshotGenerationLog,
+                manifest: manifest.flatMap { try? JSONEncoder().encode($0) },
+                generationLog: generationLog.flatMap { try? JSONEncoder().encode($0) },
                 shotLibrary: snapshotShotLibrary,
                 storyGraph: snapshotStoryGraph,
                 viewState: snapshotViewState,
-                thumbnail: snapshotThumbnail,
-                chatSessionFiles: snapshotChatSessionFiles,
+                thumbnail: thumbnail,
+                chatSessionFiles: chatSessionFiles,
                 skipShotLibrary: snapshotSkipShotLibrary,
                 skipStoryGraph: snapshotSkipStoryGraph
             ),
             to: url,
-            sourceURL: snapshotSourceProjectURL
+            sourceURL: sourceURL
         )
         // A real manifest was just written, so the unreadable original is gone; stop preserving it.
-        if snapshotManifest != nil { manifestLoadFailed = false }
+        if manifest != nil { manifestLoadFailed = false }
     }
 
     private func captureSaveSnapshot() {
-        snapshotTimeline = try? JSONEncoder().encode(editorViewModel.timeline)
-        snapshotManifest = Self.manifestSnapshotData(manifest: editorViewModel.mediaManifest, loadFailed: manifestLoadFailed)
-        snapshotGenerationLog = try? JSONEncoder().encode(editorViewModel.generationLog)
+        editorViewModel.flushPendingManifestMetadataUpdates()
+        snapshotProjectFile = editorViewModel.projectFileSnapshot()
+        snapshotManifest = Self.manifestSnapshot(manifest: editorViewModel.mediaManifest, loadFailed: manifestLoadFailed)
+        snapshotGenerationLog = editorViewModel.generationLog
         // Always encode (even when empty → "{...entries:[]}") so a legitimate clear is persisted
         // WITHOUT deleting the file — deleting turned any transient empty into permanent data loss.
         snapshotShotLibrary = try? JSONEncoder().encode(editorViewModel.shotLibrary)
@@ -257,10 +330,10 @@ final class VideoProject: NSDocument {
         snapshotPreparedForWrite = true
     }
 
-    nonisolated static func manifestSnapshotData(manifest: MediaManifest, loadFailed: Bool) -> Data? {
+    nonisolated static func manifestSnapshot(manifest: MediaManifest, loadFailed: Bool) -> MediaManifest? {
         // If the manifest failed to load, don't overwrite the (recoverable) original with an empty one.
         if loadFailed && manifest.entries.isEmpty && manifest.folders.isEmpty { return nil }
-        return try? JSONEncoder().encode(manifest)
+        return manifest
     }
 
     private nonisolated static func requiredData(_ name: String, in packageURL: URL) throws -> Data {
@@ -314,6 +387,10 @@ final class VideoProject: NSDocument {
         }
         try writeChatDirectory(snapshot.chatSessionFiles, to: packageURL, fm: fm)
         try copyDirectoryIfNeeded(Project.mediaDirectoryName, from: sourceURL, to: packageURL, fm: fm)
+        try fm.createDirectory(
+            at: packageURL.appendingPathComponent(Project.mediaDirectoryName, isDirectory: true),
+            withIntermediateDirectories: true
+        )
         // Preserve agent-saved documents (scripts, hooks, transcript exports) across a
         // safe-save package swap — same as media/, or they'd be dropped on the next save.
         try copyDirectoryIfNeeded(Project.documentsDirectoryName, from: sourceURL, to: packageURL, fm: fm)
@@ -378,12 +455,12 @@ final class VideoProject: NSDocument {
     }
 
     private func scheduleProjectCheckpointAutosave() {
-        guard fileURL != nil, !projectCheckpointAutosaveScheduled else { return }
+        guard fileURL != nil, !projectCheckpointAutosaveScheduled, !isSavingBeforeClose else { return }
         projectCheckpointAutosaveScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.projectCheckpointAutosaveScheduled = false
-            guard self.fileURL != nil else { return }
+            guard self.fileURL != nil, !self.isSavingBeforeClose else { return }
             self.autosave(withImplicitCancellability: false) { error in
                 if let error {
                     Log.project.error("project checkpoint autosave failed: \(error.localizedDescription)")
@@ -406,6 +483,7 @@ final class VideoProject: NSDocument {
                oldURL.standardizedFileURL != newURL.standardizedFileURL {
                 MainActor.assumeIsolated {
                     ProjectRegistry.shared.updateURL(from: oldURL, to: newURL)
+                    editorViewModel.rebaseProjectURL(from: oldURL, to: newURL)
                 }
             }
         }
@@ -440,11 +518,11 @@ final class VideoProject: NSDocument {
     // MARK: - Window setup
 
     override func makeWindowControllers() {
-        if let loaded = loadedTimeline {
-            editorViewModel.timeline = loaded
-            loadedTimeline = nil
+        if let loaded = loadedProjectFile {
+            editorViewModel.applyProjectFile(loaded)
+            loadedProjectFile = nil
         }
-        editorViewModel.undoManager = undoManager
+        editorViewModel.undo.attach(undoManager)
         editorViewModel.projectURL = fileURL
         editorViewModel.agentService.loadSessions(from: fileURL)
         editorViewModel.agentService.onSessionsChanged = { [weak self] in
@@ -463,6 +541,8 @@ final class VideoProject: NSDocument {
             restoreAssetsFromManifest()
             editorViewModel.refreshProxyBackedRefs()
         }
+        editorViewModel.enhancePendingDenoises()
+        if editorViewModel.markSpeakers { editorViewModel.identifySpeakers() }
 
         let editorView = EditorView()
             .environment(editorViewModel)
@@ -521,6 +601,11 @@ final class VideoProject: NSDocument {
         window.addTitlebarSwiftUI(TitleBarTrailingView().environment(editorViewModel), side: .trailing, width: AppTheme.Window.projectTitlebarTrailingWidth)
 
         let controller = EditorWindowController(editorViewModel: editorViewModel, window: window)
+        controller.onBecameKey = { [weak self] in
+            guard let self else { return }
+            AppState.shared.activateProject(self)
+        }
+        window.delegate = controller
         controller.installKeyMonitor()
         addWindowController(controller)
 
@@ -617,37 +702,40 @@ final class VideoProject: NSDocument {
 
         guard let data else { return }
         cachedThumbnail = data
-        guard let packageURL = fileURL else { return }
-        let thumbURL = packageURL.appendingPathComponent(Project.thumbnailFilename, isDirectory: false)
-        try? await Task.detached(priority: .utility) {
-            try data.write(to: thumbURL, options: .atomic)
-        }.value
+        editorViewModel.onProjectCheckpointRequired?()
     }
 
     // MARK: - Media restore
 
-    private func restoreAssetsFromManifest() {
-        let resolver = editorViewModel.mediaResolver
+    func restoreAssetsFromManifest() {
+        let entries = editorViewModel.mediaManifest.entries
+        let expectedURLs = MediaResolver.expectedURLMap(entries: entries, projectURL: editorViewModel.projectURL)
         var missing = 0
         var missingRefs: Set<String> = []
+        var restoredAssets: [MediaAsset] = []
         var candidates: [RestoredMediaCandidate] = []
-        for entry in editorViewModel.mediaManifest.entries {
-            guard let url = resolver.expectedURL(for: entry.id) else {
+        restoredAssets.reserveCapacity(entries.count)
+        candidates.reserveCapacity(entries.count)
+        for entry in entries {
+            guard let url = expectedURLs[entry.id] else {
                 Log.project.warning("restore: could not resolve URL for entry id=\(entry.id) name=\(entry.name)")
                 missing += 1
                 missingRefs.insert(entry.id)
                 continue
             }
             let asset = MediaAsset(entry: entry, resolvedURL: url)
-            editorViewModel.mediaAssets.append(asset)
+            restoredAssets.append(asset)
             candidates.append(RestoredMediaCandidate(id: entry.id, name: entry.name, url: url))
+        }
+        if !restoredAssets.isEmpty {
+            editorViewModel.mediaAssets.append(contentsOf: restoredAssets)
         }
         editorViewModel.missingMediaRefs = missingRefs
 
         let restoreCandidates = candidates
         let initialMissingRefs = missingRefs
         let initialMissingCount = missing
-        let manifestEntries = editorViewModel.mediaManifest.entries.count
+        let manifestEntries = entries.count
         Task { [weak self] in
             let existingRefs = await Task.detached(priority: .utility) {
                 Self.existingMediaRefs(restoreCandidates)
@@ -675,7 +763,6 @@ final class VideoProject: NSDocument {
         initialMissingCount: Int,
         manifestEntries: Int
     ) {
-        let cache = editorViewModel.mediaVisualCache
         var assetsByID: [String: MediaAsset] = [:]
         for asset in editorViewModel.mediaAssets {
             assetsByID[asset.id] = asset
@@ -683,6 +770,10 @@ final class VideoProject: NSDocument {
         var restored = 0
         var missing = initialMissingCount
         var missingRefs = initialMissingRefs
+        var manifestUpdates: [MediaAsset] = []
+        let timelineMediaRefs = Set(editorViewModel.timelines.flatMap { timeline in
+            timeline.tracks.flatMap { track in track.clips.map(\.mediaRef) }
+        })
 
         for candidate in candidates {
             guard let asset = assetsByID[candidate.id] else { continue }
@@ -693,13 +784,13 @@ final class VideoProject: NSDocument {
                         break
                     default:
                         asset.generationStatus = .failed("Import interrupted")
-                        editorViewModel.updateManifestMetadata(for: asset)
+                        manifestUpdates.append(asset)
                     }
                     continue
                 }
                 if asset.isRecoveringGeneration {
                     asset.generationStatus = .generating
-                    editorViewModel.updateManifestMetadata(for: asset)
+                    manifestUpdates.append(asset)
                     continue
                 }
                 Log.project.warning("restore: media file missing id=\(candidate.id) name=\(candidate.name) path=\(candidate.url.path)")
@@ -713,11 +804,11 @@ final class VideoProject: NSDocument {
                 }
                 asset.importInput = nil
                 asset.generationStatus = .none
-                editorViewModel.updateManifestMetadata(for: asset)
+                manifestUpdates.append(asset)
             }
             if asset.generationStatus != .none, !asset.canResumeGeneration {
                 asset.generationStatus = .none
-                editorViewModel.updateManifestMetadata(for: asset)
+                manifestUpdates.append(asset)
             }
             restored += 1
             // Thumbnails / waveforms / metadata are generated lazily when a media tile or
@@ -726,6 +817,7 @@ final class VideoProject: NSDocument {
             // machine and froze the app for projects with hundreds of clips.
         }
 
+        editorViewModel.updateManifestMetadata(for: manifestUpdates)
         editorViewModel.missingMediaRefs = missingRefs
         Log.project.notice(
             "restore ok restored=\(restored) missing=\(missing)",

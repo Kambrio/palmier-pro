@@ -2,26 +2,25 @@
   "changelogURL": "https://github.com/palmier-io/palmier-pro/releases",
   "entries": [
     {
-      "version": "0.4.5",
-      "date": "2026-06-28",
+      "version": "0.6.9",
+      "date": "2026-07-14",
       "sections": [
         {
           "heading": "New",
           "items": [
-            "Skills: You can now create skills inside palmier pro. Go to settings -> skills to get started."
+            "More Text Styling: Agent can now have full control over text styling."
           ]
         },
         {
-          "heading": "UI",
+          "heading": "Improved",
           "items": [
-            "Better ripple experience: Ripple insert, delete, trim with live preview while dragging.",
-            "Track reorder: You can now reorder tracks by dragging them"
+            "Better Inspector panel UI"
           ]
         },
         {
           "heading": "Fixed",
           "items": [
-            "FCPXML export: more stable export for fcpxml v1.10 - v1.14."
+            "Fix agent undo causing crashes."
           ]
         }
       ]

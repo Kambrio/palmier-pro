@@ -14,21 +14,20 @@ enum RippleRangesOutcome: Sendable {
     case refused(String)
 }
 
-/// Ripple editing: trim, delete, insert, and the sync-lock machinery that keeps
-/// other tracks aligned with the edit. See `RippleEngine` for the pure math.
+/// Ripple editing syncs trims, deletes, and inserts across tracks.
 extension EditorViewModel {
 
     // MARK: - Public API
 
-    /// Trim one or more clips in a single undo group. Overwrite-style
+    /// Trim clips as a batch, keeping linked clips trimmed together.
     func trimClips(_ edits: [(clipId: String, trimStartFrame: Int, trimEndFrame: Int)]) {
         guard !edits.isEmpty else { return }
-        undoManager?.beginUndoGrouping()
-        for e in edits {
-            trimClipInternal(clipId: e.clipId, trimStartFrame: e.trimStartFrame, trimEndFrame: e.trimEndFrame)
+        let batchIds = Set(edits.map(\.clipId))
+        undo.perform(edits.count == 1 ? "Trim Clip" : "Trim Clips") {
+            for e in edits {
+                trimClipInternal(clipId: e.clipId, trimStartFrame: e.trimStartFrame, trimEndFrame: e.trimEndFrame, protecting: batchIds)
+            }
         }
-        undoManager?.endUndoGrouping()
-        undoManager?.setActionName(edits.count == 1 ? "Trim Clip" : "Trim Clips")
     }
 
     /// Ripple trim result: resized clips, shifted clips, and optional obstacle frame if clamped.
@@ -99,6 +98,16 @@ extension EditorViewModel {
 
     /// Ripple trim: resize a clip from the dragged edge and shift every clip after it
     func rippleTrimClip(clipId: String, edge: TrimEdge, deltaFrames: Int, propagateToLinked: Bool) {
+        if let loc = findClip(id: clipId) {
+            let lead = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
+            var trimShifting = Set(timeline.tracks.filter(\.syncLocked).map(\.id))
+            trimShifting.insert(timeline.tracks[loc.trackIndex].id)
+            let shiftPoint = edge == .left ? lead.startFrame : lead.endFrame
+            if let reason = multicamManualRippleViolation(shiftingTrackIds: trimShifting, atFrame: shiftPoint) {
+                refuseRipple(reason: reason)
+                return
+            }
+        }
         guard let plan = planRippleTrim(clipId: clipId, edge: edge, deltaFrames: deltaFrames, propagateToLinked: propagateToLinked) else { return }
 
         let touched = plan.targetIds.union(plan.shifts.map(\.clipId))
@@ -116,17 +125,14 @@ extension EditorViewModel {
         }
     }
 
-    /// Achievable timeline-duration delta for a ripple trim of `clip` from a drag of `delta`
-    /// timeline frames. Reuses `trimValues` for the source clamp, then converts the realised
-    /// source-trim change back to a timeline-length delta (positive = longer).
+    /// Timeline delta from a ripple trim of `clip` by `delta` frames.
     private func rippleTrimDurationDelta(for clip: Clip, edge: TrimEdge, delta: Int) -> Int {
         let fields = trimValues(for: clip, edge: edge, delta: delta)
         let sourceShift = (fields.trimStart - clip.trimStartFrame) + (fields.trimEnd - clip.trimEndFrame)
         return -Int((Double(sourceShift) / clip.speed).rounded())
     }
 
-    /// Ripple delete: remove selected clips and close the gaps. Sync-locked tracks shift
-    /// along to preserve cross-track alignment; refuses if any would collide.
+    /// Ripple delete: remove selected clips and shift sync-locked tracks to keep them aligned.
     func rippleDeleteSelectedClips() {
         let ids = selectedClipIds
         guard !ids.isEmpty else { return }
@@ -136,6 +142,16 @@ extension EditorViewModel {
             .flatMap(\.clips)
             .filter { ids.contains($0.id) }
             .map { FrameRange(start: $0.startFrame, end: $0.endFrame) }
+
+        let shiftingIds = Set(timeline.tracks.filter { t in
+            t.syncLocked || t.clips.contains { ids.contains($0.id) }
+        }.map(\.id))
+        for range in globalRemovedRanges {
+            if let reason = multicamManualRippleViolation(shiftingTrackIds: shiftingIds, atFrame: range.end) {
+                refuseRipple(reason: reason)
+                return
+            }
+        }
 
         var shiftsByTrack: [Int: [ClipShift]] = [:]
         for ti in timeline.tracks.indices {
@@ -155,7 +171,7 @@ extension EditorViewModel {
             }
         }
 
-        withTimelineSwap(actionName: "Ripple Delete") {
+        withTimelineSwap(actionName: "Ripple Delete", refreshVisuals: false) {
             removeClips(ids: ids)
             for shifts in shiftsByTrack.values { applyShifts(shifts) }
         }
@@ -195,15 +211,36 @@ extension EditorViewModel {
 
         let anchorTrackId = timeline.tracks[trackIndex].id
         var clearTrackIds: Set<String> = [anchorTrackId]
-        // Linked partners of every touched clip, so A/V stays in sync across multi-clip ranges.
-        for clip in timeline.tracks[trackIndex].clips
-        where clip.linkGroupId != nil && merged.contains(where: { $0.start < clip.endFrame && $0.end > clip.startFrame }) {
-            for pid in linkedPartnerIds(of: clip.id) {
-                if let l = findClip(id: pid) { clearTrackIds.insert(timeline.tracks[l.trackIndex].id) }
+        for track in timeline.tracks where track.syncLocked && !ignoredTrackIds.contains(track.id) {
+            clearTrackIds.insert(track.id)
+        }
+        // Ensure all linked partners of affected clips are included to keep A/V in sync.
+        var frontier = clearTrackIds
+        while !frontier.isEmpty {
+            var added: Set<String> = []
+            for tid in frontier {
+                guard let ti = timeline.tracks.firstIndex(where: { $0.id == tid }) else { continue }
+                for clip in timeline.tracks[ti].clips
+                where clip.linkGroupId != nil && merged.contains(where: { $0.start < clip.endFrame && $0.end > clip.startFrame }) {
+                    for pid in linkedPartnerIds(of: clip.id) {
+                        guard let l = findClip(id: pid) else { continue }
+                        let partnerTid = timeline.tracks[l.trackIndex].id
+                        if clearTrackIds.insert(partnerTid).inserted { added.insert(partnerTid) }
+                    }
+                }
             }
+            frontier = added
         }
         for track in timeline.tracks where track.syncLocked && !ignoredTrackIds.contains(track.id) {
             clearTrackIds.insert(track.id)
+        }
+
+        let shiftingIds = clearTrackIds.union(
+            timeline.tracks.filter { $0.syncLocked && !ignoredTrackIds.contains($0.id) }.map(\.id)
+        )
+        if let reason = multicamAtomicityViolation(shiftingTrackIds: shiftingIds) {
+            mediaPanelToast = MediaPanelToast(stringLiteral: reason)
+            return .refused(reason)
         }
 
         // Refuse up front if a sync-locked follower can't absorb the shift after clearing.
@@ -262,6 +299,14 @@ extension EditorViewModel {
             $0.startFrame < gap.range.end && $0.endFrame > gap.range.start
         }) else { selectedGap = nil; return }
 
+        let gapShiftingIds = Set(timeline.tracks.indices
+            .filter { $0 == gap.trackIndex || timeline.tracks[$0].syncLocked }
+            .map { timeline.tracks[$0].id })
+        if let reason = multicamManualRippleViolation(shiftingTrackIds: gapShiftingIds, atFrame: gap.range.end) {
+            refuseRipple(reason: reason)
+            return
+        }
+
         var shiftsByTrack: [Int: [ClipShift]] = [:]
         for ti in timeline.tracks.indices {
             guard ti == gap.trackIndex || timeline.tracks[ti].syncLocked else { continue }
@@ -288,6 +333,10 @@ extension EditorViewModel {
     @discardableResult
     func rippleInsertClips(assets: [MediaAsset], trackIndex: Int, atFrame: Int, segments: [String: ClosedRange<Double>] = [:]) -> [String] {
         guard timeline.tracks.indices.contains(trackIndex) else { return [] }
+        if let reason = multicamManualRippleViolation(shiftingTrackIds: rippleInsertShiftingTrackIds(trackIndex: trackIndex), atFrame: atFrame) {
+            refuseRipple(reason: reason)
+            return []
+        }
         var created: [String] = []
         withTimelineSwap(actionName: "Ripple Insert Clips") {
             let totalPush = assets.reduce(0) { $0 + clipDurationFrames(for: $1, segment: segments[$1.id]) }
@@ -380,6 +429,10 @@ extension EditorViewModel {
     @discardableResult
     func rippleInsertClips(specs: [RippleInsertSpec], trackIndex: Int, atFrame: Int) -> [String] {
         guard timeline.tracks.indices.contains(trackIndex), !specs.isEmpty else { return [] }
+        if let reason = multicamManualRippleViolation(shiftingTrackIds: rippleInsertShiftingTrackIds(trackIndex: trackIndex), atFrame: atFrame) {
+            refuseRipple(reason: reason)
+            return []
+        }
         var created: [String] = []
         withTimelineSwap(actionName: specs.count == 1 ? "Ripple Insert Clip (Agent)" : "Ripple Insert Clips (Agent)") {
             let totalPush = specs.reduce(0) { $0 + $1.durationFrames }
@@ -387,7 +440,9 @@ extension EditorViewModel {
             // Pin the linked-audio destination before pushing so it ripples too; otherwise the
             // auto-created audio partner would land on an un-pushed track and overlap.
             let targetIsVideo = timeline.tracks[trackIndex].type == .video
-            let needsLinkedAudio = targetIsVideo && specs.contains { $0.asset.type == .video && $0.asset.hasAudio }
+            let needsLinkedAudio = targetIsVideo && specs.contains {
+                $0.asset.hasAudio && ($0.asset.type == .video || $0.asset.type == .sequence)
+            }
             let linkedAudioTrackIndex: Int? = needsLinkedAudio
                 ? (timeline.tracks.firstIndex { $0.type == .audio } ?? insertTrack(at: timeline.tracks.count, type: .audio))
                 : nil
@@ -429,7 +484,7 @@ extension EditorViewModel {
 
     // MARK: - Internal
 
-    fileprivate func trimClipInternal(clipId: String, trimStartFrame: Int, trimEndFrame: Int) {
+    fileprivate func trimClipInternal(clipId: String, trimStartFrame: Int, trimEndFrame: Int, protecting: Set<String> = []) {
         guard let loc = findClip(id: clipId) else { return }
         let ti = loc.trackIndex
         let clip = timeline.tracks[ti].clips[loc.clipIndex]
@@ -445,21 +500,31 @@ extension EditorViewModel {
         let newDuration = prevDuration - deltaStartTimeline - deltaEndTimeline
         let newStartFrame = clip.startFrame + deltaStartTimeline
 
-        undoManager?.beginUndoGrouping()
+        undo.perform("Trim Clip") {
+            let prevStartFrame = clip.startFrame
+            let prevEndFrame = clip.endFrame
+            let newEndFrame = newStartFrame + newDuration
+            let protected = protecting.union([clipId])
+            if newStartFrame < prevStartFrame {
+                clearRegion(trackIndex: ti, start: newStartFrame, end: prevStartFrame, prune: false, excluding: protected)
+            }
+            if newEndFrame > prevEndFrame {
+                clearRegion(trackIndex: ti, start: prevEndFrame, end: newEndFrame, prune: false, excluding: protected)
+            }
 
-        timeline.tracks[ti].clips[loc.clipIndex].trimStartFrame = trimStartFrame
-        timeline.tracks[ti].clips[loc.clipIndex].trimEndFrame = trimEndFrame
-        timeline.tracks[ti].clips[loc.clipIndex].startFrame = newStartFrame
-        timeline.tracks[ti].clips[loc.clipIndex].setDuration(newDuration)
+            guard let loc = findClip(id: clipId) else { return }
+            timeline.tracks[loc.trackIndex].clips[loc.clipIndex].trimStartFrame = trimStartFrame
+            timeline.tracks[loc.trackIndex].clips[loc.clipIndex].trimEndFrame = trimEndFrame
+            timeline.tracks[loc.trackIndex].clips[loc.clipIndex].startFrame = newStartFrame
+            timeline.tracks[loc.trackIndex].clips[loc.clipIndex].setDuration(newDuration)
 
-        sortClips(trackIndex: ti)
+            sortClips(trackIndex: loc.trackIndex)
 
-        undoManager?.registerUndo(withTarget: self) { vm in
-            vm.trimClipInternal(clipId: clipId, trimStartFrame: prevStart, trimEndFrame: prevEnd)
+            registerTimelineUndo("Trim Clip") { vm in
+                vm.trimClipInternal(clipId: clipId, trimStartFrame: prevStart, trimEndFrame: prevEnd, protecting: protecting)
+            }
+            notifyTimelineChanged()
         }
-        undoManager?.endUndoGrouping()
-        undoManager?.setActionName("Trim Clip")
-        notifyTimelineChanged()
     }
 
     // MARK: - Validation
@@ -487,7 +552,47 @@ extension EditorViewModel {
 
     /// Refuse a ripple edit: beep + log.
     fileprivate func refuseRipple(reason: String) {
+        mediaPanelToast = MediaPanelToast(stringLiteral: reason)
         NSSound.beep()
         Log.editor.notice("ripple blocked: \(reason)")
+    }
+
+    // MARK: - Multicam atomicity
+
+    fileprivate func rippleInsertShiftingTrackIds(trackIndex: Int) -> Set<String> {
+        Set(timeline.tracks.indices
+            .filter { $0 == trackIndex || timeline.tracks[$0].syncLocked }
+            .map { timeline.tracks[$0].id })
+    }
+
+    func multicamManualRippleViolation(shiftingTrackIds: Set<String>, atFrame frame: Int) -> String? {
+        if let reason = multicamAtomicityViolation(shiftingTrackIds: shiftingTrackIds) { return reason }
+        for track in timeline.tracks where shiftingTrackIds.contains(track.id) {
+            if let clip = track.clips.first(where: {
+                $0.multicamGroupId != nil && $0.startFrame < frame && $0.endFrame > frame
+            }), let group = multicamGroup(of: clip) {
+                return "Can't ripple through multicam group \"\(group.name)\" — split its clips at the edit point, or remove silence/words to cut time."
+            }
+        }
+        return nil
+    }
+
+    func multicamAtomicityViolation(shiftingTrackIds: Set<String>) -> String? {
+        var groupTracks: [String: Set<String>] = [:]
+        for track in timeline.tracks {
+            for gid in Set(track.clips.compactMap(\.multicamGroupId)) {
+                groupTracks[gid, default: []].insert(track.id)
+            }
+        }
+        for (gid, trackIds) in groupTracks {
+            let moving = trackIds.intersection(shiftingTrackIds)
+            guard !moving.isEmpty, moving != trackIds else { continue }
+            let name = multicamGroup(id: gid)?.name ?? "Multicam"
+            let stranded = timeline.tracks.indices
+                .filter { !shiftingTrackIds.contains(timeline.tracks[$0].id) && trackIds.contains(timeline.tracks[$0].id) }
+                .map { timelineTrackDisplayLabel(at: $0) }
+            return "Can't shift part of multicam group \"\(name)\" — \(stranded.joined(separator: ", ")) would stay behind and desync."
+        }
+        return nil
     }
 }

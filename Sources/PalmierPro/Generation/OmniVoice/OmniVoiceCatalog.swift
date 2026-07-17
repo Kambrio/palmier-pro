@@ -16,7 +16,9 @@ enum OmniVoiceCatalog {
         inputs: ["text"],
         promptLabel: "What should it say?",
         minSeconds: 1,
-        maxSeconds: 900
+        maxSeconds: 900,
+        targetLanguages: nil,
+        defaultTargetLanguage: nil
     )
 
     static let entry = CatalogEntry(
@@ -49,5 +51,6 @@ extension CatalogEntry {
         self.qualities = nil
         self.audioPricing = audioPricing
         self.creditsPerSecondUpscale = nil
+        self.paidOnly = false
     }
 }

@@ -53,7 +53,7 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             SettingsSidebar(selectedTab: $selectedTab, visibleTabs: visibleTabs)
-                .frame(width: 220)
+                .frame(width: AppTheme.Settings.sidebarWidth)
 
             SettingsDetail(tab: selectedTab)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -112,29 +112,34 @@ private struct SettingsDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(tab.label)
-                    .font(.system(size: AppTheme.FontSize.title2, weight: .light))
-                    .tracking(AppTheme.Tracking.tight)
-                    .foregroundStyle(AppTheme.Text.primaryColor)
-                Spacer()
-            }
-            .padding(.horizontal, AppTheme.Spacing.xlXxl)
-            .padding(.top, AppTheme.Spacing.xxl)
-            .padding(.bottom, AppTheme.Spacing.lgXl)
+            Text(tab.label)
+                .font(.system(size: AppTheme.FontSize.title1, weight: AppTheme.FontWeight.regular))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+                .frame(
+                    maxWidth: AppTheme.Settings.contentMaxWidth,
+                    alignment: .leading
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, AppTheme.Spacing.xxl)
+                .padding(.top, AppTheme.Spacing.xxl)
+                .padding(.bottom, AppTheme.Spacing.xxl)
 
             Group {
                 if tab == .skills {
                     SkillsPane()
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
+                        VStack(alignment: .leading, spacing: AppTheme.Spacing.xxl) {
                             switch tab {
                             case .account:
                                 AccountPane()
                             case .general:
-                                NotificationsPane()
-                                PrivacyPane()
+                                SettingsSection(title: "Notifications") {
+                                    NotificationsPane()
+                                }
+                                SettingsSection(title: "Privacy & Diagnostics") {
+                                    PrivacyPane()
+                                }
                             case .models:
                                 ModelsPane()
                             case .transcription:
@@ -147,8 +152,10 @@ private struct SettingsDetail: View {
                                 StoragePane()
                             }
                         }
-                        .padding(.horizontal, AppTheme.Spacing.xlXxl)
-                        .padding(.bottom, AppTheme.Spacing.xlXxl)
+                        .frame(maxWidth: AppTheme.Settings.contentMaxWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, AppTheme.Spacing.xxl)
+                        .padding(.bottom, AppTheme.Spacing.xxl)
                     }
                     .scrollEdgeEffectStyle(.soft, for: .top)
                 }
@@ -159,16 +166,51 @@ private struct SettingsDetail: View {
     }
 }
 
+struct SettingsSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            Text(title)
+                .font(.system(size: AppTheme.FontSize.smMd, weight: AppTheme.FontWeight.regular))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, AppTheme.Spacing.lgXl)
+            .padding(.vertical, AppTheme.Spacing.mdLg)
+            .themedSurface(AppTheme.Background.prominentColor, cornerRadius: AppTheme.Radius.mdLg)
+        }
+    }
+}
+
+struct SettingsGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            Text(title)
+                .font(.system(size: AppTheme.FontSize.smMd, weight: AppTheme.FontWeight.regular))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+            content()
+        }
+    }
+}
+
 struct SettingsToggleRow: View {
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: AppTheme.Spacing.md) {
+        HStack(alignment: .center, spacing: AppTheme.Spacing.md) {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
                 Text(title)
-                    .font(.system(size: AppTheme.FontSize.md))
+                    .font(.system(size: AppTheme.FontSize.md, weight: AppTheme.FontWeight.regular))
                     .foregroundStyle(AppTheme.Text.primaryColor)
                 Text(subtitle)
                     .font(.system(size: AppTheme.FontSize.sm))
@@ -181,9 +223,11 @@ struct SettingsToggleRow: View {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .controlSize(.small)
-                .padding(.top, AppTheme.Spacing.xxs)
+                .controlSize(.mini)
+                .accessibilityLabel(title)
+                .accessibilityHint(subtitle)
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -201,7 +245,6 @@ final class SettingsWindowController: NSWindowController {
         window.setContentSize(AppTheme.Window.settingsDefault)
         window.minSize = AppTheme.Window.settingsMin
         window.title = "Settings"
-        window.setFrameAutosaveName("PalmierProSettings-v4")
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = AppTheme.Background.base.withAlphaComponent(0.4)
         window.isOpaque = false

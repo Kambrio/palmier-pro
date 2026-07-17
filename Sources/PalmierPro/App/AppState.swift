@@ -5,12 +5,30 @@ struct ProjectOpenOptions {
     var startTutorial = false
 }
 
+enum ProjectError: LocalizedError {
+    case nameTaken(URL)
+    case invalidName(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .nameTaken(let url):
+            "A project named “\(url.deletingPathExtension().lastPathComponent)” already exists in that folder. Pick another name."
+        case .invalidName(let name):
+            "“\(name)” isn't a valid project name. Use a plain name without slashes or path components."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
     static let shared = AppState()
 
     private(set) var activeProject: VideoProject?
+
+    var openProjects: [VideoProject] {
+        NSDocumentController.shared.documents.compactMap { $0 as? VideoProject }
+    }
 
     private(set) var mcpService: MCPService?
 
@@ -20,8 +38,8 @@ final class AppState {
             Log.mcp.notice("mcp disabled in settings; not starting")
             return
         }
-        let service = MCPService(editorProvider: { [weak self] in
-            self?.activeProject?.editorViewModel
+        let service = MCPService(projectProvider: { [weak self] in
+            self?.activeProject
         })
         service.start()
         mcpService = service
@@ -71,9 +89,33 @@ final class AppState {
     }
 
     func showEditor(for project: VideoProject) {
-        activeProject = project
-        HomeWindowController.shared.window?.orderOut(nil)
+        activateProject(project)
         project.showWindows()
+    }
+
+    func activateProject(_ project: VideoProject) {
+        if activeProject !== project {
+            activeProject = project
+            project.editorViewModel.refreshProjectId()
+            recordProjectActive(project)
+        }
+        HomeWindowController.shared.window?.orderOut(nil)
+    }
+
+    // Save and close project; switch to next open or show Home. Throws (without closing) if the save fails.
+    func closeProject(_ project: VideoProject) async throws {
+        if let url = project.fileURL { ProjectRegistry.shared.register(url) }
+        try await project.saveBeforeClosing()
+        let wasActive = activeProject === project
+        project.close()
+        if wasActive {
+            activeProject = nil
+            if let next = openProjects.first {
+                showEditor(for: next)
+            } else {
+                HomeWindowController.shared.showWindow(nil)
+            }
+        }
     }
 
     func revealGeneratedAssetFromNotification(assetId: String?, projectURL: URL?) {
@@ -104,7 +146,6 @@ final class AppState {
     }
 
     private func notificationTargetProject(assetId: String?, projectURL: URL?) -> VideoProject? {
-        let openProjects = NSDocumentController.shared.documents.compactMap { $0 as? VideoProject }
         if let projectURL {
             return openProjects.first { Self.sameFile($0.fileURL, projectURL) }
         }
@@ -123,22 +164,67 @@ final class AppState {
 
     // MARK: - Project lifecycle
 
-    func createNewProject() {
+    // Creates and displays a project at `url`; doesn't save or register.
+    private func instantiateProject(at url: URL) -> VideoProject {
+        let doc = VideoProject()
+        doc.fileURL = url
+        doc.fileType = VideoProject.typeIdentifier
+        doc.makeWindowControllers()
+        doc.showWindows()
+        NSDocumentController.shared.addDocument(doc)
+        return doc
+    }
+
+    /// Creates a new project in the storage folder; errors if the name is invalid or already taken.
+    @discardableResult
+    func createProject(named name: String) async throws -> VideoProject {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? Project.defaultProjectName : trimmed
+        guard !base.contains("/"), !base.contains("\\"), base != ".", base != ".." else {
+            throw ProjectError.invalidName(base)
+        }
+        let directory = Project.storageDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(base).appendingPathExtension(Project.fileExtension)
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw ProjectError.nameTaken(url)
+        }
+        let previous = activeProject
+        let doc = instantiateProject(at: url)
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                doc.save(to: url, ofType: VideoProject.typeIdentifier, for: .saveOperation) { error in
+                    if let error { cont.resume(throwing: error) } else { cont.resume() }
+                }
+            }
+        } catch {
+            doc.close()
+            try? FileManager.default.removeItem(at: url)
+            if let previous { showEditor(for: previous) }
+            throw error
+        }
+        ProjectRegistry.shared.register(url)
+        doc.editorViewModel.refreshProjectId()
+        recordProjectCreated(doc)
+        recordProjectOpened(doc)
+        return doc
+    }
+
+    func createProjectInteractively() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [Self.projectContentType]
         panel.nameFieldStringValue = Project.defaultProjectName
         panel.directoryURL = Project.storageDirectory
         panel.title = "New Project"
-        panel.begin { response in
+        panel.begin { [self] response in
             guard response == .OK, let url = panel.url else { return }
-            let doc = VideoProject()
-            doc.fileURL = url
-            doc.fileType = VideoProject.typeIdentifier
-            doc.makeWindowControllers()
-            doc.showWindows()
-            NSDocumentController.shared.addDocument(doc)
-            doc.save(to: url, ofType: VideoProject.typeIdentifier, for: .saveOperation) { _ in
+            let doc = instantiateProject(at: url)
+            doc.save(to: url, ofType: VideoProject.typeIdentifier, for: .saveOperation) { error in
+                guard error == nil else { return }
                 ProjectRegistry.shared.register(url)
+                doc.editorViewModel.refreshProjectId()
+                self.recordProjectCreated(doc)
+                self.recordProjectOpened(doc)
             }
         }
     }
@@ -154,7 +240,7 @@ final class AppState {
     }
 
     @discardableResult
-    private func openProjectAsync(at url: URL, register: Bool = true, options: ProjectOpenOptions = .init()) async throws -> VideoProject {
+    func openProjectAsync(at url: URL, register: Bool = true, options: ProjectOpenOptions = .init()) async throws -> VideoProject {
         let resolved = url.standardizedFileURL
         if let existing = showExistingProject(at: resolved, register: register, options: options) {
             return existing
@@ -168,20 +254,38 @@ final class AppState {
         doc.showWindows()
         NSDocumentController.shared.addDocument(doc)
         if register { ProjectRegistry.shared.register(resolved) }
+        doc.editorViewModel.refreshProjectId()
+        recordProjectOpened(doc)
         apply(options, to: doc.editorViewModel)
         return doc
     }
 
     private func showExistingProject(at url: URL, register: Bool, options: ProjectOpenOptions) -> VideoProject? {
-        if let existing = NSDocumentController.shared.documents
-            .compactMap({ $0 as? VideoProject })
-            .first(where: { Self.sameFile($0.fileURL, url) }) {
-            showEditor(for: existing)
+        if let existing = openProjects.first(where: { Self.sameFile($0.fileURL, url) }) {
             if register { ProjectRegistry.shared.register(url) }
+            showEditor(for: existing)
             apply(options, to: existing.editorViewModel)
             return existing
         }
         return nil
+    }
+
+    private func recordProjectCreated(_ project: VideoProject) {
+        Analytics.capture(.projectCreated, properties: project.editorViewModel.analyticsSnapshot())
+    }
+
+    private func recordProjectOpened(_ project: VideoProject) {
+        let properties = project.editorViewModel.analyticsSnapshot()
+        Analytics.capture(.projectOpened, properties: properties)
+        if let projectId = project.editorViewModel.projectId {
+            Analytics.captureProjectActive(projectId: projectId, properties: properties)
+        }
+    }
+
+    private func recordProjectActive(_ project: VideoProject) {
+        guard let projectId = project.editorViewModel.projectId else { return }
+        let properties = project.editorViewModel.analyticsSnapshot()
+        Analytics.captureProjectActive(projectId: projectId, properties: properties)
     }
 
     private func apply(_ options: ProjectOpenOptions, to editor: EditorViewModel) {

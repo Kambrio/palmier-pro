@@ -127,7 +127,7 @@ extension ToolExecutor {
         }
 
         let actionName = input.clipIds.count == 1 ? "Stabilize Clip (Agent)" : "Stabilize Clips (Agent)"
-        withUndoGroup(editor, actionName: actionName) {
+        editor.undo.perform(actionName) {
             editor.mutateClips(ids: Set(input.clipIds), actionName: actionName) { c in
                 var s = c.stabilization ?? Stabilization()
                 s.enabled = enabling

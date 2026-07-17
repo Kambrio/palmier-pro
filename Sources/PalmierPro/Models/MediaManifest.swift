@@ -68,6 +68,7 @@ struct GenerationInput: Codable, Sendable, Equatable {
     var instrumental: Bool?
     /// Audio-only — OmniVoice target language (e.g. "English", "Spanish").
     var language: String?
+    var targetLanguage: String?
     /// Video-only
     var generateAudio: Bool?
     var referenceImageURLs: [String]?

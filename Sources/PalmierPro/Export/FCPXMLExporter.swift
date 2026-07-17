@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Foundation
 
 /// The `version` attribute Resolve/FCP gate import on (a literal allow-list), so it's the only thing
@@ -25,6 +26,23 @@ enum FCPXMLVersion: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Resolve interprets several FCPXML values off-spec (trim-rect units, imported position scaled by
+/// the conform fit at render); Final Cut is spec-literal. Same structure, different value encoding.
+enum FCPXMLTarget: String, CaseIterable, Identifiable, Sendable {
+    case resolve
+    case fcp
+
+    var id: String { rawValue }
+    static let `default`: FCPXMLTarget = .resolve
+
+    var displayName: String {
+        switch self {
+        case .resolve: "DaVinci Resolve"
+        case .fcp: "Final Cut Pro"
+        }
+    }
+}
+
 /// Exports a Timeline as FCPXML (for DaVinci Resolve / Final Cut Pro). Companion to XMLExporter
 /// (XMEML, for Premiere). The document is an `FCPXMLNode` tree (defined at the bottom); `renderFCPXML`
 /// owns indentation and escaping. Read `build()` top-down: `<fcpxml>` → `<resources>` (formats +
@@ -32,37 +50,76 @@ enum FCPXMLVersion: String, CaseIterable, Identifiable, Sendable {
 /// `<gap>` with every clip connected on a lane.
 ///
 /// Encoding facts (reverse-engineered from Resolve round-trips):
-/// - Position: unit = 1% of frame height, square, origin at center, +Y up.
+/// - Position: unit = 1% of frame height, square, origin at center, +Y up; pre-divided by the
+///   clip's per-axis conform-fit fraction (Resolve scales imported positions by it at render).
 /// - Scale: multiplier on the conform-fit size, so we divide the aspect-fit out of width/height.
 /// - Rotation: degrees, negated (FCP is counter-clockwise-positive). Flip: negative scale.
-/// - Crop: `<adjust-crop>/<trim-rect>`, a percentage of the source per edge.
-/// - Retime: a visual clip is a `<ref-clip>` over a compound clip holding the full media; the
-///   `<timeMap>` ramps the whole media (output[0, media/speed] → source[0, media]) and `start` windows
-///   in along the output axis (= source in-point ÷ speed). A clip-local ramp blacks the tail.
+/// - Crop: `<trim-rect>` in Resolve's units — left/right: source px ÷ (seqHeight/100);
+///   top/bottom: crop fraction ÷ conform-fit scale.
+/// - Clips are flat `<asset-clip>`s (stills: `<video>`); only an A/V source played one-sided
+///   rides a compound `<media>`/`<ref-clip>` (Resolve honors `srcEnable` only on ref-clips).
+/// - Retime: a `<timeMap>` on the clip ramps the whole media (output[0, media/speed] →
+///   source[0, media]) and `start` windows in along the output axis (= source in-point ÷ speed).
+///   A clip-local ramp blacks the tail.
 /// - Keyframes: child `<param>/<keyframeAnimation>`; `time` is offset by `start` (the output axis),
 ///   `value` in the param's own unit. Volume: `<adjust-volume amount>` in dB.
 ///
 /// What transports: clip placement/trims, speed, lane order, enabled state; text + font/face/
-/// size/color/alignment; position/scale/rotation/flip (+ position/scale/rotation keyframes);
-/// crop; opacity (+ keyframes); static volume.
+/// size/color/alignment/stroke; position/scale/rotation/flip (+ position/scale/rotation keyframes);
+/// crop; opacity (+ keyframes); static volume; source start timecode, so Resolve doesn't flag a
+/// mismatch against the media's embedded timecode.
 ///
 /// What does NOT: keyframed audio volume and audio fades (Resolve drops both itself); text
-/// background/border boxes (no FCPXML form); crop keyframes; title rotation/scale; color &
+/// background boxes (no FCPXML form); crop keyframes; title rotation/scale; color &
 /// effects; Lottie clips.
 ///
 /// Reference: https://developer.apple.com/documentation/professional-video-applications/fcpxml-reference
 enum FCPXMLExporter {
     static func export(timeline: Timeline, resolver: MediaResolver,
-                       version: FCPXMLVersion = .default, outputURL: URL) throws {
-        let xml = Builder(timeline: timeline, resolver: resolver, version: version).build()
+                       resolveTimeline: @escaping @Sendable (String) -> Timeline? = { _ in nil },
+                       version: FCPXMLVersion = .default, target: FCPXMLTarget = .default,
+                       outputURL: URL) async throws {
+        // Media refs across the parent and every reachable nested timeline.
+        var mediaRefs: Set<String> = []
+        var queue = [timeline]
+        var visited: Set<String> = []
+        var i = 0
+        while i < queue.count {
+            let t = queue[i]
+            i += 1
+            guard visited.insert(t.id).inserted else { continue }
+            for clip in t.tracks.flatMap(\.clips) {
+                if clip.sourceClipType == .sequence {
+                    if let child = resolveTimeline(clip.mediaRef) { queue.append(child) }
+                } else {
+                    mediaRefs.insert(clip.mediaRef)
+                }
+            }
+        }
+        let timecodes = await SourceTimingReader.timecodes(mediaRefs: mediaRefs, urls: resolver.expectedURLMap())
+        let xml = render(timeline: timeline, resolver: resolver, resolveTimeline: resolveTimeline,
+                         version: version, target: target, startTimecodes: timecodes)
         guard let data = xml.data(using: .utf8) else { throw ExportError.xmlEncodingFailed }
         try data.write(to: outputURL)
+    }
+
+    /// Build the document from an explicit timecode map. Split out so tests can inject embedded
+    /// timecodes without a `tmcd`-carrying media file on disk.
+    static func render(timeline: Timeline, resolver: MediaResolver,
+                       resolveTimeline: @escaping (String) -> Timeline? = { _ in nil },
+                       version: FCPXMLVersion = .default,
+                       target: FCPXMLTarget = .default, startTimecodes: [String: SourceTimecode] = [:]) -> String {
+        Builder(timeline: timeline, resolver: resolver, resolveTimeline: resolveTimeline,
+                version: version, target: target, startTimecodes: startTimecodes).build()
     }
 
     private final class Builder {
         private let timeline: Timeline
         private let resolver: MediaResolver
+        private let resolveTimeline: (String) -> Timeline?
         private let version: FCPXMLVersion
+        private let target: FCPXMLTarget
+        private let startTimecodes: [String: SourceTimecode]
         private let fps: Int
         private let seqWidth: Int
         private let seqHeight: Int
@@ -71,9 +128,13 @@ enum FCPXMLExporter {
         private var resourceIndex: [String: Int] = [:]
         private var resources: [MediaResource] = []
         private var nextTextStyleId = 1
-        // A synced A/V pair collapses into one ref-clip; the audio partner is dropped, its volume kept.
+        // A synced A/V pair collapses into one flat asset-clip; the audio partner is dropped, its volume kept.
         private var linkedAudioForVideo: [String: Clip] = [:]
         private var redundantAudioClipIds: Set<String> = []
+        private var usedCompoundIds: Set<String> = []
+        // Nested timelines, discovery order; each becomes a <media><sequence> compound resource.
+        private var nests: [(mediaId: String, timeline: Timeline)] = []
+        private var nestIndex: [String: String] = [:]
 
         private struct EmittableClip {
             let clip: Clip
@@ -92,27 +153,48 @@ enum FCPXMLExporter {
             var durationFrames: Int
             let hasVideo: Bool
             let hasAudio: Bool
+            // Embedded start timecode in timeline-frame units; 0 when absent.
+            let startTimecodeFrames: Int
         }
 
-        init(timeline: Timeline, resolver: MediaResolver, version: FCPXMLVersion) {
+        init(timeline: Timeline, resolver: MediaResolver, resolveTimeline: @escaping (String) -> Timeline?,
+             version: FCPXMLVersion, target: FCPXMLTarget, startTimecodes: [String: SourceTimecode]) {
             self.timeline = timeline
             self.resolver = resolver
+            self.resolveTimeline = resolveTimeline
             self.version = version
+            self.target = target
+            self.startTimecodes = startTimecodes
             self.fps = max(1, timeline.fps)
             self.seqWidth = timeline.width
             self.seqHeight = timeline.height
         }
 
         func build() -> String {
-            let clips = emittableClips()
-            collectResources(from: clips)
-            indexLinkedPairs(clips)
-            let hasTitles = clips.contains { $0.clip.mediaType == .text }
+            collectNests()
+            let clips = emittableClips(of: timeline)
+            let nestedClips = nests.flatMap { emittableClips(of: $0.timeline) }
+            collectResources(from: clips + nestedClips)
+            indexLinkedPairs(clips + nestedClips)
+            markUsedCompounds(clips + nestedClips)
+            let hasTitles = (clips + nestedClips).contains { $0.clip.mediaType == .text }
             let root = FCPXMLNode(name: "fcpxml", attributes: [("version", version.rawValue)], children: [
                 resourcesNode(hasTitles: hasTitles),
                 libraryNode(clips: clips),
             ])
             return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE fcpxml>\n" + renderFCPXML(root, indent: 0)
+        }
+
+        /// Unresolvable or empty children stay out of `nestIndex`, so `isEmittable` drops their carriers.
+        private func collectNests() {
+            let reachable = timeline.reachableTimelines(
+                resolve: resolveTimeline, maxDepth: NestFlattener.maxDepth, include: { $0.totalFrames > 0 }
+            )
+            for child in reachable {
+                let mediaId = "nest\(nests.count + 1)"
+                nestIndex[child.id] = mediaId
+                nests.append((mediaId, child))
+            }
         }
 
         // Video + audio with matching linkGroup, source, timing, and enabled state are a synced pair
@@ -121,7 +203,7 @@ enum FCPXMLExporter {
             for item in clips {
                 guard let group = item.clip.linkGroupId else { continue }
                 switch item.clip.mediaType {
-                case .video, .image: byGroup[group, default: ([], [])].videos.append(item)
+                case .video, .image, .sequence: byGroup[group, default: ([], [])].videos.append(item)
                 case .audio: byGroup[group, default: ([], [])].audios.append(item)
                 default: break
                 }
@@ -135,6 +217,16 @@ enum FCPXMLExporter {
                 else { continue }
                 linkedAudioForVideo[v.clip.id] = a.clip
                 redundantAudioClipIds.insert(a.clip.id)
+            }
+        }
+
+        // Mirrors assetClipNode's ref-clip condition; only referenced compounds get a <media> resource.
+        private func markUsedCompounds(_ clips: [EmittableClip]) {
+            for item in clips where !redundantAudioClipIds.contains(item.clip.id) {
+                guard let i = resourceIndex[item.clip.mediaRef],
+                      let compoundId = resources[i].compoundId,
+                      linkedAudioForVideo[item.clip.id] == nil else { continue }
+                usedCompoundIds.insert(compoundId)
             }
         }
 
@@ -161,39 +253,66 @@ enum FCPXMLExporter {
             children += resources.compactMap(formatNode)
             children += resources.map(assetNode)
             children += resources.compactMap(compoundClipNode)
+            children += nests.compactMap(nestFormatNode)
+            children += nests.map(nestMediaNode)
             return FCPXMLNode(name: "resources", children: children)
         }
 
+        private func nestFormatId(_ nest: (mediaId: String, timeline: Timeline)) -> String {
+            nest.timeline.width == seqWidth && nest.timeline.height == seqHeight
+                ? sequenceFormatId : "\(nest.mediaId)Format"
+        }
+
+        private func nestFormatNode(_ nest: (mediaId: String, timeline: Timeline)) -> FCPXMLNode? {
+            let formatId = nestFormatId(nest)
+            guard formatId != sequenceFormatId else { return nil }
+            return FCPXMLNode(name: "format", attributes: [
+                ("id", formatId),
+                ("name", sequenceFormatName(width: nest.timeline.width, height: nest.timeline.height, fps: Double(fps))),
+                ("frameDuration", frameDuration(forFPS: Double(fps))),
+                ("width", "\(nest.timeline.width)"),
+                ("height", "\(nest.timeline.height)"),
+                ("colorSpace", "1-1-1 (Rec. 709)"),
+            ])
+        }
+
+        /// A nested timeline as a compound-clip resource: same gap-with-lanes shape as the project.
+        private func nestMediaNode(_ nest: (mediaId: String, timeline: Timeline)) -> FCPXMLNode {
+            let duration = time(frames: nest.timeline.totalFrames)
+            let gap = FCPXMLNode(name: "gap", attributes: [
+                ("name", "Timeline"),
+                ("offset", "0s"),
+                ("start", "0s"),
+                ("duration", duration),
+            ], children: storyNodes(for: emittableClips(of: nest.timeline)))
+            let sequence = FCPXMLNode(name: "sequence", attributes: [
+                ("format", nestFormatId(nest)),
+                ("duration", duration),
+                ("tcStart", "0s"),
+                ("tcFormat", "NDF"),
+                ("audioLayout", "stereo"),
+                ("audioRate", "48k"),
+            ], children: [FCPXMLNode(name: "spine", children: [gap])])
+            return FCPXMLNode(name: "media", attributes: [
+                ("id", nest.mediaId),
+                ("name", nest.timeline.name),
+            ], children: [sequence])
+        }
+
         private func compoundClipNode(for resource: MediaResource) -> FCPXMLNode? {
-            guard let compoundId = resource.compoundId else { return nil }
+            guard let compoundId = resource.compoundId, usedCompoundIds.contains(compoundId) else { return nil }
             let dur = time(frames: resource.durationFrames)
-            // <asset-clip> carries both streams so the outer ref-clip can deliver audio; <clip>/<video>
-            // is video-only. Outer srcEnable gates what actually plays.
-            let innerClip: FCPXMLNode
-            if resource.hasAudio {
-                innerClip = FCPXMLNode(name: "asset-clip", attributes: [
-                    ("ref", resource.assetId),
-                    ("name", resource.entry.name),
-                    ("duration", dur),
-                    ("start", "0s"),
-                    ("offset", "0s"),
-                    ("format", resource.formatId ?? sequenceFormatId),
-                ])
-            } else {
-                let video = FCPXMLNode(name: "video", attributes: [
-                    ("ref", resource.assetId),
-                    ("duration", dur),
-                    ("start", "0s"),
-                    ("offset", "0s"),
-                ])
-                innerClip = FCPXMLNode(name: "clip", attributes: [
-                    ("name", resource.entry.name),
-                    ("duration", dur),
-                    ("start", "0s"),
-                    ("offset", "0s"),
-                    ("format", resource.formatId ?? sequenceFormatId),
-                ], children: [video])
-            }
+            // The compound spine is 0-based but reads the asset from its own timecode origin, so
+            // `start` must equal the asset's embedded start timecode.
+            let tcStart = time(frames: resource.startTimecodeFrames)
+            let innerClip = FCPXMLNode(name: "asset-clip", attributes: [
+                ("ref", resource.assetId),
+                ("name", fileName(for: resource)),
+                ("duration", dur),
+                ("start", tcStart),
+                ("offset", "0s"),
+                ("format", resource.formatId ?? sequenceFormatId),
+            ])
             let sequence = FCPXMLNode(name: "sequence", attributes: [
                 ("format", resource.formatId ?? sequenceFormatId),
                 ("duration", dur),
@@ -202,7 +321,7 @@ enum FCPXMLExporter {
             ], children: [FCPXMLNode(name: "spine", children: [innerClip])])
             return FCPXMLNode(name: "media", attributes: [
                 ("id", compoundId),
-                ("name", resource.entry.name),
+                ("name", fileName(for: resource)),
             ], children: [sequence])
         }
 
@@ -227,7 +346,7 @@ enum FCPXMLExporter {
                   ])
                 : FCPXMLNode(name: "spine")
 
-            return FCPXMLNode(name: "project", attributes: [("name", "Timeline Export")], children: [
+            return FCPXMLNode(name: "project", attributes: [("name", timeline.name)], children: [
                 FCPXMLNode(name: "sequence", attributes: [
                     ("format", sequenceFormatId),
                     ("duration", duration),
@@ -250,7 +369,7 @@ enum FCPXMLExporter {
                     switch item.clip.mediaType {
                     case .text:
                         return titleNode(for: item)
-                    case .audio, .video, .image:
+                    case .audio, .video, .image, .sequence:
                         return assetClipNode(for: item)
                     case .lottie:
                         return nil
@@ -260,68 +379,91 @@ enum FCPXMLExporter {
 
         private func assetClipNode(for item: EmittableClip) -> FCPXMLNode? {
             let clip = item.clip
-            guard let i = resourceIndex[clip.mediaRef] else { return nil }
-            let resource = resources[i]
 
-            // Video/image → <ref-clip>. A linked audio partner rides along (srcEnable omitted = both
-            // streams, its volume carried here); otherwise pin to video so the source's audio stays out.
-            if clip.mediaType != .audio, let compoundId = resource.compoundId {
-                let linkedAudio = linkedAudioForVideo[clip.id]
+            // Nested timeline → <ref-clip> over its compound-clip media resource.
+            if clip.sourceClipType == .sequence {
+                guard let mediaId = nestIndex[clip.mediaRef],
+                      let child = resolveTimeline(clip.mediaRef) else { return nil }
+                // A frozen carrier can outlive the child's current length; clamp to content.
+                let duration = min(clip.durationFrames, max(0, child.totalFrames - clip.trimStartFrame))
+                guard duration > 0 else { return nil }
                 var attrs: [(String, String)] = [
-                    ("ref", compoundId),
-                    ("name", resolver.displayName(for: clip.mediaRef)),
+                    ("ref", mediaId),
+                    ("name", child.name),
                     ("lane", "\(item.lane)"),
                     ("offset", time(frames: clip.startFrame)),
-                    ("start", clipStart(for: clip)),
-                    ("duration", time(frames: clip.durationFrames)),
+                    ("start", time(frames: clip.trimStartFrame)),
+                    ("duration", time(frames: duration)),
                     ("enabled", item.enabled ? "1" : "0"),
                 ]
-                if linkedAudio == nil { attrs.append(("srcEnable", "video")) }
+                if clip.mediaType == .audio {
+                    attrs.append(("srcEnable", "audio"))
+                    return FCPXMLNode(name: "ref-clip", attributes: attrs,
+                                      children: [volumeNode(for: clip)].compactMap { $0 })
+                }
+                let nestLinkedAudio = linkedAudioForVideo[clip.id]
+                if nestLinkedAudio == nil { attrs.append(("srcEnable", "video")) }
                 return FCPXMLNode(name: "ref-clip", attributes: attrs, children: [
-                    timeMapNode(for: clip, mediaFrames: resource.durationFrames),
                     FCPXMLNode(name: "adjust-conform", attributes: [("type", "fit")]),
                     cropNode(for: clip),
                     transformNode(for: clip),
                     blendNode(for: clip),
-                    linkedAudio.flatMap(volumeNode),
+                    nestLinkedAudio.flatMap(volumeNode),
                 ].compactMap { $0 })
             }
 
-            // Audio against an A/V source must go through the compound too
-            if clip.mediaType == .audio, let compoundId = resource.compoundId {
+            guard let i = resourceIndex[clip.mediaRef] else { return nil }
+            let resource = resources[i]
+            let linkedAudio = linkedAudioForVideo[clip.id]
+
+            // One-sided A/V rides the compound (Resolve honors srcEnable only on ref-clips);
+            // everything else exports flat.
+            if let compoundId = resource.compoundId, linkedAudio == nil {
+                let videoOnly = clip.mediaType != .audio
                 let attrs: [(String, String)] = [
                     ("ref", compoundId),
-                    ("name", resolver.displayName(for: clip.mediaRef)),
+                    ("name", fileName(for: resource)),
                     ("lane", "\(item.lane)"),
                     ("offset", time(frames: clip.startFrame)),
                     ("start", clipStart(for: clip)),
                     ("duration", time(frames: clip.durationFrames)),
                     ("enabled", item.enabled ? "1" : "0"),
-                    ("srcEnable", "audio"),
+                    ("srcEnable", videoOnly ? "video" : "audio"),
                 ]
-                return FCPXMLNode(name: "ref-clip", attributes: attrs, children: [
-                    timeMapNode(for: clip, mediaFrames: resource.durationFrames),
-                    volumeNode(for: clip),
-                ].compactMap { $0 })
+                // Child order is DTD-fixed: timeMap, crop, conform, transform, blend, volume.
+                let children: [FCPXMLNode?] = videoOnly
+                    ? [timeMapNode(for: clip, mediaFrames: resource.durationFrames),
+                       cropNode(for: clip),
+                       FCPXMLNode(name: "adjust-conform", attributes: [("type", "fit")]),
+                       transformNode(for: clip),
+                       blendNode(for: clip)]
+                    : [timeMapNode(for: clip, mediaFrames: resource.durationFrames),
+                       volumeNode(for: clip)]
+                return FCPXMLNode(name: "ref-clip", attributes: attrs, children: children.compactMap { $0 })
             }
 
+            let origin = resource.startTimecodeFrames
+            let visual = clip.mediaType != .audio
             let attrs: [(String, String)] = [
                 ("ref", resource.assetId),
-                ("name", resolver.displayName(for: clip.mediaRef)),
+                ("name", fileName(for: resource)),
                 ("lane", "\(item.lane)"),
                 ("offset", time(frames: clip.startFrame)),
-                ("start", clipStart(for: clip)),
+                ("start", clipStart(for: clip, origin: origin)),
                 ("duration", time(frames: clip.durationFrames)),
                 ("enabled", item.enabled ? "1" : "0"),
             ]
-            return FCPXMLNode(
-                name: "asset-clip",
-                attributes: attrs,
-                children: [
-                    timeMapNode(for: clip, mediaFrames: resource.durationFrames),
-                    volumeNode(for: clip),
-                ].compactMap { $0 }
-            )
+            let children: [FCPXMLNode?] = [
+                timeMapNode(for: clip, mediaFrames: resource.durationFrames, origin: origin),
+                visual ? cropNode(for: clip) : nil,
+                visual ? FCPXMLNode(name: "adjust-conform", attributes: [("type", "fit")]) : nil,
+                visual ? transformNode(for: clip) : nil,
+                visual ? blendNode(for: clip) : nil,
+                resource.hasAudio ? volumeNode(for: linkedAudio ?? clip) : nil,
+            ]
+            // Stills export as <video>, the shape FCP itself writes.
+            return FCPXMLNode(name: clip.mediaType == .image ? "video" : "asset-clip",
+                              attributes: attrs, children: children.compactMap { $0 })
         }
 
         private func titleNode(for item: EmittableClip) -> FCPXMLNode? {
@@ -333,7 +475,7 @@ enum FCPXMLExporter {
 
             var textNodes: [FCPXMLNode] = [
                 FCPXMLNode(name: "text", children: [
-                    FCPXMLNode(name: "text-style", attributes: [("ref", styleId)], text: content),
+                    FCPXMLNode(name: "text-style", attributes: [("ref", styleId)], text: style.displayText(content)),
                 ]),
                 FCPXMLNode(name: "text-style-def", attributes: [("id", styleId)], children: [
                     FCPXMLNode(name: "text-style", attributes: textStyleAttributes(for: style)),
@@ -378,10 +520,11 @@ enum FCPXMLExporter {
             guard moved || rotated || scaled
                     || !posFrames.isEmpty || !rotFrames.isEmpty || !scaleFrames.isEmpty else { return nil }
 
+            let fit = target == .resolve ? fitFractions(for: clip) : (w: 1.0, h: 1.0)
             var attrs: [(String, String)] = [("scale", base)]
             if rotated || !rotFrames.isEmpty { attrs.append(("rotation", formatNumber(-t.rotation))) }
             attrs.append(("anchor", "0 0"))
-            attrs.append(("position", positionValue(for: t)))
+            attrs.append(("position", positionValue(for: t, fit: fit)))
 
             var params: [FCPXMLNode] = []
             if !scaleFrames.isEmpty {
@@ -392,9 +535,9 @@ enum FCPXMLExporter {
                 })
             }
             if !posFrames.isEmpty {
-                params.append(keyframeParam(name: "position", base: positionValue(for: t), clip: clip,
+                params.append(keyframeParam(name: "position", base: positionValue(for: t, fit: fit), clip: clip,
                                             property: .position, frames: posFrames) {
-                    self.positionValue(for: clip.transformAt(frame: $0))
+                    self.positionValue(for: clip.transformAt(frame: $0), fit: fit)
                 })
             }
             if !rotFrames.isEmpty {
@@ -408,16 +551,9 @@ enum FCPXMLExporter {
 
         /// Divide the aspect-fit out of our frame-fraction width/height so only user scaling remains.
         private func scaleValue(width: Double, height: Double, for clip: Clip) -> String {
-            var sx = width, sy = height
-            if let entry = resolver.entry(for: clip.mediaRef),
-               let sw = entry.sourceWidth, let sh = entry.sourceHeight, sw > 0, sh > 0 {
-                let sourceAspect = Double(sw) / Double(sh)
-                let frameAspect = Double(seqWidth) / Double(seqHeight)
-                let fitW = sourceAspect >= frameAspect ? 1.0 : sourceAspect / frameAspect
-                let fitH = sourceAspect >= frameAspect ? frameAspect / sourceAspect : 1.0
-                sx = width / fitW
-                sy = height / fitH
-            }
+            let fit = fitFractions(for: clip)
+            var sx = width / fit.w
+            var sy = height / fit.h
             if clip.transform.flipHorizontal { sx = -sx }
             if clip.transform.flipVertical { sy = -sy }
             return "\(formatNumber(sx)) \(formatNumber(sy))"
@@ -447,15 +583,25 @@ enum FCPXMLExporter {
             return rationalTime(num: num, den: fps * p)
         }
 
+        /// Resolve's trim-rect units: left/right = source px ÷ (seqHeight/100); top/bottom = crop
+        /// fraction ÷ conform-fit scale. FCP (and unknown source dims): plain percentages.
         private func cropNode(for clip: Clip) -> FCPXMLNode? {
             let c = clip.crop
             guard !c.isIdentity else { return nil }
+            var lr = 100.0, tb = 100.0
+            if target == .resolve,
+               let entry = resolver.entry(for: clip.mediaRef),
+               let sw = entry.sourceWidth, let sh = entry.sourceHeight, sw > 0, sh > 0 {
+                let fit = min(Double(seqWidth) / Double(sw), Double(seqHeight) / Double(sh))
+                lr = Double(sw) * 100.0 / Double(seqHeight)
+                tb = 100.0 / fit
+            }
             return FCPXMLNode(name: "adjust-crop", attributes: [("mode", "trim")], children: [
                 FCPXMLNode(name: "trim-rect", attributes: [
-                    ("top", formatNumber(c.top * 100)),
-                    ("right", formatNumber(c.right * 100)),
-                    ("bottom", formatNumber(c.bottom * 100)),
-                    ("left", formatNumber(c.left * 100)),
+                    ("top", formatNumber(c.top * tb)),
+                    ("right", formatNumber(c.right * lr)),
+                    ("bottom", formatNumber(c.bottom * tb)),
+                    ("left", formatNumber(c.left * lr)),
                 ]),
             ])
         }
@@ -472,23 +618,26 @@ enum FCPXMLExporter {
         }
 
         /// Source in-point in the post-retime output axis Resolve expects (source ÷ speed); the raw
-        /// source frame when unspeeded.
-        private func clipStart(for clip: Clip) -> String {
-            guard abs(clip.speed - 1.0) > 0.001 else { return time(frames: clip.trimStartFrame) }
+        /// source frame when unspeeded. `origin` is the asset's embedded start timecode, added only to the
+        /// unspeeded case (a retimed clip carries its origin in the timeMap values, not in `start`).
+        private func clipStart(for clip: Clip, origin: Int = 0) -> String {
+            guard abs(clip.speed - 1.0) > 0.001 else { return time(frames: origin + clip.trimStartFrame) }
             let (p, q) = rationalSpeed(clip.speed)
             return rationalTime(num: clip.trimStartFrame * q, den: fps * p)
         }
 
         /// Resolve ramps the WHOLE media (`output[0, media/speed] → source[0, media]`) and windows in via
         /// `start`/`duration`. A ramp that stops at the clip edge leaves no tail mapping → black last frames.
-        private func timeMapNode(for clip: Clip, mediaFrames: Int) -> FCPXMLNode? {
+        private func timeMapNode(for clip: Clip, mediaFrames: Int, origin: Int = 0) -> FCPXMLNode? {
             guard abs(clip.speed - 1.0) > 0.001, mediaFrames > 0 else { return nil }
             let (p, q) = rationalSpeed(clip.speed)
             return FCPXMLNode(name: "timeMap", attributes: [("frameSampling", "floor")], children: [
-                FCPXMLNode(name: "timept", attributes: [("time", "0s"), ("value", "0s"), ("interp", "linear")]),
+                FCPXMLNode(name: "timept", attributes: [
+                    ("time", "0s"), ("value", time(frames: origin)), ("interp", "linear"),
+                ]),
                 FCPXMLNode(name: "timept", attributes: [
                     ("time", rationalTime(num: mediaFrames * q, den: fps * p)),  // media / speed
-                    ("value", time(frames: mediaFrames)),                        // full media
+                    ("value", time(frames: origin + mediaFrames)),               // full media from origin
                     ("interp", "linear"),
                 ]),
             ])
@@ -556,16 +705,19 @@ enum FCPXMLExporter {
                 for ref in c.mediaRefs {
                     resourceIndex[ref] = resources.count
                 }
+                let tcFrames = c.mediaRefs.compactMap { startTimecodes[$0] }.first?.frames(atFPS: fps) ?? 0
                 resources.append(MediaResource(
                     mediaRef: c.mediaRefs.first ?? c.entry.id,
                     assetId: "asset\(id)",
                     formatId: c.hasVideo ? "r\(id + 1)" : nil,
-                    compoundId: c.hasVideo ? "media\(id)" : nil,
+                    // Only an A/V source can need srcEnable gating, so only it gets a compound.
+                    compoundId: c.hasVideo && c.hasAudio ? "media\(id)" : nil,
                     entry: c.entry,
                     url: c.url,
                     durationFrames: c.duration,
                     hasVideo: c.hasVideo,
-                    hasAudio: c.hasAudio
+                    hasAudio: c.hasAudio,
+                    startTimecodeFrames: tcFrames
                 ))
             }
         }
@@ -589,11 +741,17 @@ enum FCPXMLExporter {
             ])
         }
 
+        // Resolve relinks by matching the `name` attribute to the file on disk, so the extension must be
+        // present — a stripped name shows every clip as Media Offline.
+        private func fileName(for resource: MediaResource) -> String {
+            resource.url.lastPathComponent
+        }
+
         private func assetNode(for resource: MediaResource) -> FCPXMLNode {
             var attrs: [(String, String)] = [
                 ("id", resource.assetId),
-                ("name", resource.entry.name),
-                ("start", "0s"),
+                ("name", fileName(for: resource)),
+                ("start", time(frames: resource.startTimecodeFrames)),
                 ("duration", time(frames: resource.durationFrames)),
             ]
             if resource.hasVideo {
@@ -613,9 +771,17 @@ enum FCPXMLExporter {
             return FCPXMLNode(name: "asset", attributes: attrs, children: [
                 FCPXMLNode(name: "media-rep", attributes: [
                     ("kind", "original-media"),
-                    ("src", resource.url.absoluteString),
+                    ("src", mediaSrc(for: resource)),
                 ]),
             ])
+        }
+
+        // Percent-encode the sub-delims Foundation leaves literal — Resolve's relinker fails on
+        // their XML-entity forms (&apos;).
+        private func mediaSrc(for resource: MediaResource) -> String {
+            resource.url.absoluteString.map { ch in
+                "'!$&()*+,;=".contains(ch) ? String(format: "%%%02X", ch.asciiValue ?? 0) : String(ch)
+            }.joined()
         }
 
         private func sourceDurationFrames(for entry: MediaManifestEntry, clip: Clip) -> Int {
@@ -623,7 +789,7 @@ enum FCPXMLExporter {
             return max(manifestFrames, clip.sourceDurationFrames)
         }
 
-        private func emittableClips() -> [EmittableClip] {
+        private func emittableClips(of timeline: Timeline) -> [EmittableClip] {
             let visualTrackCount = timeline.tracks.filter { $0.type.isVisual }.count
             var visualOrdinal = 0
             var audioOrdinal = 0
@@ -653,10 +819,12 @@ enum FCPXMLExporter {
 
         private func isEmittable(_ clip: Clip) -> Bool {
             guard clip.durationFrames > 0 else { return false }
+            // Nest carriers emit when their child timeline resolved to a compound resource.
+            if clip.sourceClipType == .sequence { return nestIndex[clip.mediaRef] != nil }
             switch clip.mediaType {
             case .text:
                 return clip.textContent?.isEmpty == false
-            case .lottie:
+            case .lottie, .sequence:
                 return false
             case .audio, .video, .image:
                 return resolver.resolveURL(for: clip.mediaRef) != nil
@@ -720,17 +888,22 @@ enum FCPXMLExporter {
         }
 
         private func textStyleAttributes(for style: TextStyle) -> [(String, String)] {
-            let resolvedFont = NSFont(name: style.fontName, size: style.fontSize)
-            let family = resolvedFont?.familyName ?? fontFamilyFallback(style.fontName)
-            let face = (resolvedFont?.fontDescriptor.object(forKey: .face) as? String) ?? fontFaceFallback(style.fontName)
-            let fontSize = style.fontSize * style.fontScale * Double(seqHeight) / Double(TextLayout.referenceCanvasHeight)
-            return [
+            let resolvedFont = style.resolvedFont(size: CGFloat(style.fontSize))
+            let family = resolvedFont.familyName ?? fontFamilyFallback(style.fontName)
+            let face = fontFace(for: style, resolvedFont: resolvedFont)
+            let fontSize = style.fontSize * style.fontScale
+            var attrs: [(String, String)] = [
                 ("font", family),
                 ("fontFace", face),
                 ("fontSize", formatNumber(fontSize)),
                 ("fontColor", colorString(style.color)),
                 ("alignment", style.alignment.rawValue),
             ]
+            if style.border.enabled {
+                attrs.append(("strokeColor", colorString(style.border.color)))
+                attrs.append(("strokeWidth", formatNumber(max(0, style.border.width))))
+            }
+            return attrs
         }
 
         private func titleTransformNodes(for transform: Transform) -> [FCPXMLNode] {
@@ -744,20 +917,42 @@ enum FCPXMLExporter {
             ]
         }
 
-        private func positionValue(for transform: Transform) -> String {
+        private func positionValue(for transform: Transform, fit: (w: Double, h: Double) = (1, 1)) -> String {
             let unit = Double(seqHeight) / 100.0
-            let x = (transform.centerX - 0.5) * Double(seqWidth) / unit
-            let y = (0.5 - transform.centerY) * Double(seqHeight) / unit
+            let x = (transform.centerX - 0.5) * Double(seqWidth) / unit / fit.w
+            let y = (0.5 - transform.centerY) * Double(seqHeight) / unit / fit.h
             return "\(formatNumber(x)) \(formatNumber(y))"
+        }
+
+        /// Per-axis conform-fit fractions of the sequence frame; 1×1 when source dims are unknown.
+        private func fitFractions(for clip: Clip) -> (w: Double, h: Double) {
+            guard let entry = resolver.entry(for: clip.mediaRef),
+                  let sw = entry.sourceWidth, let sh = entry.sourceHeight, sw > 0, sh > 0 else { return (1, 1) }
+            let sourceAspect = Double(sw) / Double(sh)
+            let frameAspect = Double(seqWidth) / Double(seqHeight)
+            return sourceAspect >= frameAspect
+                ? (1, frameAspect / sourceAspect)
+                : (sourceAspect / frameAspect, 1)
         }
 
         private func fontFamilyFallback(_ fontName: String) -> String {
             fontName.split(separator: "-", maxSplits: 1).first.map(String.init) ?? fontName
         }
 
-        private func fontFaceFallback(_ fontName: String) -> String {
-            let lower = fontName.lowercased()
-            switch (lower.contains("bold"), lower.contains("italic") || lower.contains("oblique")) {
+        private func fontFace(for style: TextStyle, resolvedFont: NSFont) -> String {
+            let traits = CTFontGetSymbolicTraits(resolvedFont as CTFont)
+            let matchesRequestedTraits =
+                traits.contains(.traitBold) == style.isBold &&
+                traits.contains(.traitItalic) == style.isItalic
+            if matchesRequestedTraits,
+               let face = resolvedFont.fontDescriptor.object(forKey: .face) as? String {
+                return face
+            }
+            return fontFaceFallback(isBold: style.isBold, isItalic: style.isItalic)
+        }
+
+        private func fontFaceFallback(isBold: Bool, isItalic: Bool) -> String {
+            switch (isBold, isItalic) {
             case (true, true):
                 return "Bold Italic"
             case (true, false):

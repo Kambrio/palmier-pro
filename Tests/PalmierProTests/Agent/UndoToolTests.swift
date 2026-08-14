@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 import Testing
 @testable import PalmierPro
 
@@ -81,8 +82,8 @@ struct UndoToolTests {
         let (h, um) = harness()
         _ = um
 
-        async let first = h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volume": 0.25])
-        async let second = h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volume": 0.5])
+        async let first = h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volumeDb": -12.0])
+        async let second = h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volumeDb": -6.0])
         _ = await (first, second)
 
         _ = await h.runRaw("undo")
@@ -95,14 +96,14 @@ struct UndoToolTests {
         let (h, um) = harness()
         let other = ToolExecutor(editor: h.editor)
 
-        _ = await h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volume": 0.25])
+        _ = await h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volumeDb": -12.0])
         _ = await other.execute(
             name: "set_clip_properties",
-            args: ["clipIds": ["c1"], "volume": 0.5]
+            args: ["clipIds": ["c1"], "volumeDb": -6.0]
         )
 
         #expect(!(await h.runRaw("undo")).isError)
-        #expect(h.editor.timeline.tracks[0].clips[0].volume == 0.25)
+        #expect(abs(h.editor.timeline.tracks[0].clips[0].volume - VolumeScale.linearFromDb(-12)) < 0.0001)
         #expect(!(await h.runRaw("undo")).isError)
         #expect(h.editor.timeline.tracks[0].clips[0].volume == 1.0)
         _ = um
@@ -110,7 +111,7 @@ struct UndoToolTests {
 
     @Test func nativeUndoConsumesAgentTransaction() async throws {
         let (h, um) = harness()
-        _ = await h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volume": 0.5])
+        _ = await h.runRaw("set_clip_properties", args: ["clipIds": ["c1"], "volumeDb": -6.0])
 
         um.undo()
 
@@ -136,5 +137,47 @@ struct UndoToolTests {
         let result = await h.runRaw("undo")
         #expect(result.isError == false)
         #expect(h.editor.timeline == beforeUserEdit)
+    }
+
+    @Test func MCPReceiptDoesNotExposeLocalizedUndoName() async throws {
+        let (h, um) = harness()
+        _ = um
+        let localizedActionName = "Déplacer le clip vers une nouvelle piste"
+        h.editor.withTimelineSwap(actionName: localizedActionName) {
+            h.editor.timeline.tracks[0].clips[0].durationFrames = 20
+        }
+
+        let server = Server(
+            name: "undo-localization-test",
+            version: "1.0.0",
+            capabilities: .init(tools: .init(listChanged: false))
+        )
+        await MCPService.registerTools(on: server, executor: ToolExecutor(editor: h.editor))
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "undo-localization-test", version: "1.0.0")
+
+        try await server.start(transport: transports.server)
+        do {
+            _ = try await client.connect(transport: transports.client)
+            let result = try await client.callTool(name: "undo")
+            let message = try text(result.content)
+            #expect(result.isError != true)
+            #expect(message.hasPrefix("Undid the latest action."))
+            #expect(!message.contains(localizedActionName))
+            #expect(h.editor.timeline.tracks[0].clips[0].durationFrames == 100)
+        } catch {
+            await server.stop()
+            await client.disconnect()
+            throw error
+        }
+        await server.stop()
+        await client.disconnect()
+    }
+
+    private func text(_ content: [Tool.Content]) throws -> String {
+        for item in content {
+            if case .text(let text, _, _) = item { return text }
+        }
+        throw CocoaError(.coderReadCorrupt)
     }
 }

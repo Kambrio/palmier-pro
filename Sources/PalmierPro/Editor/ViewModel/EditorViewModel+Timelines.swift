@@ -94,7 +94,10 @@ extension EditorViewModel {
         selectedClipIds = []
         selectedGap = nil
         selectedTimelineRange = nil
+        selectedTimelineMarkerIds = []
         pendingSwapClipId = nil
+        pendingSwapTargetClipIds = []
+        clearAgentActivity()
         dragBefore = [:]
         preDragTimeline = nil
     }
@@ -154,7 +157,7 @@ extension EditorViewModel {
     func deleteTimeline(_ id: String) {
         guard let index = timelines.firstIndex(where: { $0.id == id }) else { return }
         guard timelines.count > 1 else {
-            mediaPanelToast = "Can't delete every timeline — the project needs at least one."
+            mediaPanelToast = MediaPanelToast(message: L10n.string("Can't delete every timeline — the project needs at least one."))
             return
         }
         let openIndex = openTimelineIds.firstIndex(of: id)
@@ -268,5 +271,6 @@ extension Timeline {
                 tracks[ti].clips[ci].freshenIds(groups: &groups)
             }
         }
+        for i in markers.indices { markers[i].id = UUID().uuidString }
     }
 }

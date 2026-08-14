@@ -54,6 +54,7 @@ final class MediaVisualCache {
     weak var timelineView: NSView?
     /// Reports media-prep progress to the app-level MediaLoadHUD.
     weak var editor: EditorViewModel?
+    var onDeadAirCacheInvalidated: (() -> Void)?
 
     // MARK: - Sync lookups (safe for draw calls)
 
@@ -61,8 +62,15 @@ final class MediaVisualCache {
         MainActor.assumeIsolated { waveformSamples[mediaRef] }
     }
 
-    nonisolated func deadAirMask(for mediaRef: String) -> [Bool]? {
-        speech.deadAirMask(for: mediaRef, samples: samples(for: mediaRef))
+    nonisolated func deadAirMask(
+        for mediaRef: String,
+        settings: SilenceRemovalSettings
+    ) -> [Bool]? {
+        speech.deadAirMask(for: mediaRef, samples: samples(for: mediaRef), settings: settings)
+    }
+
+    nonisolated func quietNonSpeechMask(for mediaRef: String) -> [Bool]? {
+        speech.quietNonSpeechMask(for: mediaRef, samples: samples(for: mediaRef))
     }
 
     nonisolated func thumbnails(for mediaRef: String) -> [(time: Double, image: CGImage)]? {
@@ -141,7 +149,19 @@ final class MediaVisualCache {
         beats.reset()
         videoThumbnails.removeAll()
         imageThumbnails.removeAll()
+        onDeadAirCacheInvalidated?()
         timelineView?.needsDisplay = true
+    }
+
+    /// Clears every cached visual for `mediaRef` so relinked media regenerates.
+    func invalidateForRelink(_ mediaRef: String) {
+        waveformSamples.removeValue(forKey: mediaRef)
+        speakerMasks.removeValue(forKey: mediaRef)
+        speech.invalidate(mediaRef)
+        beats.invalidate(mediaRef)
+        videoThumbnails.removeValue(forKey: mediaRef)
+        imageThumbnails.removeValue(forKey: mediaRef)
+        onDeadAirCacheInvalidated?()
     }
 
     func generateImageThumbnail(for asset: MediaAsset) {

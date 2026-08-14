@@ -8,8 +8,8 @@ struct ToolbarView: View {
         HStack(spacing: AppTheme.Spacing.md) {
             // Undo / Redo
             HStack(spacing: AppTheme.Spacing.md) {
-                toolbarButton("arrow.uturn.backward", help: "Undo (⌘Z)", action: undo)
-                toolbarButton("arrow.uturn.forward", help: "Redo (⇧⌘Z)", action: redo)
+                toolbarButton("arrow.uturn.backward", help: L10n.string("Undo (⌘Z)"), action: undo)
+                toolbarButton("arrow.uturn.forward", help: L10n.string("Redo (⇧⌘Z)"), action: redo)
             }
 
             Divider()
@@ -17,8 +17,9 @@ struct ToolbarView: View {
 
             // Tool mode
             HStack(spacing: AppTheme.Spacing.md) {
-                toolModeButton("cursorarrow", mode: .pointer, help: "Pointer (V)")
-                toolModeButton("scissors", mode: .razor, help: "Razor (C)")
+                toolModeButton("cursorarrow", mode: .pointer, help: L10n.string("Pointer (V)"))
+                toolModeButton("scissors", mode: .razor, help: L10n.string("Razor (C)"))
+                toolModeButton("arrow.left.and.right", mode: .trim, help: L10n.string("Trim (T)"))
             }
 
             Divider()
@@ -26,9 +27,9 @@ struct ToolbarView: View {
 
             // Split, trim buttons
             HStack(spacing: AppTheme.Spacing.md) {
-                toolbarButton("square.split.2x1", help: "Split at Playhead (⌘K)", action: editor.splitAtPlayhead)
-                bracketButton("[", help: "Trim Start to Playhead (Q)", action: editor.trimStartToPlayhead)
-                bracketButton("]", help: "Trim End to Playhead (W)", action: editor.trimEndToPlayhead)
+                toolbarButton("square.split.2x1", help: L10n.string("Split at Playhead (⌘K)"), action: editor.splitAtPlayhead)
+                bracketButton("[", help: L10n.string("Trim Start to Playhead (Q)"), action: editor.trimStartToPlayhead)
+                bracketButton("]", help: L10n.string("Trim End to Playhead (W)"), action: editor.trimEndToPlayhead)
             }
 
             Divider()
@@ -36,7 +37,8 @@ struct ToolbarView: View {
 
             // Add content
             HStack(spacing: AppTheme.Spacing.md) {
-                textGlyphButton("T", help: "Add Text", action: { _ = editor.addTextClip() })
+                textGlyphButton("T", help: L10n.string("Add Text"), action: { _ = editor.addTextClip() })
+                markerButton
             }
 
             Spacer()
@@ -45,7 +47,7 @@ struct ToolbarView: View {
             HStack(spacing: AppTheme.Spacing.xs) {
                 zoomButton(
                     "minus.magnifyingglass",
-                    help: "Zoom Out",
+                    help: L10n.string("Zoom Out"),
                     isDisabled: editor.zoomScale <= editor.minZoomScale,
                     action: zoomOut
                 )
@@ -60,7 +62,7 @@ struct ToolbarView: View {
                     .frame(width: 100)
                 zoomButton(
                     "plus.magnifyingglass",
-                    help: "Zoom In",
+                    help: L10n.string("Zoom In"),
                     isDisabled: editor.zoomScale >= Zoom.max,
                     action: zoomIn
                 )
@@ -68,6 +70,21 @@ struct ToolbarView: View {
         }
         .padding(.horizontal, AppTheme.Spacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var markerButton: some View {
+        Button { _ = editor.addTimelineMarkerAtSelection() } label: {
+            TimelineMarkerShape()
+                .fill(AppTheme.Text.secondaryColor)
+                .frame(
+                    width: AppTheme.TimelineMarker.flagWidth,
+                    height: AppTheme.TimelineMarker.flagHeight
+                )
+                .frame(width: AppTheme.IconSize.mdLg, height: AppTheme.IconSize.mdLg)
+                .hoverHighlight()
+        }
+        .buttonStyle(.plain)
+        .help(L10n.string("Add Marker (M)"))
     }
 
     private func toolbarButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
@@ -79,7 +96,7 @@ struct ToolbarView: View {
                 .hoverHighlight()
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(L10n.string(key: help))
     }
 
     private func zoomButton(
@@ -97,7 +114,7 @@ struct ToolbarView: View {
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
-        .help(help)
+        .help(L10n.string(key: help))
     }
 
     private func zoomOut() {
@@ -130,7 +147,7 @@ struct ToolbarView: View {
                 .hoverHighlight(isActive: isActive)
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(L10n.string(key: help))
     }
 
     private func textGlyphButton(_ glyph: String, help: String, action: @escaping () -> Void) -> some View {
@@ -142,7 +159,7 @@ struct ToolbarView: View {
                 .hoverHighlight()
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(L10n.string(key: help))
     }
 
     private func bracketButton(_ bracket: String, help: String, action: @escaping () -> Void) -> some View {
@@ -154,6 +171,6 @@ struct ToolbarView: View {
                 .hoverHighlight()
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(L10n.string(key: help))
     }
 }

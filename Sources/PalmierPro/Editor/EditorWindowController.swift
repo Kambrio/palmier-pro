@@ -54,6 +54,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private var handlesMediaPanelCommands: Bool {
+        editorViewModel.mediaPanelVisible && editorViewModel.focusedPanel == .media
+    }
+
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         // Don't intercept keys when a text field has focus
         if isTextInputFocused {
@@ -65,7 +69,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         let cmd = mods.contains(.command)
         let rangeMarkShortcut = mods.intersection([.command, .option, .control]).isEmpty
 
-        if editorViewModel.focusedPanel == .media, !shift,
+        if handlesMediaPanelCommands, cmd, event.keyCode == 126,
+           mods.intersection([.option, .control, .shift]).isEmpty {
+            editorViewModel.mediaPanelNavigateUpRequestTick &+= 1
+            return true
+        }
+
+        if handlesMediaPanelCommands,
+           mods.intersection([.command, .option, .control, .shift]).isEmpty,
            let direction = mediaArrowDirection(for: event.keyCode) {
             editorViewModel.moveMediaSelection(direction: direction)
             return true
@@ -73,6 +84,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
         switch event.keyCode {
         case 0: // A key
+            if handlesMediaPanelCommands, cmd,
+               mods.intersection([.option, .control]).isEmpty {
+                editorViewModel.selectAllMediaPanelItems()
+                return true
+            }
             if editorViewModel.focusedPanel == .timeline,
                mods.intersection([.command, .option, .control]).isEmpty {
                 editorViewModel.selectForwardFromCurrentSelection(scope: shift ? .allTracks : .track)
@@ -93,18 +109,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             return true
 
         case 51: // Delete/Backspace
-            if !editorViewModel.selectedFolderIds.isEmpty || !editorViewModel.selectedMediaAssetIds.isEmpty
-                || !editorViewModel.selectedTimelineIds.isEmpty {
-                if !editorViewModel.selectedFolderIds.isEmpty {
-                    editorViewModel.deleteFolders(ids: editorViewModel.selectedFolderIds)
-                }
-                if !editorViewModel.selectedMediaAssetIds.isEmpty {
-                    editorViewModel.deleteSelectedMediaAssets()
-                }
-                for id in editorViewModel.selectedTimelineIds {
-                    editorViewModel.deleteTimeline(id)
-                }
-                editorViewModel.selectedTimelineIds.removeAll()
+            if handlesMediaPanelCommands, !editorViewModel.mediaPanelSelectedKeys().isEmpty {
+                editorViewModel.deleteMediaPanelItems()
+            } else if !editorViewModel.selectedTimelineMarkerIds.isEmpty {
+                editorViewModel.deleteSelectedTimelineMarker()
             } else if shift {
                 if editorViewModel.selectedGap != nil {
                     editorViewModel.rippleDeleteSelectedGap()
@@ -116,6 +124,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             }
             return true
 
+        case 46: // M key
+            if mods.intersection([.command, .option, .control]).isEmpty {
+                _ = editorViewModel.addTimelineMarkerAtSelection()
+                return true
+            }
+            return false
+
         case 8: // C key
             if !cmd {
                 editorViewModel.toolMode = .razor
@@ -126,6 +141,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         case 9: // V key
             if !cmd {
                 editorViewModel.toolMode = .pointer
+                return true
+            }
+            return false
+
+        case 17: // T key
+            if !cmd {
+                editorViewModel.toolMode = .trim
                 return true
             }
             return false
@@ -160,7 +182,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             return false
 
         case 36: // Return / Enter
-            if editorViewModel.focusedPanel == .media,
+            if handlesMediaPanelCommands,
                editorViewModel.selectedFolderIds.count == 1,
                let folderId = editorViewModel.selectedFolderIds.first {
                 editorViewModel.mediaPanelOpenFolderId = folderId
@@ -189,8 +211,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
                 editorViewModel.maximizedPanel = nil
                 return true
             }
+            editorViewModel.onCancelTimelineDrag?()
+            editorViewModel.slipPreview = nil
             editorViewModel.selectedClipIds.removeAll()
             editorViewModel.clearTimelineRange()
+            editorViewModel.selectedTimelineMarkerIds = []
             editorViewModel.toolMode = .pointer
             return true
 
@@ -222,11 +247,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             if let panel = EditorViewModel.FocusedPanel(accessibilityID: v.accessibilityIdentifier()) {
                 editorViewModel.focusedPanel = panel
                 if panel == .media { editorViewModel.selectedClipIds.removeAll() }
-                if panel == .timeline {
-                    editorViewModel.selectedMediaAssetIds.removeAll()
-                    editorViewModel.selectedTimelineIds.removeAll()
-                    editorViewModel.selectedFolderIds.removeAll()
-                }
+                if panel == .timeline { editorViewModel.clearMediaPanelSelection() }
                 return
             }
             view = v.superview
@@ -296,6 +317,11 @@ extension EditorWindowController: EditorActions {
         alert.runModal()
     }
 
+    @objc func newMediaFolder(_ sender: Any?) {
+        guard handlesMediaPanelCommands else { return }
+        editorViewModel.mediaPanelNewFolderRequestTick &+= 1
+    }
+
     @objc func showExport(_ sender: Any?) {
         editorViewModel.showExportDialog = true
     }
@@ -314,7 +340,7 @@ extension EditorWindowController: EditorActions {
     }
 
     @objc func paste(_ sender: Any?) {
-        if editorViewModel.focusedPanel == .media {
+        if handlesMediaPanelCommands {
             editorViewModel.mediaPanelPasteRequestTick &+= 1
             return
         }
@@ -331,14 +357,14 @@ extension EditorWindowController: EditorActions {
     @objc func toggleInspectorPanel(_ sender: Any?) { editorViewModel.inspectorPanelVisible.toggle() }
     @objc func toggleAgentPanel(_ sender: Any?) { editorViewModel.agentPanelVisible.toggle() }
     @objc func toggleMaximizePanel(_ sender: Any?) { toggleMaximizePanelAction() }
-    @objc func setLayoutDefault(_ sender: Any?) { editorViewModel.layoutPreset = .default }
-    @objc func setLayoutMedia(_ sender: Any?) { editorViewModel.layoutPreset = .media }
-    @objc func setLayoutVertical(_ sender: Any?) { editorViewModel.layoutPreset = .vertical }
+    @objc func setLayoutDefault(_ sender: Any?) { WorkspaceLayoutStore.shared.selection = .default }
+    @objc func setLayoutMedia(_ sender: Any?) { WorkspaceLayoutStore.shared.selection = .media }
+    @objc func setLayoutVertical(_ sender: Any?) { WorkspaceLayoutStore.shared.selection = .vertical }
 
     private func toggleMaximizePanelAction() {
         if editorViewModel.maximizedPanel != nil {
             editorViewModel.maximizedPanel = nil
-        } else if let panel = editorViewModel.focusedPanel {
+        } else if let panel = editorViewModel.focusedPanel, panel != .agent {
             editorViewModel.maximizedPanel = panel
         }
     }
@@ -356,22 +382,24 @@ extension EditorWindowController: EditorActions {
             return true
         case #selector(toggleMaximizePanel(_:)):
             menuItem.state = editorViewModel.maximizedPanel != nil ? .on : .off
-            return editorViewModel.maximizedPanel != nil || editorViewModel.focusedPanel != nil
+            return editorViewModel.maximizedPanel != nil || editorViewModel.focusedPanel.map { $0 != .agent } == true
         case #selector(setLayoutDefault(_:)):
-            menuItem.state = editorViewModel.layoutPreset == .default ? .on : .off
+            menuItem.state = WorkspaceLayoutStore.shared.selection == .default ? .on : .off
             return true
         case #selector(setLayoutMedia(_:)):
-            menuItem.state = editorViewModel.layoutPreset == .media ? .on : .off
+            menuItem.state = WorkspaceLayoutStore.shared.selection == .media ? .on : .off
             return true
         case #selector(setLayoutVertical(_:)):
-            menuItem.state = editorViewModel.layoutPreset == .vertical ? .on : .off
+            menuItem.state = WorkspaceLayoutStore.shared.selection == .vertical ? .on : .off
             return true
         case #selector(copy(_:)), #selector(cut(_:)):
             return canHandleClipboardShortcut() && !editorViewModel.selectedClipIds.isEmpty
         case #selector(selectForwardOnTrack(_:)), #selector(selectForwardOnAllTracks(_:)):
             return editorViewModel.focusedPanel == .timeline && !editorViewModel.selectedClipIds.isEmpty
+        case #selector(newMediaFolder(_:)):
+            return handlesMediaPanelCommands
         case #selector(paste(_:)):
-            if editorViewModel.focusedPanel == .media {
+            if handlesMediaPanelCommands {
                 return MediaTab.clipboardHasImportableMedia()
             }
             return canHandleClipboardShortcut() && editorViewModel.canPasteClips

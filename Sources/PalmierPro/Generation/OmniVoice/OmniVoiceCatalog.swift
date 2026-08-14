@@ -12,7 +12,14 @@ enum OmniVoiceCatalog {
         supportsInstrumental: false,
         supportsStyleInstructions: true,
         durations: nil,
+        durationRange: nil,
         minPromptLength: 1,
+        maxReferenceImages: nil,
+        maxReferenceAudios: nil,
+        maxReferenceAudioSeconds: nil,
+        referenceAudioExtensions: nil,
+        referenceImagesAndAudiosExclusive: nil,
+        supportsMultilingual: nil,
         inputs: ["text"],
         promptLabel: "What should it say?",
         minSeconds: 1,
@@ -52,5 +59,9 @@ extension CatalogEntry {
         self.audioPricing = audioPricing
         self.creditsPerSecondUpscale = nil
         self.paidOnly = false
+        self.providerIconKey = nil
+        self.providerName = nil
+        self.description = nil
+        self.upscalePricing = nil
     }
 }

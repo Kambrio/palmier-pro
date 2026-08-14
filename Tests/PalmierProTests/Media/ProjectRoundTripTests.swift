@@ -51,8 +51,11 @@ struct ProjectRoundTripTests {
     @Test func clipTransformAndCropSurviveRoundTrip() throws {
         var clip = Fixtures.clip(start: 0, duration: 30)
         clip.transform = Transform(centerX: 0.4, centerY: 0.6, width: 0.5, height: 0.5, rotation: 45,
+                                   rotationX: 20, rotationY: -30,
                                    flipHorizontal: true, flipVertical: false)
         clip.crop = Crop(left: 0.1, top: 0.2, right: 0.3, bottom: 0.4)
+        clip.edgeRounding = 0.35
+        clip.edgeSoftness = 0.2
         let timeline = Fixtures.timeline(tracks: [Fixtures.videoTrack(clips: [clip])])
 
         let decoded = try roundTrip(timeline)
@@ -60,8 +63,12 @@ struct ProjectRoundTripTests {
         #expect(dc.transform.centerX == 0.4)
         #expect(dc.transform.centerY == 0.6)
         #expect(dc.transform.rotation == 45)
+        #expect(dc.transform.rotationX == 20)
+        #expect(dc.transform.rotationY == -30)
         #expect(dc.transform.flipHorizontal == true)
         #expect(dc.crop == Crop(left: 0.1, top: 0.2, right: 0.3, bottom: 0.4))
+        #expect(dc.edgeRounding == 0.35)
+        #expect(dc.edgeSoftness == 0.2)
     }
 
     @Test func clipKeyframesSurviveRoundTrip() throws {
@@ -111,11 +118,13 @@ struct ProjectRoundTripTests {
     @Test func trackMutedAndHiddenFlagsSurviveRoundTrip() throws {
         var v = Fixtures.videoTrack()
         v.hidden = true
+        v.name = "B-roll"
         var a = Fixtures.audioTrack()
         a.muted = true
         let timeline = Fixtures.timeline(tracks: [v, a])
         let decoded = try roundTrip(timeline)
         #expect(decoded.tracks[0].hidden == true)
+        #expect(decoded.tracks[0].name == "B-roll")
         #expect(decoded.tracks[1].muted == true)
     }
 
@@ -135,6 +144,7 @@ struct ProjectRoundTripTests {
         #expect(track.muted == false)
         #expect(track.hidden == false)
         #expect(track.syncLocked == true)
+        #expect(track.name == nil)
     }
 
     @Test func clipMissingNewFieldsDecodesWithDefaults() throws {
@@ -155,8 +165,42 @@ struct ProjectRoundTripTests {
         #expect(clip.fadeInInterpolation == .linear)
         #expect(clip.transform == Transform())
         #expect(clip.crop == Crop())
+        #expect(clip.edgeRounding == 0)
+        #expect(clip.edgeSoftness == 0)
         #expect(clip.linkGroupId == nil)
         #expect(clip.textContent == nil)
+    }
+
+    @Test(arguments: [-0.1, 1.1])
+    func clipInvalidEdgeRoundingDecodesAsDefault(_ value: Double) throws {
+        let json = """
+        {
+          "mediaRef": "media-1",
+          "startFrame": 0,
+          "durationFrames": 30,
+          "edgeRounding": \(value)
+        }
+        """
+
+        let clip = try JSONDecoder().decode(Clip.self, from: Data(json.utf8))
+
+        #expect(clip.edgeRounding == 0)
+    }
+
+    @Test(arguments: [-0.1, 1.1])
+    func clipInvalidEdgeSoftnessDecodesAsDefault(_ value: Double) throws {
+        let json = """
+        {
+          "mediaRef": "media-1",
+          "startFrame": 0,
+          "durationFrames": 30,
+          "edgeSoftness": \(value)
+        }
+        """
+
+        let clip = try JSONDecoder().decode(Clip.self, from: Data(json.utf8))
+
+        #expect(clip.edgeSoftness == 0)
     }
 
     @Test func transformMigratesLegacyXYToCenterXY() throws {
@@ -176,8 +220,7 @@ struct ProjectRoundTripTests {
         #expect(t.centerX != 0.5 || t.centerY != 0.5)
     }
 
-    @Test func textStyleMissingFontScaleDecodesAsOne() throws {
-        // fontScale was added later — older text styles should default to 1.0.
+    @Test func textStyleMissingScaleFieldsDecodesAsOne() throws {
         let json = """
         {
           "fontName": "Helvetica-Bold",
@@ -193,8 +236,11 @@ struct ProjectRoundTripTests {
         """
         let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
         #expect(style.fontScale == 1.0)
+        #expect(style.widthScale == 1.0)
+        #expect(style.heightScale == 1.0)
         #expect(style.tracking == 0)
         #expect(style.lineSpacing == 0)
+        #expect(style.blur == 0)
         #expect(style.fontCase == .mixed)
         #expect(!style.isUnderlined && !style.isStruckThrough && !style.isOverlined)
     }
@@ -226,6 +272,9 @@ struct ProjectRoundTripTests {
 
     @Test func textStyleDecorationAdjustmentsRoundTrip() throws {
         var style = TextStyle()
+        style.widthScale = 1.4
+        style.heightScale = 0.75
+        style.blur = 24
         style.tracking = 8
         style.lineSpacing = 18
         style.fontCase = .uppercase
@@ -299,33 +348,4 @@ struct ProjectRoundTripTests {
         #expect(manifest.folders.isEmpty)
     }
 
-    // MARK: - GenerationLog
-
-    @Test func generationLogSurvivesRoundTrip() throws {
-        var log = GenerationLog()
-        log.entries = [
-            GenerationLogEntry(model: "veo3.1-fast", costCredits: 100, createdAt: Date(timeIntervalSince1970: 1_700_000_000)),
-            GenerationLogEntry(model: "nano-banana-pro", costCredits: nil, createdAt: nil),
-        ]
-        #expect(try roundTrip(log) == log)
-    }
-
-    @Test func generationLogEntryMigratesLegacyCostDollarsToCredits() throws {
-        // Legacy entries stored `cost` as dollars (Double). New entries use `costCredits` (Int).
-        // Conversion: credits = ceil(dollars * 100).
-        let json = """
-        { "id": "abc", "model": "test-model", "cost": 0.05 }
-        """
-        let entry = try JSONDecoder().decode(GenerationLogEntry.self, from: Data(json.utf8))
-        #expect(entry.costCredits == 5) // 0.05 × 100 = 5
-    }
-
-    @Test func generationLogEntryWithNeitherCostFieldDecodesToNil() throws {
-        let json = """
-        { "id": "abc", "model": "test-model" }
-        """
-        let entry = try JSONDecoder().decode(GenerationLogEntry.self, from: Data(json.utf8))
-        #expect(entry.costCredits == nil)
-        #expect(entry.createdAt == nil)
-    }
 }

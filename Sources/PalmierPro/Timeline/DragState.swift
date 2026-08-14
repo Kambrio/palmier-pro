@@ -6,10 +6,22 @@ enum DragState {
     case moveClip(MoveClipDrag)
     case trimLeft(TrimDrag)
     case trimRight(TrimDrag)
+    case slip(SlipDrag)
+    case keyframe(KeyframeDrag)
     case audioVolumeKf(AudioVolumeKfDrag)
     case fadeKnee(FadeKneeDrag)
     case marquee(MarqueeDrag)
     case timelineRange(TimelineRangeDrag)
+    case timelineMarker(TimelineMarkerDrag)
+
+    struct KeyframeDrag {
+        let clipId: String
+        let trackIndex: Int
+        let property: AnimatableProperty
+        let originalFrame: Int
+        let grabFrame: Int
+        var currentFrame: Int
+    }
 
     struct AudioVolumeKfDrag {
         let clipId: String
@@ -82,13 +94,32 @@ enum DragState {
         var deltaFrames: Int = 0
     }
 
+    struct SlipDrag {
+        let clipId: String
+        let grabFrame: Int
+        /// Timeline-frame caps from source headroom across the slip group:
+        /// dragging right consumes head material, left consumes tail material.
+        let maxRightDelta: Int
+        let maxLeftDelta: Int
+        let propagateToLinked: Bool
+        var deltaFrames: Int = 0
+    }
+
     struct MarqueeDrag {
         let origin: NSPoint
         var current: NSRect = .zero
         var baseSelection: Set<String> = []
+        var baseMarkerSelection: Set<String> = []
     }
 
     struct TimelineRangeDrag {
         let anchorFrame: Int
+    }
+
+    struct TimelineMarkerDrag {
+        let original: TimelineMarker
+        let adjustsDuration: Bool
+        let grabFrame: Int
+        var value: TimelineMarker
     }
 }

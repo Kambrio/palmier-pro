@@ -55,6 +55,8 @@ struct ParsedTextBackgroundPatch {
 struct ParsedTextStylePatch {
     let fontName: String?
     let fontSize: Double?
+    let widthScale: Double?
+    let heightScale: Double?
     let isBold: Bool?
     let isItalic: Bool?
     let isUnderlined: Bool?
@@ -68,17 +70,20 @@ struct ParsedTextStylePatch {
     let outline: ParsedTextOutlinePatch?
     let shadow: ParsedTextShadowPatch?
     let background: ParsedTextBackgroundPatch?
+    let blur: Double?
 
     var hasAnyField: Bool {
-        fontName != nil || fontSize != nil || isBold != nil || isItalic != nil
+        fontName != nil || fontSize != nil || widthScale != nil || heightScale != nil
+            || isBold != nil || isItalic != nil
             || isUnderlined != nil || isStruckThrough != nil || isOverlined != nil
             || tracking != nil || lineSpacing != nil || fontCase != nil
             || color != nil || alignment != nil || outline?.hasAnyField == true
-            || shadow?.hasAnyField == true || background?.hasAnyField == true
+            || shadow?.hasAnyField == true || background?.hasAnyField == true || blur != nil
     }
 
     var affectsLayout: Bool {
-        fontName != nil || fontSize != nil || isBold != nil || isItalic != nil
+        fontName != nil || fontSize != nil || widthScale != nil || heightScale != nil
+            || isBold != nil || isItalic != nil
             || tracking != nil || lineSpacing != nil || fontCase != nil
             || outline?.affectsLayout == true || shadow?.affectsLayout == true
             || background?.affectsLayout == true
@@ -93,17 +98,30 @@ fileprivate struct PartialTextSpec {
     let style: TextStyle
     let transform: Transform?
     let animation: TextAnimation?
+    let fillMode: TextFillMode?
+}
+
+struct ParsedTextTransform {
+    let x: Double?
+    let y: Double?
+    let rotation: Double?
+    let rotationX: Double?
+    let rotationY: Double?
+
+    var hasAnyField: Bool {
+        x != nil || y != nil || rotation != nil || rotationX != nil || rotationY != nil
+    }
 }
 
 extension ToolExecutor {
     private static let addTextsAllowedKeys: Set<String> = Set([
         "trackIndex", "startFrame", "endFrame", "content",
-        "style", "transform", "animation", "highlightColor",
+        "style", "transform", "animation", "highlightColor", "fillMode",
     ])
 
     private static let updateTextAllowedKeys: Set<String> = Set([
         "clipIds", "captionGroupId", "content",
-        "style", "transform", "animation", "highlightColor",
+        "style", "transform", "animation", "highlightColor", "fillMode",
     ])
 
     func parseTextStylePatch(_ args: [String: Any], path: String) throws -> ParsedTextStylePatch? {
@@ -118,9 +136,10 @@ extension ToolExecutor {
         try validateUnknownKeys(
             args,
             allowed: [
-                "fontName", "fontSize", "bold", "italic", "underline", "strikethrough", "overline",
+                "fontName", "fontSize", "widthScale", "heightScale",
+                "bold", "italic", "underline", "strikethrough", "overline",
                 "tracking", "lineSpacing", "fontCase",
-                "color", "alignment", "outline", "shadow", "background",
+                "color", "alignment", "outline", "shadow", "background", "blur",
             ],
             path: path
         )
@@ -132,6 +151,8 @@ extension ToolExecutor {
         return ParsedTextStylePatch(
             fontName: try optionalString(args, key: "fontName", path: path),
             fontSize: try optionalNumber(args, key: "fontSize", path: path, range: 12...300),
+            widthScale: try optionalNumber(args, key: "widthScale", path: path, range: TextStyle.axisScaleRange),
+            heightScale: try optionalNumber(args, key: "heightScale", path: path, range: TextStyle.axisScaleRange),
             isBold: try optionalBool(args, key: "bold", path: path),
             isItalic: try optionalBool(args, key: "italic", path: path),
             isUnderlined: try optionalBool(args, key: "underline", path: path),
@@ -144,7 +165,8 @@ extension ToolExecutor {
             alignment: try parseTextAlignment(args, path: path),
             outline: outline,
             shadow: shadow,
-            background: background
+            background: background,
+            blur: try optionalNumber(args, key: "blur", path: path, range: 0...100)
         )
     }
 
@@ -229,7 +251,20 @@ extension ToolExecutor {
         range: ClosedRange<Double>? = nil
     ) throws -> Double? {
         guard args.keys.contains(key) else { return nil }
-        guard let value = args.double(key), value.isFinite else {
+        guard let raw = args[key], !isJSONBoolean(raw) else {
+            throw ToolError("\(path).\(key): expected finite number")
+        }
+        let value: Double
+        if let raw = raw as? Double {
+            value = raw
+        } else if let raw = raw as? Int {
+            value = Double(raw)
+        } else if let raw = raw as? NSNumber {
+            value = raw.doubleValue
+        } else {
+            throw ToolError("\(path).\(key): expected finite number")
+        }
+        guard value.isFinite else {
             throw ToolError("\(path).\(key): expected finite number")
         }
         if let range, !range.contains(value) {
@@ -276,6 +311,8 @@ extension ToolExecutor {
     static func applyTextStylePatch(_ patch: ParsedTextStylePatch, to style: inout TextStyle) {
         if let f = patch.fontName { style.fontName = f }
         if let s = patch.fontSize { style.fontSize = s }
+        if let s = patch.widthScale { style.widthScale = s }
+        if let s = patch.heightScale { style.heightScale = s }
         if let b = patch.isBold { style.isBold = b }
         if let i = patch.isItalic { style.isItalic = i }
         if let u = patch.isUnderlined { style.isUnderlined = u }
@@ -286,6 +323,7 @@ extension ToolExecutor {
         if let f = patch.fontCase { style.fontCase = f }
         if let c = patch.color { style.color = c }
         if let a = patch.alignment { style.alignment = a }
+        if let b = patch.blur { style.blur = b }
         if let outline = patch.outline {
             if let e = outline.enabled { style.border.enabled = e }
             if let c = outline.color { style.border.color = c }
@@ -328,42 +366,75 @@ extension ToolExecutor {
         return anim
     }
 
-    private func parseAddTextTransform(
-        _ tDict: [String: Any]?,
-        content: String, style: TextStyle,
-        canvas: (w: Double, h: Double),
-        path: String
-    ) throws -> Transform? {
-        guard let tDict else { return nil }
-        try validateUnknownKeys(tDict, allowed: ["centerX", "centerY", "width", "height"], path: "\(path).transform")
-        let cX = tDict.double("centerX"), cY = tDict.double("centerY")
-        let w = tDict.double("width"), h = tDict.double("height")
-        if cX == nil && cY == nil && w == nil && h == nil { return nil }
-        guard let cx = cX, let cy = cY else {
-            throw ToolError("\(path): transform must be either {centerX, centerY} for auto-fit, or all four of {centerX, centerY, width, height}")
+    private func parseTextFillMode(_ raw: String?, path: String) throws -> TextFillMode? {
+        guard let raw else { return nil }
+        guard let mode = TextFillMode(rawValue: raw) else {
+            throw ToolError(
+                "\(path).fillMode: expected \(TextFillMode.allCases.map(\.rawValue).joined(separator: ", "))"
+            )
         }
-        if let ww = w, let hh = h {
-            return Transform(center: (cx, cy), width: ww, height: hh)
-        }
-        guard w == nil && h == nil else {
-            throw ToolError("\(path): transform must be either {centerX, centerY} for auto-fit, or all four of {centerX, centerY, width, height}")
-        }
-        let natural = TextLayout.naturalSize(content: content, style: style, maxWidth: CGFloat(canvas.w) * 0.9, canvasHeight: CGFloat(canvas.h))
-        return Transform(center: (cx, cy), width: Double(natural.width) / canvas.w, height: Double(natural.height) / canvas.h)
+        return mode
     }
 
-    private func parseUpdateTextTransform(_ tDict: [String: Any]?, path: String) throws -> ParsedTransform? {
-        guard let tDict else { return nil }
-        try validateUnknownKeys(tDict, allowed: ["centerX", "centerY", "width", "height"], path: "\(path).transform")
-        let transform = ParsedTransform(
-            centerX: tDict.double("centerX"),
-            centerY: tDict.double("centerY"),
-            width: tDict.double("width"),
-            height: tDict.double("height"),
-            flipHorizontal: nil,
-            flipVertical: nil
+    func parseTextTransform(_ raw: Any?, path: String) throws -> ParsedTextTransform? {
+        guard let raw else { return nil }
+        guard let args = raw as? [String: Any] else {
+            throw ToolError("\(path): expected object")
+        }
+        try validateUnknownKeys(
+            args,
+            allowed: ["x", "y", "rotation", "rotationX", "rotationY"],
+            path: path
+        )
+        let tilt = Transform.tiltRotationRange
+        let transform = ParsedTextTransform(
+            x: try optionalNumber(args, key: "x", path: path),
+            y: try optionalNumber(args, key: "y", path: path),
+            rotation: try optionalNumber(args, key: "rotation", path: path),
+            rotationX: try optionalNumber(args, key: "rotationX", path: path, range: tilt),
+            rotationY: try optionalNumber(args, key: "rotationY", path: path, range: tilt)
         )
         return transform.hasAnyField ? transform : nil
+    }
+
+    private func makeAddTextTransform(
+        _ transform: ParsedTextTransform?,
+        content: String, style: TextStyle,
+        canvas: (w: Double, h: Double)
+    ) -> Transform? {
+        guard let transform else { return nil }
+        let natural = TextLayout.naturalSize(
+            content: content,
+            style: style,
+            maxWidth: CGFloat(canvas.w) * 0.9,
+            canvasHeight: CGFloat(canvas.h)
+        )
+        let width = Double(natural.width) / canvas.w
+        return Transform(
+            centerX: transform.x.map { Self.textCenterX(anchorX: $0, width: width, alignment: style.alignment) } ?? 0.5,
+            centerY: transform.y ?? 0.5,
+            width: width,
+            height: Double(natural.height) / canvas.h,
+            rotation: transform.rotation ?? 0,
+            rotationX: transform.rotationX ?? 0,
+            rotationY: transform.rotationY ?? 0
+        )
+    }
+
+    static func textAnchorX(centerX: Double, width: Double, alignment: TextStyle.Alignment) -> Double {
+        switch alignment {
+        case .left: centerX - width / 2
+        case .center: centerX
+        case .right: centerX + width / 2
+        }
+    }
+
+    static func textCenterX(anchorX: Double, width: Double, alignment: TextStyle.Alignment) -> Double {
+        switch alignment {
+        case .left: anchorX + width / 2
+        case .center: anchorX
+        case .right: anchorX - width / 2
+        }
     }
 
     func addTexts(_ editor: EditorViewModel, _ args: [String: Any]) throws -> ToolResult {
@@ -404,16 +475,20 @@ extension ToolExecutor {
             }
             let durationFrames = endFrame - startFrame
 
+            let stylePatch = try parseTextStylePatch(entry, path: path)
+            let fillMode = try parseTextFillMode(entry.string("fillMode"), path: path)
             var style = TextStyle()
-            if let patch = try parseTextStylePatch(entry, path: path) {
-                Self.applyTextStylePatch(patch, to: &style)
+            if let stylePatch {
+                Self.applyTextStylePatch(stylePatch, to: &style)
+            }
+            if fillMode == .footage, stylePatch?.color == nil {
+                style.color = TextFillMode.defaultFootageMatteColor
             }
 
-            let transform = try parseAddTextTransform(
-                entry["transform"] as? [String: Any],
+            let transform = makeAddTextTransform(
+                try parseTextTransform(entry["transform"], path: "\(path).transform"),
                 content: content, style: style,
-                canvas: (Double(editor.timeline.width), Double(editor.timeline.height)),
-                path: path
+                canvas: (Double(editor.timeline.width), Double(editor.timeline.height))
             )
 
             partials.append(.init(
@@ -423,7 +498,8 @@ extension ToolExecutor {
                 content: content,
                 style: style,
                 transform: transform,
-                animation: try parseTextAnimation(preset: entry.string("animation"), highlightColor: entry.string("highlightColor"), path: path)
+                animation: try parseTextAnimation(preset: entry.string("animation"), highlightColor: entry.string("highlightColor"), path: path),
+                fillMode: fillMode
             ))
         }
 
@@ -458,7 +534,8 @@ extension ToolExecutor {
                     content: p.content,
                     style: p.style,
                     transform: p.transform,
-                    animation: p.animation
+                    animation: p.animation,
+                    fillMode: p.fillMode
                 )
             }
 
@@ -500,12 +577,13 @@ extension ToolExecutor {
         guard !clipIds.isEmpty else { throw ToolError("Provide a non-empty 'clipIds' array or a 'captionGroupId'") }
 
         let textStylePatch = try parseTextStylePatch(args, path: "update_text")
-        let transform = try parseUpdateTextTransform(args["transform"] as? [String: Any], path: "update_text")
+        let transform = try parseTextTransform(args["transform"], path: "update_text.transform")
         let animation = try parseTextAnimation(preset: args.string("animation"), highlightColor: args.string("highlightColor"), path: "update_text")
         let shouldSetAnimation = args.string("animation") != nil
         let highlightOnly = shouldSetAnimation ? nil : try parseColorHex(args.string("highlightColor"), path: "update_text")
+        let fillMode = try parseTextFillMode(args.string("fillMode"), path: "update_text")
 
-        guard hasContent || textStylePatch?.hasAnyField == true || transform != nil || shouldSetAnimation || highlightOnly != nil else {
+        guard hasContent || textStylePatch?.hasAnyField == true || transform != nil || shouldSetAnimation || highlightOnly != nil || fillMode != nil else {
             throw ToolError("update_text needs at least one text property to apply")
         }
 
@@ -528,14 +606,36 @@ extension ToolExecutor {
                 notes.append("Content change cleared word timings on \(timingCleared.count) clip\(timingCleared.count == 1 ? "" : "s") — karaoke highlighting falls back to plain text there.")
             }
         }
+        if transform?.rotation != nil {
+            let cleared = clipIds.filter { editor.clipFor(id: $0)?.rotationTrack != nil }
+            if !cleared.isEmpty {
+                notes.append("Static rotation cleared existing rotation keyframes on: \(cleared.joined(separator: ", ")).")
+            }
+        }
+        if textStylePatch?.blur != nil {
+            let cleared = clipIds.filter { editor.clipFor(id: $0)?.blurKeyframeTrack != nil }
+            if !cleared.isEmpty {
+                notes.append("Static blur cleared existing blur keyframes on: \(cleared.joined(separator: ", ")).")
+            }
+        }
 
+        var beforeClips: [String: Clip] = [:]
+        for id in clipIds {
+            beforeClips[id] = editor.clipFor(id: id)
+        }
         let snapshot = timelineSnapshot(editor)
         let actionName = clipIds.count == 1 ? "Update Text (Agent)" : "Update Texts (Agent)"
-        let shouldFitToContent = transform == nil && (hasContent || textStylePatch?.affectsLayout == true)
+        let shouldFitToContent = hasContent || textStylePatch?.affectsLayout == true
         let canvasW = Double(editor.timeline.width)
         let canvasH = Double(editor.timeline.height)
         editor.undo.perform(actionName) {
             editor.commitClipProperties(clipIds: clipIds) { clip in
+                let originalStyle = clip.textStyle ?? TextStyle()
+                let originalAnchorX = Self.textAnchorX(
+                    centerX: clip.transform.centerX,
+                    width: clip.transform.width,
+                    alignment: originalStyle.alignment
+                )
                 if let content {
                     if clip.textContent != content {
                         clip.wordTimings = nil
@@ -546,18 +646,33 @@ extension ToolExecutor {
                     var style = clip.textStyle ?? TextStyle()
                     Self.applyTextStylePatch(textStylePatch, to: &style)
                     clip.textStyle = style
+                    if textStylePatch.blur != nil {
+                        clip.setBlurKeyframeTrack(nil)
+                    }
                 }
-                if let t = transform {
-                    let cur = clip.transform
-                    var next = Transform(
-                        center: (t.centerX ?? cur.center.x, t.centerY ?? cur.center.y),
-                        width: t.width ?? cur.width,
-                        height: t.height ?? cur.height
+                if shouldFitToContent {
+                    _ = editor.fitTextClipToContentIfNeeded(&clip, canvasW: canvasW, canvasH: canvasH)
+                }
+                let updatedStyle = clip.textStyle ?? TextStyle()
+                if shouldFitToContent || textStylePatch?.alignment != nil || transform?.x != nil {
+                    clip.transform.centerX = Self.textCenterX(
+                        anchorX: transform?.x ?? originalAnchorX,
+                        width: clip.transform.width,
+                        alignment: updatedStyle.alignment
                     )
-                    next.rotation = cur.rotation
-                    next.flipHorizontal = cur.flipHorizontal
-                    next.flipVertical = cur.flipVertical
-                    clip.transform = next
+                }
+                if let y = transform?.y {
+                    clip.transform.centerY = y
+                }
+                if let rotation = transform?.rotation {
+                    clip.transform.rotation = rotation
+                    clip.rotationTrack = nil
+                }
+                if let rotationX = transform?.rotationX {
+                    clip.transform.rotationX = rotationX
+                }
+                if let rotationY = transform?.rotationY {
+                    clip.transform.rotationY = rotationY
                 }
                 if shouldSetAnimation {
                     if let animation {
@@ -576,12 +691,19 @@ extension ToolExecutor {
                     a.highlight = hl
                     clip.textAnimation = a
                 }
-                if shouldFitToContent {
-                    _ = editor.fitTextClipToContentIfNeeded(&clip, canvasW: canvasW, canvasH: canvasH)
+                if let fillMode {
+                    clip.setTextFillMode(fillMode, footageMatteColor: textStylePatch?.color)
                 }
             }
         }
 
-        return mutationResult(editor, since: snapshot, touched: clipIds, notes: notes)
+        let changed = beforeClips.contains { id, clip in editor.clipFor(id: id) != clip }
+        return mutationResult(
+            editor,
+            since: snapshot,
+            touched: clipIds,
+            extra: ["changed": changed],
+            notes: notes
+        )
     }
 }

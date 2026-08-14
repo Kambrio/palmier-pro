@@ -8,8 +8,8 @@ enum TranscriptionProvider: String, CaseIterable, Sendable, Codable {
 
     var label: String {
         switch self {
-        case .local: "Local"
-        case .cloud: "Cloud"
+        case .local: L10n.key("Local")
+        case .cloud: L10n.key("Cloud")
         }
     }
 }
@@ -104,7 +104,16 @@ enum TranscriptionError: LocalizedError {
 enum Transcription {
     private static let audioExtractionGate = AsyncSemaphore(value: 2)
 
+    static func failurePreservingCancellation(
+        _ error: Error,
+        as makeFailure: (String) -> TranscriptionError
+    ) throws -> TranscriptionError {
+        try Task.checkCancellation()
+        return makeFailure(error.localizedDescription)
+    }
+
     static func transcribeVideoAudio(videoURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil) async throws -> TranscriptionResult {
+        try Task.checkCancellation()
         let tempAudioURL = try await extractAudioTrack(from: videoURL, range: sourceRange)
         defer { try? FileManager.default.removeItem(at: tempAudioURL) }
         let result = try await transcribe(fileURL: tempAudioURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale)
@@ -137,6 +146,7 @@ enum Transcription {
     }
 
     static func transcribe(fileURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil) async throws -> TranscriptionResult {
+        try Task.checkCancellation()
         if let sourceRange {
             let tempURL = try await extractAudioTrack(from: fileURL, range: sourceRange)
             defer { try? FileManager.default.removeItem(at: tempURL) }
@@ -231,6 +241,7 @@ enum Transcription {
                 try audioFile?.write(from: pcm)
             }
         } catch let error as AudioTrackReader.ReadError {
+            try Task.checkCancellation()
             throw TranscriptionError.audioExtractionFailed(error.message)
         }
 

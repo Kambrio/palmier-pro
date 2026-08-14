@@ -82,6 +82,73 @@ struct EditorUndoTests {
         #expect(manager.undoActionName == "Outer")
     }
 
+    @Test func reportsOnlyCommittedOutermostActionsWithOrigin() {
+        let (undo, manager, counter) = harness()
+        var committedActionCount = 0
+        var origin: Analytics.Origin?
+        undo.onActionCommitted = {
+            committedActionCount += 1
+            origin = Analytics.origin
+        }
+
+        undo.perform("No-op") {}
+        Analytics.$origin.withValue(Analytics.Origin(source: "agent", sessionID: "session-1")) {
+            undo.perform("Outer") {
+                setCounter(1, actionName: "Inner", counter: counter, undo: undo)
+            }
+        }
+
+        #expect(committedActionCount == 1)
+        #expect(origin?.source == "agent")
+        #expect(origin?.sessionID == "session-1")
+        withExtendedLifetime(manager) {}
+    }
+
+    @Test func replayingAnActionReportsNoNewCommit() {
+        let (undo, manager, counter) = harness()
+        setCounter(1, actionName: "Set Counter", counter: counter, undo: undo)
+        var committedActionCount = 0
+        undo.onActionCommitted = { committedActionCount += 1 }
+
+        manager.undo()
+        manager.redo()
+
+        #expect(committedActionCount == 0)
+    }
+
+    @Test func transactionDoesNotCloseArmedEventGroup() {
+        let (undo, manager, counter) = harness()
+        let textStorage = UndoCounter()
+
+        // A direct registration (AppKit-style, outside EditorUndo) lazily
+        // opens the automatic event group. Foundation only disarms its
+        // "event group open" bookkeeping in the deferred group ending that
+        // NSDocument's save completion also invokes — nothing else clears it.
+        manager.registerUndo(withTarget: textStorage) { _ in }
+        let armedLevel = manager.groupingLevel
+        #expect(armedLevel > 0)
+
+        // An agent transaction must therefore never close the automatic
+        // event group itself. 0.6.6's ToolExecutor did
+        // (`if groupingLevel == 1 { endUndoGrouping() }`), which left the
+        // bookkeeping armed with no open group; the next save completion
+        // then raised "endUndoGrouping called with no matching begin" —
+        // fatal under NSApplicationCrashOnExceptions, and far from the
+        // cause. The transaction has to nest inside the armed group and
+        // leave it open for its scheduled ending.
+        undo.perform("Agent Edit") {
+            setCounter(1, actionName: "Agent Edit", counter: counter, undo: undo)
+        }
+        #expect(manager.groupingLevel == armedLevel)
+        #expect(manager.groupsByEvent)
+
+        // removeAllActions is the public API that both drains the history
+        // and cancels the scheduled automatic ending, so no armed state
+        // leaks into other tests.
+        manager.removeAllActions()
+        #expect(manager.groupingLevel == 0)
+    }
+
     @Test func throwingScopesRestoreUndoState() {
         let (undo, manager, counter) = harness()
 

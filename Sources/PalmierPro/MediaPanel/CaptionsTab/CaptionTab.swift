@@ -4,14 +4,8 @@ struct CaptionTab: View {
     @Environment(EditorViewModel.self) var editor
     @Bindable private var account = AccountService.shared
 
-    @State private var style: TextStyle = CaptionTab.defaultStyle
+    @State private var style: TextStyle = .caption
     @State private var center = AppTheme.Caption.defaultCenter
-
-    private static var defaultStyle: TextStyle {
-        var s = TextStyle(fontSize: AppTheme.Caption.defaultFontSize)
-        s.shadow.enabled = false
-        return s
-    }
     @State private var selectedTrackId: String?
     @State private var selectedClipTargets: [String] = []
     @State private var provider: TranscriptionProvider = .cloud
@@ -19,6 +13,8 @@ struct CaptionTab: View {
     @State private var animationHighlight: TextStyle.RGBA = TextAnimation.defaultHighlight
     @State private var censorProfanity = false
     @State private var maxWords: Int?
+    @State private var maxCharacters: Int?
+    @State private var maximumGapSeconds = CaptionGapSettings.default.maximumGapSeconds
     @State private var locale: Locale?
     @State private var supportedLocales: [Locale] = []
     @State private var appleCodes: Set<String> = []
@@ -29,11 +25,20 @@ struct CaptionTab: View {
     @State private var settingsExpanded = true
     @State private var styleExpanded = false
     @State private var animationExpanded = false
-    @State private var placementExpanded = true
 
-    private static let previewText = "Captions will look like this"
+    private static let previewText = L10n.key("Captions will look like this")
+    private static let maxWordRange = 0.0...50.0
+    private static let maxCharacterRange = 0.0...200.0
 
-    private var aspect: CGFloat { CGFloat(editor.timeline.width) / CGFloat(max(1, editor.timeline.height)) }
+    private var previewConfiguration: CaptionPreviewConfiguration {
+        CaptionPreviewConfiguration(
+            text: L10n.string(key: Self.previewText),
+            style: style,
+            center: center,
+            preset: animationPreset,
+            highlight: animationHighlight
+        )
+    }
 
     private var liveTargets: [String] {
         let sel = editor.selectedClipIds
@@ -46,8 +51,8 @@ struct CaptionTab: View {
         return selectedClipTargets   // Auto resolves its source during generation
     }
     private var automaticSourceSummary: String {
-        if !selectedClipTargets.isEmpty { return "Selected Clips · \(selectedClipTargets.count)" }
-        return editor.captionTargets(ids: []).isEmpty ? "No audio" : "Auto"
+        if !selectedClipTargets.isEmpty { return L10n.string("Selected Clips · \(selectedClipTargets.count)") }
+        return editor.captionTargets(ids: []).isEmpty ? L10n.string("No audio") : L10n.string("Auto")
     }
     private var effectiveCount: Int {
         isAutoSource ? editor.captionTargets(ids: []).count : sourceClipIds.count
@@ -60,7 +65,7 @@ struct CaptionTab: View {
     }
     private var cloudModeUnavailableMessage: String? {
         guard provider == .cloud else { return nil }
-        guard account.isSignedIn else { return "Sign in to use Cloud." }
+        guard account.isSignedIn else { return L10n.string("Sign in to use Cloud.") }
         return nil
     }
     private var canGenerateCaptions: Bool {
@@ -70,34 +75,48 @@ struct CaptionTab: View {
         "\(provider.rawValue)|\(sourceClipIds.joined(separator: ","))|\(isAutoSource)|\(locale?.identifier ?? "")"
     }
     private var costHelpText: String {
-        guard let cost = estimatedCloudCost else { return "Estimated cost. Actual billing may differ slightly." }
-        guard cost > 0 else { return "Cached — no credits used." }
-        guard let remaining = remainingCloudCredits else { return "\(CostEstimator.format(cost)) estimated. Actual billing may differ." }
-        if cost > remaining { return "\(CostEstimator.format(cost)) needed. Only \(remaining.formatted()) remaining." }
-        return "\(CostEstimator.format(cost)). \((remaining - cost).formatted()) remaining after this generation."
+        guard let cost = estimatedCloudCost else {
+            return L10n.string("Estimated cost. Actual billing may differ slightly.")
+        }
+        guard cost > 0 else { return L10n.string("Cached — no credits used.") }
+        guard let remaining = remainingCloudCredits else {
+            return CostEstimator.localizedEstimate(cost)
+        }
+        if cost > remaining {
+            return CostEstimator.localizedInsufficientCredits(cost, remaining: remaining)
+        }
+        return CostEstimator.localizedRemainingCredits(cost, remaining: remaining - cost)
     }
 
     private static let translateLanguages = [
-        "Spanish", "French", "German", "Italian", "Portuguese",
-        "Japanese", "Korean", "Chinese", "Hindi", "Arabic"
+        (code: "es", promptName: "Spanish"),
+        (code: "fr", promptName: "French"),
+        (code: "de", promptName: "German"),
+        (code: "it", promptName: "Italian"),
+        (code: "pt", promptName: "Portuguese"),
+        (code: "ja", promptName: "Japanese"),
+        (code: "ko", promptName: "Korean"),
+        (code: "zh-Hans", promptName: "Chinese"),
+        (code: "hi", promptName: "Hindi"),
+        (code: "ar", promptName: "Arabic"),
     ]
 
     private var sourceSummary: String {
         guard let selectedTrackId else { return automaticSourceSummary }
-        guard let index = editor.timeline.tracks.firstIndex(where: { $0.id == selectedTrackId }) else { return "No track" }
-        return "\(trackTitle(index)) · \(sourceClipIds.count)"
+        guard let index = editor.timeline.tracks.firstIndex(where: { $0.id == selectedTrackId }) else { return L10n.string("No track") }
+        return L10n.string("\(trackTitle(index)) · \(sourceClipIds.count)")
     }
 
     var body: some View {
         ZStack {
             VStack(spacing: AppTheme.Spacing.zero) {
+                previewToggleBar
                 ScrollView {
                     VStack(alignment: .leading, spacing: AppTheme.Spacing.zero) {
                         sourceSection
                         settingsSection
                         styleSection
                         animationSection
-                        placementSection
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
@@ -113,8 +132,25 @@ struct CaptionTab: View {
             appleCodes = await Set(Transcription.supportedLocales().compactMap { $0.language.languageCode?.identifier })
             supportedLocales = langs.sorted { languageName($0) < languageName($1) }
         }
-        .onAppear { rememberSelectedClipTargets() }
-        .onChange(of: editor.selectedClipIds) { _, _ in rememberSelectedClipTargets() }
+        .onAppear {
+            rememberSelectedClipTargets()
+            editor.captionPreviewCenterChange = { center = $0 }
+            showCaptionPreview()
+        }
+        .onDisappear {
+            editor.captionPreviewConfiguration = nil
+            editor.captionPreviewCenterChange = nil
+        }
+        .onChange(of: previewConfiguration) { _, _ in showCaptionPreview() }
+        .onChange(of: editor.mediaPanelVisible) { _, _ in showCaptionPreview() }
+        .onChange(of: editor.selectedClipIds) { _, _ in
+            guard !editor.isMarqueeSelecting else { return }
+            rememberSelectedClipTargets()
+        }
+        .onChange(of: editor.isMarqueeSelecting) { wasSelecting, isSelecting in
+            guard wasSelecting, !isSelecting else { return }
+            rememberSelectedClipTargets()
+        }
         .task(id: costEstimateKey) {
             estimatedCloudCost = nil
             guard provider == .cloud, effectiveCount > 0 else { return }
@@ -127,29 +163,62 @@ struct CaptionTab: View {
         }
     }
 
+    private var previewToggleBar: some View {
+        HStack(spacing: AppTheme.Spacing.sm) {
+            Image(systemName: editor.captionPreviewEnabled ? "eye" : "eye.slash")
+                .font(.system(size: AppTheme.FontSize.xxs, weight: AppTheme.FontWeight.semibold))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
+                .frame(width: AppTheme.IconSize.xs, height: AppTheme.IconSize.xs)
+            Text(L10n.string("Preview"))
+                .font(.system(size: AppTheme.FontSize.smMd, weight: AppTheme.FontWeight.medium))
+                .foregroundStyle(AppTheme.Text.primaryColor)
+            Spacer(minLength: AppTheme.Spacing.sm)
+            Toggle(
+                String(),
+                isOn: Binding(
+                    get: { editor.captionPreviewEnabled },
+                    set: { editor.captionPreviewEnabled = $0 }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .accessibilityLabel(L10n.string("Preview"))
+            .tint(AppTheme.Text.primaryColor.opacity(AppTheme.Opacity.strong))
+        }
+        .padding(.horizontal, AppTheme.Spacing.smMd)
+        .frame(maxWidth: .infinity, minHeight: AppTheme.EditorPanel.groupHeaderHeight)
+        .background(AppTheme.Background.surfaceColor)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppTheme.Border.primaryColor)
+                .frame(height: AppTheme.BorderWidth.thin)
+        }
+    }
+
     private var sourceSection: some View {
-        EditorPanelGroup("Source", isExpanded: $sourceExpanded) {
+        EditorPanelGroup(L10n.string("Source"), isExpanded: $sourceExpanded) {
             InspectorRow(
-                label: "Source",
-                labelHelp: "Uses selected clips when available, otherwise all captionable audio. Choose a track to limit captions.",
+                label: L10n.string("Source"),
+                labelHelp: L10n.string("Uses selected clips when available, otherwise all captionable audio. Choose a track to limit captions."),
                 onReset: {
                     selectedTrackId = nil
                     selectedClipTargets = []
                 }
             ) { sourceMenu }
             InspectorRow(
-                label: "Mode",
-                labelHelp: "Local runs with Apple's SpeechAnalyzer. Cloud uses credits and a more accurate model with more capabilities.",
+                label: L10n.string("Mode"),
+                labelHelp: L10n.string("Local runs with Apple's SpeechAnalyzer. Cloud uses credits and a more accurate model with more capabilities."),
                 onReset: { provider = .cloud }
             ) { providerPicker }
         }
     }
 
     private var settingsSection: some View {
-        EditorPanelGroup("Settings", isExpanded: $settingsExpanded) {
-            InspectorRow(label: "Language", onReset: { locale = nil }) {
+        EditorPanelGroup(L10n.string("Settings"), isExpanded: $settingsExpanded) {
+            InspectorRow(label: L10n.string("Language"), onReset: { locale = nil }) {
                 Menu {
-                    Button("Auto") { locale = nil }
+                    Button(L10n.string("Auto")) { locale = nil }
                     if !supportedLocales.isEmpty {
                         Divider()
                         ForEach(supportedLocales, id: \.identifier) { loc in
@@ -164,30 +233,66 @@ struct CaptionTab: View {
                             }
                         }
                     }
-                } label: { EditorMenuValue(text: locale.map(languageName) ?? "Auto", expanded: true) }
+                } label: { EditorMenuValue(text: locale.map(languageName) ?? L10n.string("Auto"), expanded: true) }
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).focusable(false)
                 .frame(maxWidth: .infinity)
             }
             InspectorRow(
-                label: "Max words",
-                labelHelp: "Cap the words shown per caption. None fits each line to the box.",
+                label: L10n.string("Max words"),
+                labelHelp: L10n.string("Cap the words shown per caption. None fits each line to the box."),
                 onReset: { maxWords = nil }
             ) {
-                Menu {
-                    Button("None") { maxWords = nil }
-                    ForEach(1...8, id: \.self) { n in
-                        Button("\(n)") { maxWords = n }
-                    }
-                } label: { EditorMenuValue(text: maxWords.map(String.init) ?? "None", expanded: true) }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).focusable(false)
-                .frame(maxWidth: .infinity)
+                ScrubbableNumberField(
+                    value: Double(maxWords ?? 0),
+                    range: Self.maxWordRange,
+                    dragValueAdjustment: { $0.rounded() },
+                    displayTextOverride: { $0 < 1 ? L10n.string("None") : nil },
+                    onChanged: updateMaxWords,
+                    onCommit: updateMaxWords
+                )
+                .accessibilityLabel(L10n.string("Max words"))
             }
-            InspectorRow(label: "Censor profanity", onReset: { censorProfanity = false }) {
-                Toggle("", isOn: $censorProfanity)
+            InspectorRow(
+                label: L10n.string("Max characters"),
+                labelHelp: L10n.string("Cap characters per caption, including spaces and punctuation. A single word may exceed the limit."),
+                onReset: { maxCharacters = nil }
+            ) {
+                ScrubbableNumberField(
+                    value: Double(maxCharacters ?? 0),
+                    range: Self.maxCharacterRange,
+                    dragValueAdjustment: { $0.rounded() },
+                    displayTextOverride: { $0 < 1 ? L10n.string("None") : nil },
+                    onChanged: updateMaxCharacters,
+                    onCommit: updateMaxCharacters
+                )
+                .accessibilityLabel(L10n.string("Max characters"))
+            }
+            InspectorRow(
+                label: L10n.string("Close gaps"),
+                labelHelp: L10n.string("Extends captions across short gaps and holds the final caption."),
+                onReset: {
+                    maximumGapSeconds = CaptionGapSettings.default.maximumGapSeconds
+                }
+            ) {
+                ScrubbableNumberField(
+                    value: maximumGapSeconds,
+                    range: CaptionGapSettings.maximumGapRange,
+                    displayMultiplier: 1_000,
+                    format: "%.0f",
+                    valueSuffix: " ms",
+                    dragSensitivity: 10,
+                    dragValueAdjustment: { ($0 / 0.05).rounded() * 0.05 },
+                    onChanged: { maximumGapSeconds = $0 },
+                    onCommit: { maximumGapSeconds = $0 }
+                )
+                .accessibilityLabel(L10n.string("Close gaps"))
+            }
+            InspectorRow(label: L10n.string("Censor profanity"), onReset: { censorProfanity = false }) {
+                Toggle(String(), isOn: $censorProfanity)
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.mini)
-                    .accessibilityLabel("Censor profanity")
+                    .accessibilityLabel(L10n.string("Censor profanity"))
                     .tint(AppTheme.Text.primaryColor.opacity(AppTheme.Opacity.strong))
                     .disabled(provider == .cloud)
                     .opacity(provider == .cloud ? AppTheme.Opacity.muted : AppTheme.Opacity.opaque)
@@ -206,17 +311,18 @@ struct CaptionTab: View {
             Divider()
 
             if captionTrackIndices.isEmpty {
-                Text("No Tracks")
+                Text(L10n.string("No Tracks"))
             } else {
                 ForEach(captionTrackIndices, id: \.self) { index in
                     if editor.timeline.tracks.indices.contains(index) {
                         let track = editor.timeline.tracks[index]
                         let count = editor.captionTargets(trackIds: [track.id]).count
+                        let clipCount = count == 1 ? L10n.string("1 clip") : L10n.string("\(count) clips")
                         Button {
                             selectedTrackId = track.id
                         } label: {
                             Label(
-                                "\(trackTitle(index)) · \(count) \(count == 1 ? "clip" : "clips")",
+                                L10n.string("\(trackTitle(index)) · \(clipCount)"),
                                 systemImage: selectedTrackId == track.id ? "checkmark" : ""
                             )
                         }
@@ -239,7 +345,7 @@ struct CaptionTab: View {
     }
 
     private var cloudCreditHelp: String {
-        "Cloud auto-detects languages, produces more accurate transcripts, can identify speakers, and uses 25 credits/hr when a transcript is not cached."
+        L10n.string("Cloud auto-detects languages, produces more accurate transcripts, can identify speakers, and uses 25 credits/hr when a transcript is not cached.")
     }
 
     private func providerOption(_ option: TranscriptionProvider, title: String) -> some View {
@@ -249,7 +355,7 @@ struct CaptionTab: View {
         } label: {
             HStack(spacing: AppTheme.Spacing.xs) {
                 RadioIndicator(selected: selected, size: AppTheme.IconSize.xxs, innerPadding: AppTheme.Spacing.xxs)
-                Text(title)
+                Text(L10n.string(key: title))
                     .font(.system(size: AppTheme.FontSize.sm, weight: selected ? AppTheme.FontWeight.semibold : AppTheme.FontWeight.medium))
                     .foregroundStyle(selected ? AppTheme.Text.primaryColor : AppTheme.Text.secondaryColor)
                     .lineLimit(1)
@@ -258,7 +364,9 @@ struct CaptionTab: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
-        .help(option == .cloud ? cloudCreditHelp : "Local runs with Apple's SpeechAnalyzer.")
+        .help(option == .cloud
+            ? cloudCreditHelp
+            : L10n.string("Local runs with Apple's SpeechAnalyzer."))
     }
 
     private func rememberSelectedClipTargets() {
@@ -272,17 +380,67 @@ struct CaptionTab: View {
     }
 
     private func languageName(_ loc: Locale) -> String {
-        Locale.current.localizedString(forIdentifier: loc.identifier) ?? loc.identifier(.bcp47)
+        AppLocalization.shared.activeLocale.localizedString(forIdentifier: loc.identifier)
+            ?? loc.identifier(.bcp47)
+    }
+
+    private func translationLanguageName(_ identifier: String) -> String {
+        AppLocalization.shared.activeLocale.localizedString(forLanguageCode: identifier)
+            ?? identifier
     }
 
     private var styleSection: some View {
         TextStyleControls(
-            selection: TextStyleSelection(styles: [style], fallback: Self.defaultStyle),
-            defaults: Self.defaultStyle,
+            selection: TextStyleSelection(styles: [style], fallback: .caption),
+            defaults: .caption,
             styleExpanded: $styleExpanded,
             groupsExpandedByDefault: false,
-            actions: styleActions
+            actions: styleActions,
+            afterAlignment: { captionPositionRow },
+            afterColor: { EmptyView() }
         )
+    }
+
+    private var captionPositionRow: some View {
+        InspectorRow(
+            label: L10n.string("Position"),
+            onReset: { center = AppTheme.Caption.defaultCenter }
+        ) {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                captionPositionField(
+                    value: center.x,
+                    canvasLength: max(1, editor.timeline.width),
+                    label: "X",
+                    onChange: { center.x = $0 }
+                )
+                captionPositionField(
+                    value: center.y,
+                    canvasLength: max(1, editor.timeline.height),
+                    label: "Y",
+                    onChange: { center.y = $0 }
+                )
+            }
+            .fixedSize()
+        }
+    }
+
+    private func captionPositionField(
+        value: CGFloat,
+        canvasLength: Int,
+        label: String,
+        onChange: @escaping (CGFloat) -> Void
+    ) -> some View {
+        ScrubbableNumberField(
+            value: Double(value),
+            range: -10...10,
+            displayMultiplier: Double(canvasLength),
+            format: "%.0f",
+            fieldWidth: AppTheme.EditorPanel.compactNumericFieldWidth,
+            trailingLabel: label,
+            onChanged: { onChange(CaptionPreviewPlacement.snappedCoordinate($0)) }
+        ) {
+            onChange(CaptionPreviewPlacement.snappedCoordinate($0))
+        }
     }
 
     private var styleActions: TextStyleEditingActions {
@@ -298,12 +456,12 @@ struct CaptionTab: View {
     }
 
     private var animationSection: some View {
-        EditorPanelGroup("Animation", isExpanded: $animationExpanded) {
+        EditorPanelGroup(L10n.string("Animation"), isExpanded: $animationExpanded) {
             CaptionPresetGallery(selection: $animationPreset, highlight: animationHighlight)
             if animationPreset.usesHighlight {
                 InspectorRow(
-                    label: "Highlight",
-                    labelHelp: "Color for the active word.",
+                    label: L10n.string("Highlight"),
+                    labelHelp: L10n.string("Color for the active word."),
                     onReset: { animationHighlight = TextAnimation.defaultHighlight }
                 ) {
                     ColorField(displayColor: animationHighlight.swiftUIColor, onUserChange: { animationHighlight = TextStyle.RGBA($0) })
@@ -312,37 +470,26 @@ struct CaptionTab: View {
         }
     }
 
-    private var placementSection: some View {
-        EditorPanelGroup("Placement", isExpanded: $placementExpanded) {
-            previewBox
-            HStack(spacing: AppTheme.Spacing.mdLg) {
-                Spacer(minLength: AppTheme.Spacing.xs)
-                posField("X", value: center.x) { center.x = $0 }
-                posField("Y", value: center.y) { center.y = $0 }
-            }
-        }
-    }
-
     private var agentMenu: some View {
         EditorAgentMenu(
-            help: "Let Agent create captions for you. Choose a predefined task, or ask Agent in the chat."
+            help: L10n.string("Let Agent create captions for you. Choose a predefined task, or ask Agent in the chat.")
         ) {
             Button {
                 captionTask("remove filler words (um, uh, er, like, you know) from the captions, keeping each caption's timing unchanged.")
-            } label: { Label("Remove filler words", systemImage: "text.badge.minus") }
+            } label: { Label(L10n.string("Remove filler words"), systemImage: "text.badge.minus") }
             Button {
                 captionTask("fix any misspelled names, brand names, or technical jargon in the captions using the surrounding context, keeping timing unchanged.")
-            } label: { Label("Fix names & jargon", systemImage: "checkmark.bubble") }
+            } label: { Label(L10n.string("Fix names & jargon"), systemImage: "checkmark.bubble") }
             Button {
                 captionTask("add relevant emoji to the captions, keeping the text and timing otherwise unchanged.")
-            } label: { Label("Add emoji", systemImage: "face.smiling") }
+            } label: { Label(L10n.string("Add emoji"), systemImage: "face.smiling") }
             Menu {
-                ForEach(Self.translateLanguages, id: \.self) { language in
-                    Button(language) {
-                        captionTask("translate the captions to \(language), keeping each caption's timing unchanged.")
+                ForEach(Self.translateLanguages, id: \.code) { language in
+                    Button(translationLanguageName(language.code)) {
+                        captionTask("translate the captions to \(language.promptName), keeping each caption's timing unchanged.")
                     }
                 }
-            } label: { Label("Translate", systemImage: "globe") }
+            } label: { Label(L10n.string("Translate"), systemImage: "globe") }
         }
     }
 
@@ -357,74 +504,15 @@ struct CaptionTab: View {
         editor.agentPanelVisible = true
     }
 
-    private var previewBox: some View {
-        ZStack {
-            AppTheme.Background.previewCanvasColor
-            centerGuides
-            GeometryReader { geo in
-                CaptionAnimatedPreview(
-                    text: Self.previewText, style: style, center: center,
-                    preset: animationPreset, highlight: animationHighlight,
-                    canvas: CGSize(width: max(1, editor.timeline.width), height: max(1, editor.timeline.height)),
-                    size: geo.size
-                )
-            }
-        }
-        .aspectRatio(aspect, contentMode: .fit)
-        .frame(maxWidth: .infinity, maxHeight: AppTheme.ComponentSize.captionPreviewMaxHeight)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sm))
-        .overlay(
-            RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                .strokeBorder(AppTheme.Border.subtleColor, lineWidth: AppTheme.BorderWidth.hairline)
-        )
-    }
-
-    private var centerGuides: some View {
-        GeometryReader { geo in
-            let guide = AppTheme.Accent.timecodeColor.opacity(AppTheme.Opacity.prominent)
-            ZStack {
-                if center.x == AppTheme.Caption.centerSnapValue {
-                    Rectangle().fill(guide).frame(width: AppTheme.BorderWidth.hairline, height: geo.size.height)
-                }
-                if center.y == AppTheme.Caption.centerSnapValue {
-                    Rectangle().fill(guide).frame(width: geo.size.width, height: AppTheme.BorderWidth.hairline)
-                }
-            }
-            .position(x: geo.size.width / 2, y: geo.size.height / 2)
-        }
-        .allowsHitTesting(false)
-    }
-
-    private func snapCenter(_ v: Double) -> CGFloat {
-        let centerValue = Double(AppTheme.Caption.centerSnapValue)
-        return CGFloat(abs(v - centerValue) < AppTheme.Caption.centerSnapThreshold ? centerValue : v)
-    }
-
-    private func posField(_ label: String, value: CGFloat, onChange: @escaping (CGFloat) -> Void) -> some View {
-        HStack(spacing: AppTheme.Spacing.xxs) {
-            Text(label)
-                .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.medium))
-                .foregroundStyle(AppTheme.Text.tertiaryColor)
-            ScrubbableNumberField(
-                value: Double(value),
-                range: AppTheme.Caption.minPosition...AppTheme.Caption.maxPosition,
-                displayMultiplier: 100,
-                format: "%.0f",
-                valueSuffix: "%",
-                onChanged: { onChange(snapCenter($0)) }
-            ) { onChange(snapCenter($0)) }
-        }
-    }
-
     private var generateBar: some View {
         EditorActionFooter(message: note) {
             HStack(spacing: AppTheme.Spacing.sm) {
                 Button(action: generate) {
                     HStack(spacing: AppTheme.Spacing.xs) {
-                        Text(cloudModeUnavailableMessage ?? "Generate Captions")
+                        Text(cloudModeUnavailableMessage ?? L10n.string("Generate Captions"))
                         if cloudModeUnavailableMessage == nil, provider == .cloud, let cost = estimatedCloudCost {
                             Image(systemName: "dollarsign.circle.fill").font(.system(size: AppTheme.FontSize.xs))
-                            Text("\(cost)").monospacedDigit()
+                            Text(verbatim: "\(cost)").monospacedDigit()
                         }
                     }
                     .lineLimit(1)
@@ -444,7 +532,7 @@ struct CaptionTab: View {
         note = nil
         let sourceIds = sourceClipIds
         if selectedTrackId != nil && sourceIds.isEmpty {
-            note = "No audio selected."
+            note = L10n.string("No audio selected.")
             return
         }
         let request = EditorViewModel.CaptionRequest(
@@ -455,6 +543,8 @@ struct CaptionTab: View {
             censorProfanity: provider == .local && censorProfanity,
             locale: locale,
             maxWords: maxWords,
+            maxCharacters: maxCharacters,
+            gapSettings: CaptionGapSettings(maximumGapSeconds: maximumGapSeconds) ?? .default,
             provider: provider,
             animation: TextAnimation(preset: animationPreset, highlight: animationHighlight)
         )
@@ -462,16 +552,52 @@ struct CaptionTab: View {
         editor.startCaptionGeneration(for: request)
     }
 
+    private func showCaptionPreview() {
+        editor.captionPreviewConfiguration = editor.mediaPanelVisible ? previewConfiguration : nil
+    }
+
+    private func updateMaxCharacters(_ value: Double) {
+        let count = Int(value.rounded())
+        maxCharacters = count > 0 ? count : nil
+    }
+
+    private func updateMaxWords(_ value: Double) {
+        let count = Int(value.rounded())
+        maxWords = count > 0 ? count : nil
+    }
+
     private func cloudUnavailableMessage(cost: Int?, provider mode: TranscriptionProvider? = nil) -> String? {
         guard (mode ?? provider) == .cloud else { return nil }
-        guard account.isSignedIn else { return "Sign in to use Cloud." }
+        guard account.isSignedIn else { return L10n.string("Sign in to use Cloud.") }
         guard let cost else { return nil }
         guard cost > 0 else { return nil }
         guard let remaining = remainingCloudCredits else { return nil }
-        guard remaining > 0 else { return "Add credits to use Cloud." }
+        guard remaining > 0 else { return L10n.string("Add credits to use Cloud.") }
         if cost > remaining {
-            return "\(CostEstimator.format(cost)) needed. Only \(remaining.formatted()) remaining."
+            return CostEstimator.localizedInsufficientCredits(cost, remaining: remaining)
         }
         return nil
+    }
+
+    private func localizedCaptionError(_ error: Error) -> String {
+        guard let error = error as? TranscriptionError else { return error.localizedDescription }
+        switch error {
+        case .unsupportedLocale(let identifier):
+            return L10n.string("On-device transcription is not available for \(identifier).")
+        case .modelInstallFailed(let reason):
+            return L10n.string("Could not install the on-device speech model: \(reason)")
+        case .decodeFailed:
+            return L10n.string("Could not parse transcription result.")
+        case .audioExtractionFailed(let reason):
+            return L10n.string("Audio extraction failed: \(reason)")
+        case .whisperModelNotInstalled:
+            return L10n.string("The Whisper model is not installed yet.")
+        case .whisperLoadFailed(let reason):
+            return L10n.string("Could not load the Whisper model: \(reason)")
+        case .whisperTranscribeFailed(let reason):
+            return L10n.string("Whisper transcription failed: \(reason)")
+        case .analysisFailed(let reason):
+            return L10n.string("Transcription failed: \(reason)")
+        }
     }
 }

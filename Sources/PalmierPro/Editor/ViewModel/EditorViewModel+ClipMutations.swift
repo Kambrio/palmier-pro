@@ -65,10 +65,9 @@ extension EditorViewModel {
         withTimelineSwap(actionName: actionName) {
             // Pull moved clips off their source tracks first, so clearRegion on
             // the destinations never touches them.
-            for info in clipInfos {
-                if let loc = findClip(id: info.clip.id) {
-                    timeline.tracks[loc.trackIndex].clips.remove(at: loc.clipIndex)
-                }
+            let movedIds = Set(clipInfos.map(\.clip.id))
+            for trackIndex in timeline.tracks.indices {
+                timeline.tracks[trackIndex].clips.removeAll { movedIds.contains($0.id) }
             }
 
             // Trim / remove any non-moved clips blocking each destination range.
@@ -171,6 +170,13 @@ extension EditorViewModel {
         (left.scaleTrack,    right.scaleTrack)    = splitKeyframeTrack(clip.scaleTrack,    at: splitOffset, fallback: AnimPair(a: 1, b: 1))
         (left.rotationTrack, right.rotationTrack) = splitKeyframeTrack(clip.rotationTrack, at: splitOffset, fallback: 0)
         (left.cropTrack,     right.cropTrack)     = splitKeyframeTrack(clip.cropTrack,     at: splitOffset, fallback: clip.crop)
+        let blurTracks = splitKeyframeTrack(
+            clip.blurKeyframeTrack,
+            at: splitOffset,
+            fallback: clip.staticBlurRadius
+        )
+        left.setBlurKeyframeTrack(blurTracks.left)
+        right.setBlurKeyframeTrack(blurTracks.right)
         left.clampFadesToDuration()
         right.clampFadesToDuration()
         return (left, right)
@@ -229,14 +235,14 @@ extension EditorViewModel {
         setClipSpeed(at: loc, newSpeed: newSpeed)
     }
 
-    func commitClipSpeed(ids: [String], newSpeed: Double) {
+    func commitClipSpeed(ids: [String], newSpeed: Double, ripple: Bool = true) {
         guard !refusesMulticamRetime(clipIds: ids) else { return }
         let before: Timeline = preDragTimeline ?? timeline
         for id in ids {
             guard let loc = findClip(id: id) else { continue }
             guard timeline.tracks[loc.trackIndex].clips[loc.clipIndex].supportsRetiming else { continue }
             if timeline.tracks[loc.trackIndex].clips[loc.clipIndex].speed != newSpeed {
-                setClipSpeed(at: loc, newSpeed: newSpeed)
+                setClipSpeed(at: loc, newSpeed: newSpeed, ripple: ripple)
             }
         }
         let after = timeline
@@ -265,12 +271,16 @@ extension EditorViewModel {
         notifyTimelineChanged(refreshVisuals: refreshVisuals)
     }
 
-    fileprivate func setClipSpeed(at loc: ClipLocation, newSpeed: Double) {
+    nonisolated static func retimedDurationFrames(durationFrames: Int, speed: Double, newSpeed: Double) -> Int {
+        max(1, Int((Double(durationFrames) * speed / newSpeed).rounded()))
+    }
+
+    fileprivate func setClipSpeed(at loc: ClipLocation, newSpeed: Double, ripple: Bool = true) {
         let ti = loc.trackIndex
         let clip = timeline.tracks[ti].clips[loc.clipIndex]
         let basis = dragBefore[clip.id] ?? clip
-        let sourceFrames = Double(basis.durationFrames) * basis.speed
-        let newDuration = max(1, Int((sourceFrames / newSpeed).rounded()))
+        let newDuration = Self.retimedDurationFrames(
+            durationFrames: basis.durationFrames, speed: basis.speed, newSpeed: newSpeed)
         let oldDuration = clip.durationFrames
         let oldEnd = clip.endFrame
 
@@ -283,7 +293,7 @@ extension EditorViewModel {
         timeline.tracks[ti].clips[loc.clipIndex].clampFadesToDuration()
 
         let rippleDelta = (clip.startFrame + newDuration) - oldEnd
-        if rippleDelta != 0 {
+        if ripple, rippleDelta != 0 {
             let chainIds = timeline.tracks[ti].contiguousClipIds(fromEnd: oldEnd, excludeId: clip.id)
             for ci in timeline.tracks[ti].clips.indices where chainIds.contains(timeline.tracks[ti].clips[ci].id) {
                 timeline.tracks[ti].clips[ci].startFrame += rippleDelta
@@ -324,9 +334,12 @@ extension EditorViewModel {
         actionName: String
     ) {
         registerTimelineUndo(actionName) { vm in
-            for entry in undoTarget {
-                if let loc = vm.findClip(id: entry.id) {
-                    vm.timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = entry.clip
+            let locations = vm.clipLocations(for: undoTarget.map(\.id))
+            vm.mutateActiveTimeline { timeline in
+                for entry in undoTarget {
+                    if let loc = locations[entry.id] {
+                        timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = entry.clip
+                    }
                 }
             }
             vm.registerClipStateSwap(undoTarget: redoTarget, redoTarget: undoTarget, actionName: actionName)
@@ -334,7 +347,12 @@ extension EditorViewModel {
         }
     }
 
-    func applyClipProperty(clipId: String, rebuild: Bool = false, _ modify: (inout Clip) -> Void) {
+    func applyClipProperty(
+        clipId: String,
+        rebuild: Bool = false,
+        seekMode: PreviewSeekMode = .exact,
+        _ modify: (inout Clip) -> Void
+    ) {
         guard let loc = findClip(id: clipId) else { return }
         var clip = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
         if dragBefore[clipId] == nil {
@@ -343,31 +361,34 @@ extension EditorViewModel {
         modify(&clip)
         timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = clip
         if clip.mediaType == .text {
-            videoEngine?.refreshVisuals()
+            videoEngine?.refreshVisuals(seekMode: seekMode)
             return
         }
         if rebuild {
             notifyTimelineChangedDebounced()
         } else {
-            videoEngine?.refreshVisuals()
+            videoEngine?.refreshVisuals(seekMode: seekMode)
         }
     }
 
     func applyClipProperties(clipIds: [String], rebuild: Bool = false, _ modify: (inout Clip) -> Void) {
         var touchedText = false
         var touchedVisual = false
-        for clipId in clipIds {
-            guard let loc = findClip(id: clipId) else { continue }
-            var clip = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
-            if dragBefore[clipId] == nil {
-                dragBefore[clipId] = clip
-            }
-            modify(&clip)
-            timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = clip
-            if clip.mediaType == .text {
-                touchedText = true
-            } else {
-                touchedVisual = true
+        let locations = clipLocations(for: clipIds)
+        mutateActiveTimeline { timeline in
+            for clipId in clipIds {
+                guard let loc = locations[clipId] else { continue }
+                var clip = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
+                if dragBefore[clipId] == nil {
+                    dragBefore[clipId] = clip
+                }
+                modify(&clip)
+                timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = clip
+                if clip.mediaType == .text {
+                    touchedText = true
+                } else {
+                    touchedVisual = true
+                }
             }
         }
         if touchedText { videoEngine?.refreshVisuals() }
@@ -381,14 +402,27 @@ extension EditorViewModel {
     }
 
     func revertClipProperty(clipId: String) {
-        guard let original = dragBefore.removeValue(forKey: clipId),
-              let loc = findClip(id: clipId) else { return }
-        timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = original
-        if original.mediaType == .text {
-            videoEngine?.refreshVisuals()
-        } else {
-            notifyTimelineChanged()
+        revertClipProperties(clipIds: [clipId])
+    }
+
+    func revertClipProperties(clipIds: [String]) {
+        var touchedText = false
+        var touchedVisual = false
+        let locations = clipLocations(for: clipIds)
+        mutateActiveTimeline { timeline in
+            for clipId in clipIds {
+                guard let original = dragBefore.removeValue(forKey: clipId),
+                      let loc = locations[clipId] else { continue }
+                timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = original
+                if original.mediaType == .text {
+                    touchedText = true
+                } else {
+                    touchedVisual = true
+                }
+            }
         }
+        if touchedText { videoEngine?.refreshVisuals() }
+        if touchedVisual { notifyTimelineChanged() }
     }
 
     func debouncedCommitClipProperties(
@@ -414,6 +448,24 @@ extension EditorViewModel {
 
     // MARK: - Text-style mutation helpers
 
+    func applyTextContent(clipId: String, content: String) {
+        let canvasW = Double(timeline.width)
+        let canvasH = Double(timeline.height)
+        applyClipProperty(clipId: clipId, rebuild: true) { clip in
+            clip.textContent = content
+            _ = self.fitTextClipToContentIfNeeded(&clip, canvasW: canvasW, canvasH: canvasH)
+        }
+    }
+
+    func commitTextContent(clipId: String, content: String) {
+        let canvasW = Double(timeline.width)
+        let canvasH = Double(timeline.height)
+        commitClipProperty(clipId: clipId, actionName: "Change Text") { clip in
+            clip.textContent = content
+            _ = self.fitTextClipToContentIfNeeded(&clip, canvasW: canvasW, canvasH: canvasH)
+        }
+    }
+
     func applyTextStyle(clipId: String, fitToContent: Bool = false, _ modify: @escaping (inout TextStyle) -> Void) {
         let canvasW = Double(timeline.width)
         let canvasH = Double(timeline.height)
@@ -432,8 +484,10 @@ extension EditorViewModel {
         let canvasH = Double(timeline.height)
         applyClipProperties(clipIds: clipIds, rebuild: true) { clip in
             var style = clip.textStyle ?? TextStyle()
+            let blur = style.blur
             modify(&style)
             clip.textStyle = style
+            if style.blur != blur { clip.setBlurKeyframeTrack(nil) }
             if fitToContent {
                 _ = self.fitTextClipToContentIfNeeded(&clip, canvasW: canvasW, canvasH: canvasH)
             }
@@ -458,8 +512,10 @@ extension EditorViewModel {
         let canvasH = Double(timeline.height)
         commitClipProperties(clipIds: clipIds) { clip in
             var style = clip.textStyle ?? TextStyle()
+            let blur = style.blur
             modify(&style)
             clip.textStyle = style
+            if style.blur != blur { clip.setBlurKeyframeTrack(nil) }
             if fitToContent {
                 _ = self.fitTextClipToContentIfNeeded(&clip, canvasW: canvasW, canvasH: canvasH)
             }
@@ -514,22 +570,25 @@ extension EditorViewModel {
         var touchedVisual = false
         var before: [(id: String, clip: Clip)] = []
         var after: [(id: String, clip: Clip)] = []
-        for clipId in clipIds {
-            guard let loc = findClip(id: clipId) else { continue }
-            let current = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
-            var clip = current
-            let undoTarget = dragBefore.removeValue(forKey: clipId) ?? current
-            modify(&clip)
-            guard current != clip || undoTarget != clip else { continue }
-            timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = clip
-            if undoTarget != clip {
-                before.append((clipId, undoTarget))
-                after.append((clipId, clip))
-            }
-            if clip.mediaType == .text {
-                touchedText = true
-            } else {
-                touchedVisual = true
+        let locations = clipLocations(for: clipIds)
+        mutateActiveTimeline { timeline in
+            for clipId in clipIds {
+                guard let loc = locations[clipId] else { continue }
+                let current = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
+                var clip = current
+                let undoTarget = dragBefore.removeValue(forKey: clipId) ?? current
+                modify(&clip)
+                guard current != clip || undoTarget != clip else { continue }
+                timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = clip
+                if undoTarget != clip {
+                    before.append((clipId, undoTarget))
+                    after.append((clipId, clip))
+                }
+                if clip.mediaType == .text {
+                    touchedText = true
+                } else {
+                    touchedVisual = true
+                }
             }
         }
         if !before.isEmpty {
@@ -537,6 +596,23 @@ extension EditorViewModel {
         }
         if touchedText { videoEngine?.refreshVisuals() }
         if touchedVisual { notifyTimelineChanged() }
+    }
+
+    private func mutateActiveTimeline(_ mutation: (inout Timeline) -> Void) {
+        var updatedTimeline = timeline
+        mutation(&updatedTimeline)
+        timeline = updatedTimeline
+    }
+
+    private func clipLocations(for clipIds: [String]) -> [String: ClipLocation] {
+        var locations: [String: ClipLocation] = [:]
+        locations.reserveCapacity(clipIds.count)
+        for clipId in clipIds {
+            if let location = findClip(id: clipId) {
+                locations[clipId] = location
+            }
+        }
+        return locations
     }
 
     /// Bidirectional undo/redo for a single clip's property change.
@@ -579,7 +655,7 @@ extension EditorViewModel {
         pendingReplacements.remove(clipId)
     }
 
-    private func linkedClipIdsSharingMedia(anchor: String) -> Set<String> {
+    func linkedClipIdsSharingMedia(anchor: String) -> Set<String> {
         guard let loc = findClip(id: anchor) else { return [anchor] }
         let clip = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
         var ids: Set<String> = [anchor]
@@ -596,7 +672,10 @@ extension EditorViewModel {
 
     /// Replace the source asset a clip points at, preserving states. 
     /// Registered as a single undo step.
-    func replaceClipMediaRef(clipId: String, newAssetId: String, resetTrim: Bool = false) {
+    func replaceClipMediaRef(
+        clipId: String, newAssetId: String, resetTrim: Bool = false,
+        trimEndFrames: [String: Int] = [:]
+    ) {
         guard let loc = findClip(id: clipId) else { return }
         let oldMediaRef = timeline.tracks[loc.trackIndex].clips[loc.clipIndex].mediaRef
         guard oldMediaRef != newAssetId else { return }
@@ -604,34 +683,16 @@ extension EditorViewModel {
             prepareMediaVisuals(for: asset)
         }
 
-        let targetIds = linkedClipIdsSharingMedia(anchor: clipId)
-
-        var oldTrims: [String: (start: Int, end: Int)] = [:]
-        for id in targetIds {
-            if let l = findClip(id: id) {
-                if resetTrim {
-                    let c = timeline.tracks[l.trackIndex].clips[l.clipIndex]
-                    oldTrims[id] = (c.trimStartFrame, c.trimEndFrame)
-                    timeline.tracks[l.trackIndex].clips[l.clipIndex].trimStartFrame = 0
-                    timeline.tracks[l.trackIndex].clips[l.clipIndex].trimEndFrame = 0
-                }
-                timeline.tracks[l.trackIndex].clips[l.clipIndex].mediaRef = newAssetId
+        commitClipProperties(clipIds: linkedClipIdsSharingMedia(anchor: clipId).sorted(),
+                             actionName: "Replace Clip Source") { clip in
+            clip.mediaRef = newAssetId
+            if resetTrim {
+                clip.trimStartFrame = 0
+                clip.trimEndFrame = 0
+            } else if let trimEndFrame = trimEndFrames[clip.id] {
+                clip.trimEndFrame = trimEndFrame
             }
         }
-
-        registerTimelineUndo("Replace Clip Source") { vm in
-            for id in targetIds {
-                if let l = vm.findClip(id: id) {
-                    vm.timeline.tracks[l.trackIndex].clips[l.clipIndex].mediaRef = oldMediaRef
-                    if let old = oldTrims[id] {
-                        vm.timeline.tracks[l.trackIndex].clips[l.clipIndex].trimStartFrame = old.start
-                        vm.timeline.tracks[l.trackIndex].clips[l.clipIndex].trimEndFrame = old.end
-                    }
-                }
-            }
-            vm.notifyTimelineChanged()
-        }
-        notifyTimelineChanged()
     }
 
     // MARK: - Playhead-relative operations
@@ -666,10 +727,6 @@ extension EditorViewModel {
 
     func deleteSelectedClips() {
         removeClips(ids: selectedClipIds)
-    }
-
-    func deleteSelectedMediaAssets() {
-        deleteMediaAssets(ids: selectedMediaAssetIds)
     }
 
     func deleteMediaAssets(ids: Set<String>) {

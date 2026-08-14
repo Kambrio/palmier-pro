@@ -3,19 +3,24 @@ import CoreText
 import SwiftUI
 
 struct TextStyle: Codable, Sendable, Equatable, Hashable {
-    var fontName: String = "Helvetica-Bold"
+    static let axisScaleRange = 0.1...10.0
+
+    var fontName: String = "Helvetica"
     var fontSize: Double = 96
     var fontScale: Double = 1.0
+    var widthScale: Double = 1.0
+    var heightScale: Double = 1.0
     var tracking: Double = 0
     var lineSpacing: Double = 0
     var fontCase: FontCase = .mixed
-    var isBold: Bool = true
+    var isBold: Bool = false
     var isItalic: Bool = false
     var isUnderlined: Bool = false
     var isStruckThrough: Bool = false
     var isOverlined: Bool = false
     var color: RGBA = RGBA()
     var alignment: Alignment = .center
+    var blur: Double = 0
     var shadow: Shadow = Shadow()
     var background: Background = Background()
     var border: Outline = Outline()
@@ -33,9 +38,9 @@ struct TextStyle: Codable, Sendable, Equatable, Hashable {
 
         var label: String {
             switch self {
-            case .mixed: "Mixed"
-            case .uppercase: "UPPERCASE"
-            case .lowercase: "lowercase"
+            case .mixed: L10n.key("Mixed")
+            case .uppercase: L10n.key("UPPERCASE")
+            case .lowercase: L10n.key("lowercase")
             }
         }
 
@@ -56,7 +61,7 @@ struct TextStyle: Codable, Sendable, Equatable, Hashable {
     }
 
     struct Shadow: Codable, Sendable, Equatable, Hashable {
-        var enabled: Bool = true
+        var enabled: Bool = false
         /// Alpha doubles as opacity; layer.shadowOpacity stays at 1.
         var color: RGBA = RGBA(r: 0, g: 0, b: 0, a: 0.6)
         /// Canvas points; scaled at render time.
@@ -143,36 +148,44 @@ struct TextStyle: Codable, Sendable, Equatable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case fontName, fontSize, fontScale, tracking, lineSpacing, fontCase
+        case fontName, fontSize, fontScale, widthScale, heightScale, tracking, lineSpacing, fontCase
         case isBold, isItalic, isUnderlined, isStruckThrough, isOverlined
-        case color, alignment, shadow, background, border
+        case color, alignment, blur, shadow, background, border
     }
+}
+
+extension TextStyle {
+    static var caption: TextStyle { TextStyle(fontSize: AppTheme.Caption.defaultFontSize) }
 }
 
 extension TextStyle {
     /// Missing-key-tolerant decode — older files pick up defaults for fields added later.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let fontName = (try? c.decode(String.self, forKey: .fontName)) ?? "Helvetica-Bold"
-        let fontSize = (try? c.decode(Double.self, forKey: .fontSize)) ?? 96
+        let defaults = TextStyle()
+        let fontName = (try? c.decode(String.self, forKey: .fontName)) ?? defaults.fontName
+        let fontSize = (try? c.decode(Double.self, forKey: .fontSize)) ?? defaults.fontSize
         let inferredTraits = Self.symbolicTraits(fontName: fontName, size: CGFloat(fontSize))
         self.init(
             fontName: fontName,
             fontSize: fontSize,
-            fontScale: (try? c.decode(Double.self, forKey: .fontScale)) ?? 1.0,
-            tracking: (try? c.decode(Double.self, forKey: .tracking)) ?? 0,
-            lineSpacing: (try? c.decode(Double.self, forKey: .lineSpacing)) ?? 0,
-            fontCase: (try? c.decode(FontCase.self, forKey: .fontCase)) ?? .mixed,
+            fontScale: (try? c.decode(Double.self, forKey: .fontScale)) ?? defaults.fontScale,
+            widthScale: (try? c.decode(Double.self, forKey: .widthScale)) ?? defaults.widthScale,
+            heightScale: (try? c.decode(Double.self, forKey: .heightScale)) ?? defaults.heightScale,
+            tracking: (try? c.decode(Double.self, forKey: .tracking)) ?? defaults.tracking,
+            lineSpacing: (try? c.decode(Double.self, forKey: .lineSpacing)) ?? defaults.lineSpacing,
+            fontCase: (try? c.decode(FontCase.self, forKey: .fontCase)) ?? defaults.fontCase,
             isBold: (try? c.decode(Bool.self, forKey: .isBold)) ?? inferredTraits.contains(.traitBold),
             isItalic: (try? c.decode(Bool.self, forKey: .isItalic)) ?? inferredTraits.contains(.traitItalic),
-            isUnderlined: (try? c.decode(Bool.self, forKey: .isUnderlined)) ?? false,
-            isStruckThrough: (try? c.decode(Bool.self, forKey: .isStruckThrough)) ?? false,
-            isOverlined: (try? c.decode(Bool.self, forKey: .isOverlined)) ?? false,
-            color: (try? c.decode(RGBA.self, forKey: .color)) ?? RGBA(),
-            alignment: (try? c.decode(Alignment.self, forKey: .alignment)) ?? .center,
-            shadow: (try? c.decode(Shadow.self, forKey: .shadow)) ?? Shadow(),
-            background: (try? c.decode(Background.self, forKey: .background)) ?? Background(),
-            border: (try? c.decode(Outline.self, forKey: .border)) ?? Outline()
+            isUnderlined: (try? c.decode(Bool.self, forKey: .isUnderlined)) ?? defaults.isUnderlined,
+            isStruckThrough: (try? c.decode(Bool.self, forKey: .isStruckThrough)) ?? defaults.isStruckThrough,
+            isOverlined: (try? c.decode(Bool.self, forKey: .isOverlined)) ?? defaults.isOverlined,
+            color: (try? c.decode(RGBA.self, forKey: .color)) ?? defaults.color,
+            alignment: (try? c.decode(Alignment.self, forKey: .alignment)) ?? defaults.alignment,
+            blur: (try? c.decode(Double.self, forKey: .blur)) ?? defaults.blur,
+            shadow: (try? c.decode(Shadow.self, forKey: .shadow)) ?? defaults.shadow,
+            background: (try? c.decode(Background.self, forKey: .background)) ?? defaults.background,
+            border: (try? c.decode(Outline.self, forKey: .border)) ?? defaults.border
         )
     }
 }
@@ -197,6 +210,11 @@ extension TextStyle.RGBA {
 
     var swiftUIColor: Color {
         Color(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+
+    var hexString: String {
+        let bytes = [r, g, b, a].map { Int((min(max($0, 0), 1) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X%02X", bytes[0], bytes[1], bytes[2], bytes[3])
     }
 
     init(_ color: Color) {
@@ -238,9 +256,46 @@ extension TextStyle.RGBA {
 }
 
 extension TextStyle {
+    nonisolated(unsafe) private static let resolvedFontCache: NSCache<NSString, NSFont> = {
+        let cache = NSCache<NSString, NSFont>()
+        cache.countLimit = 512
+        return cache
+    }()
+
+    var scaledVisualStyle: TextStyle {
+        guard fontScale != 1 else { return self }
+        var style = self
+        style.fontSize *= fontScale
+        style.tracking *= fontScale
+        style.lineSpacing *= fontScale
+        style.shadow.offsetX *= fontScale
+        style.shadow.offsetY *= fontScale
+        style.shadow.blur *= fontScale
+        style.border.width *= fontScale
+        style.background.paddingX *= fontScale
+        style.background.paddingY *= fontScale
+        style.background.cornerRadius *= fontScale
+        style.background.offsetX *= fontScale
+        style.background.offsetY *= fontScale
+        style.background.outlineWidth *= fontScale
+        style.fontScale = 1
+        return style
+    }
+
     func resolvedFont(size: CGFloat) -> NSFont {
-        let base = NSFont(name: fontName, size: size) ?? NSFont.systemFont(ofSize: size)
-        return Self.font(base, size: size, bold: isBold, italic: isItalic)
+        let key = "\(fontName.utf8.count):\(fontName)|\(Double(size).bitPattern)|\(isBold)|\(isItalic)|\(widthScale.bitPattern)|\(heightScale.bitPattern)" as NSString
+        if let cached = Self.resolvedFontCache.object(forKey: key) { return cached }
+
+        let namedBase = NSFont(name: fontName, size: size)
+        let base = namedBase ?? NSFont.systemFont(ofSize: size)
+        var resolved = Self.font(base, size: size, bold: isBold, italic: isItalic)
+        if widthScale != 1 || heightScale != 1 {
+            var transform = CGAffineTransform(scaleX: CGFloat(widthScale), y: CGFloat(heightScale))
+            resolved = CTFontCreateCopyWithAttributes(resolved as CTFont, size, &transform, nil) as NSFont
+        }
+        // A bundled font may not be registered yet; do not cache its fallback.
+        if namedBase != nil { Self.resolvedFontCache.setObject(resolved, forKey: key) }
+        return resolved
     }
 
     var nsColor: NSColor { color.nsColor }
@@ -266,30 +321,42 @@ extension TextStyle {
         fontCase.apply(to: text)
     }
 
+    /// Two-pass outlines need an opaque fill; translucent fills would show the undercoat through them.
+    var drawsGlyphOutline: Bool {
+        border.enabled && border.width > 0 && color.a >= 1
+    }
+
     /// `includeColor: false` for bounding measurement (color doesn't affect size).
     func attributes(size: CGFloat, includeColor: Bool = true) -> [NSAttributedString.Key: Any] {
-        var attrs: [NSAttributedString.Key: Any] = [
-            .font: resolvedFont(size: size),
-            .paragraphStyle: paragraphStyle(size: size),
-            .kern: tracking * Double(size) / max(1, fontSize * fontScale),
-        ]
+        var attrs = baseAttributes(size: size)
         if isUnderlined { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
         if isStruckThrough { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         if includeColor { attrs[.foregroundColor] = nsColor }
-        if border.enabled {
-            attrs[.strokeWidth] = NSNumber(value: glyphBorderStrokePercentage)
+        if border.enabled, border.width > 0, !drawsGlyphOutline {
+            attrs[.strokeWidth] = NSNumber(value: -100 * max(0, border.width) / max(1, fontSize * fontScale))
             if includeColor { attrs[.strokeColor] = border.color.nsColor }
         }
         return attrs
     }
 
-    func glyphBorderPadding(fontSize: CGFloat) -> CGFloat {
-        ceil(fontSize * CGFloat(abs(glyphBorderStrokePercentage)) / 100)
+    /// Stroke-only undercoat at 2× width; the fill drawn on top covers the inner half, leaving `border.width` outward.
+    func outlineUndercoatAttributes(size: CGFloat) -> [NSAttributedString.Key: Any] {
+        var attrs = baseAttributes(size: size)
+        attrs[.strokeWidth] = NSNumber(value: 200 * max(0, border.width) / max(1, fontSize * fontScale))
+        attrs[.strokeColor] = border.color.nsColor
+        return attrs
     }
 
-    private var glyphBorderStrokePercentage: Double {
-        let unscaledFontSize = max(1, fontSize * fontScale)
-        return -100 * max(0, border.width) / unscaledFontSize
+    func glyphBorderPadding(fontSize: CGFloat) -> CGFloat {
+        ceil(fontSize * CGFloat(max(0, border.width)) / CGFloat(max(1, self.fontSize * fontScale)))
+    }
+
+    private func baseAttributes(size: CGFloat) -> [NSAttributedString.Key: Any] {
+        [
+            .font: resolvedFont(size: size),
+            .paragraphStyle: paragraphStyle(size: size),
+            .kern: tracking * Double(size) / max(1, fontSize * fontScale),
+        ]
     }
 
     private static func font(_ font: NSFont, size: CGFloat, bold: Bool, italic: Bool) -> NSFont {

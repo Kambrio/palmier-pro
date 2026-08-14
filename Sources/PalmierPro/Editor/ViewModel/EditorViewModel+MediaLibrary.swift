@@ -278,11 +278,11 @@ extension EditorViewModel {
     @discardableResult
     func addMediaAsset(from url: URL, folderId: String? = nil, finalize: Bool = true) -> MediaAsset? {
         guard let type = ClipType(fileExtension: url.pathExtension.lowercased()) else {
-            mediaPanelToast = "Can't import \"\(url.lastPathComponent)\" — unsupported file type."
+            mediaPanelToast = MediaPanelToast(message: L10n.string("Can't import \"\(url.lastPathComponent)\" — unsupported file type."))
             return nil
         }
         if type == .lottie, !LottieVideoGenerator.isLottie(at: url) {
-            mediaPanelToast = "Can't import \"\(url.lastPathComponent)\" — not a Lottie animation."
+            mediaPanelToast = MediaPanelToast(message: L10n.string("Can't import \"\(url.lastPathComponent)\" — not a Lottie animation."))
             return nil
         }
         return addMediaAsset(from: url, type: type, folderId: folderId, finalize: finalize)
@@ -303,6 +303,7 @@ extension EditorViewModel {
     struct MediaImportSummary: Sendable {
         var assetCount: Int
         var folderCount: Int
+        var assets: [MediaAsset] = []
     }
 
     /// Import files and folders from the open panel or a Finder drop as one undo step
@@ -310,6 +311,7 @@ extension EditorViewModel {
     func importFinderItems(
         _ urls: [URL],
         into folderId: String?,
+        finalize: Bool = true,
         applying mutation: (@MainActor (@MainActor () -> MediaImportSummary) async throws -> MediaImportSummary)? = nil
     ) async throws -> MediaImportSummary {
         let previous = mediaImportTail
@@ -317,7 +319,7 @@ extension EditorViewModel {
         let sequence = mediaImportSequence
         let task = Task { @MainActor in
             _ = try? await previous?.value
-            return try await performFinderImport(urls, into: folderId, applying: mutation)
+            return try await performFinderImport(urls, into: folderId, finalize: finalize, applying: mutation)
         }
         mediaImportTail = task
 
@@ -331,6 +333,7 @@ extension EditorViewModel {
     private func performFinderImport(
         _ urls: [URL],
         into folderId: String?,
+        finalize: Bool,
         applying mutation: (@MainActor (@MainActor () -> MediaImportSummary) async throws -> MediaImportSummary)?
     ) async throws -> MediaImportSummary {
         let before = mediaLibraryUndoSnapshot()
@@ -340,13 +343,17 @@ extension EditorViewModel {
             MediaImportScanner.scan(roots: roots)
         }.value
         if let mutation {
-            return try await mutation { self.applyMediaImportPlan(plan, restoringFrom: before) }
+            return try await mutation { self.applyMediaImportPlan(plan, restoringFrom: before, finalize: finalize) }
         }
-        return applyMediaImportPlan(plan, restoringFrom: before)
+        return applyMediaImportPlan(plan, restoringFrom: before, finalize: finalize)
     }
 
     @discardableResult
-    private func applyMediaImportPlan(_ plan: MediaImportPlan, restoringFrom before: MediaLibraryUndoSnapshot) -> MediaImportSummary {
+    private func applyMediaImportPlan(
+        _ plan: MediaImportPlan,
+        restoringFrom before: MediaLibraryUndoSnapshot,
+        finalize: Bool = true
+    ) -> MediaImportSummary {
         let importedAssets = undo.withoutRegistration {
             var folderIds = Array(repeating: "", count: plan.folders.count)
             for (index, folder) in plan.folders.enumerated() {
@@ -378,21 +385,24 @@ extension EditorViewModel {
         }
 
         if let name = plan.rejectedUnsupportedNames.last {
-            mediaPanelToast = "Can't import \"\(name)\" — unsupported file type."
+            mediaPanelToast = MediaPanelToast(message: L10n.string("Can't import \"\(name)\" — unsupported file type."))
         } else if let name = plan.rejectedLottieNames.last {
-            mediaPanelToast = "Can't import \"\(name)\" — not a Lottie animation."
+            mediaPanelToast = MediaPanelToast(message: L10n.string("Can't import \"\(name)\" — not a Lottie animation."))
         }
 
         let summary = MediaImportSummary(
             assetCount: mediaAssets.count - before.mediaAssets.count,
-            folderCount: mediaManifest.folders.count - before.mediaManifest.folders.count
+            folderCount: mediaManifest.folders.count - before.mediaManifest.folders.count,
+            assets: importedAssets
         )
         guard summary.assetCount != 0 || summary.folderCount != 0 else { return summary }
         undo.register("Import Media", withTarget: self) { vm in
             vm.restoreMediaLibraryUndoSnapshot(before, actionName: "Import Media")
         }
-        for asset in importedAssets {
-            Task { await finalizeImportedAsset(asset, batchManifestUpdate: true) }
+        if finalize {
+            for asset in importedAssets {
+                Task { await finalizeImportedAsset(asset, batchManifestUpdate: true) }
+            }
         }
         return summary
     }
@@ -403,6 +413,77 @@ extension EditorViewModel {
             id
         case .plannedFolder(let index):
             plannedFolderIds[index]
+        }
+    }
+
+    func dropPlaceholderAssets(for urls: [URL]) -> [MediaAsset] {
+        urls.compactMap { url in
+            // hasDirectoryPath avoids disk access on the drag-hover path.
+            guard !url.hasDirectoryPath,
+                  let type = ClipType(fileExtension: url.pathExtension.lowercased()) else { return nil }
+            let asset = MediaAsset(
+                url: url, type: type,
+                name: url.deletingPathExtension().lastPathComponent,
+                duration: Defaults.imageDurationSeconds
+            )
+            asset.hasAudio = type == .video
+            return asset
+        }
+    }
+
+    func importFinderItemsToTimeline(
+        _ urls: [URL],
+        cursor: TrackDropTarget,
+        atFrame: Int,
+        ripple: Bool
+    ) async {
+        var before: MediaLibraryUndoSnapshot?
+        let summary = try? await importFinderItems(urls, into: mediaPanelCurrentFolderId, finalize: false) { apply in
+            before = self.mediaLibraryUndoSnapshot()
+            return self.undo.withoutRegistration { apply() }
+        }
+        guard let summary, let before,
+              summary.assetCount != 0 || summary.folderCount != 0 else { return }
+
+        var placeable: [MediaAsset] = []
+        for asset in summary.assets {
+            if await finalizeImportedAsset(asset, batchManifestUpdate: true) {
+                placeable.append(asset)
+            }
+        }
+        // Pre-parse subtitle files so caption placement joins the drop's single undo group.
+        var captionSpecSets: [[TextClipSpec]] = []
+        for asset in placeable where asset.type == .subtitle {
+            guard let url = mediaResolver.resolveURL(for: asset.id) else { continue }
+            do {
+                captionSpecSets.append(try await subtitleCaptionSpecs(from: url))
+            } catch {
+                mediaPanelToast = MediaPanelToast(
+                    message: L10n.string("Can't add captions from \"\(asset.name)\" — \(error.localizedDescription)")
+                )
+            }
+        }
+        // Revalidate after the awaits: bail if the project changed while metadata loaded.
+        guard summary.assets.allSatisfy({ mediaAssetsById[$0.id] === $0 }) else { return }
+
+        let operation: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            undo.perform("Add Media") {
+                undo.register("Add Media", withTarget: self) { vm in
+                    vm.restoreMediaLibraryUndoSnapshot(before, actionName: "Add Media")
+                }
+                if !placeable.isEmpty {
+                    placeDroppedAssets(placeable, cursor: cursor, atFrame: atFrame, ripple: ripple)
+                }
+                for specs in captionSpecSets {
+                    placeCaptionTrack(specs, actionName: "Add Media")
+                }
+            }
+        }
+        if placeable.isEmpty {
+            operation()
+        } else {
+            addClipsWithSettingsCheck(assets: placeable, operation: operation)
         }
     }
 
@@ -417,20 +498,6 @@ extension EditorViewModel {
             Log.project.error("importPastedImageData: write failed \(error.localizedDescription)")
             return nil
         }
-    }
-
-    func fitTextClipToContent(clipId: String) {
-        let canvasW = Double(timeline.width)
-        let canvasH = Double(timeline.height)
-        guard let loc = findClip(id: clipId) else { return }
-        let original = timeline.tracks[loc.trackIndex].clips[loc.clipIndex]
-        var fitted = original
-        guard fitTextClipToContentIfNeeded(&fitted, canvasW: canvasW, canvasH: canvasH) else { return }
-        if dragBefore[clipId] == nil {
-            dragBefore[clipId] = original
-        }
-        timeline.tracks[loc.trackIndex].clips[loc.clipIndex] = fitted
-        videoEngine?.refreshVisuals()
     }
 
     func fitTextClipToContentIfNeeded(_ clip: inout Clip, canvasW: Double, canvasH: Double) -> Bool {
@@ -458,7 +525,17 @@ extension EditorViewModel {
         case .center:
             cx = tl.x + currentW / 2
         }
-        clip.transform = Transform(center: (cx, cy), width: needW, height: needH)
+        if var track = clip.scaleTrack, currentW > 0, currentH > 0 {
+            for index in track.keyframes.indices {
+                track.keyframes[index].value.a *= needW / currentW
+                track.keyframes[index].value.b *= needH / currentH
+            }
+            clip.scaleTrack = track
+        }
+        clip.transform.centerX = cx
+        clip.transform.centerY = cy
+        clip.transform.width = needW
+        clip.transform.height = needH
         return true
     }
 
@@ -543,69 +620,6 @@ extension EditorViewModel {
         return mediaAssetsById[clip.mediaRef]?.isGenerating ?? false
     }
 
-    enum MediaSelectionDirection {
-        case left, right, up, down
-
-        func step(columnCount: Int) -> Int {
-            switch self {
-            case .left: -1
-            case .right: +1
-            case .up: -columnCount
-            case .down: +columnCount
-            }
-        }
-
-        var startsFromEnd: Bool { self == .left || self == .up }
-    }
-
-    func moveMediaSelection(direction: MediaSelectionDirection) {
-        let ordered = mediaPanelOrderedItemIds
-        guard !ordered.isEmpty else { return }
-        let selectedKeys = mediaPanelSelectedKeys()
-
-        let next: String
-        if let anchor = ordered.last(where: { selectedKeys.contains($0) }),
-           let idx = ordered.firstIndex(of: anchor) {
-            let raw = idx + direction.step(columnCount: max(1, mediaPanelColumnCount))
-            let target = max(0, min(ordered.count - 1, raw))
-            guard target != idx else { return }
-            next = ordered[target]
-        } else {
-            next = direction.startsFromEnd ? ordered[ordered.count - 1] : ordered[0]
-        }
-
-        selectMediaPanelItem(next)
-    }
-
-    private func mediaPanelSelectedKeys() -> Set<String> {
-        var keys = selectedMediaAssetIds
-        keys.formUnion(selectedFolderIds.map(MediaPanelItemKey.folder))
-        keys.formUnion(selectedTimelineIds.map(MediaPanelItemKey.timeline))
-        return keys
-    }
-
-    func selectMediaPanelItem(_ key: String) {
-        if let folderId = MediaPanelItemKey.folderId(from: key) {
-            guard folder(id: folderId) != nil else { return }
-            mediaPanelScrollTarget = key
-            selectedFolderIds = [folderId]
-            selectedMediaAssetIds.removeAll()
-            selectedTimelineIds.removeAll()
-            return
-        }
-        if let timelineId = MediaPanelItemKey.timelineId(from: key) {
-            guard timeline(for: timelineId) != nil else { return }
-            mediaPanelScrollTarget = key
-            selectedTimelineIds = [timelineId]
-            selectedFolderIds.removeAll()
-            selectedMediaAssetIds.removeAll()
-            return
-        }
-        guard let asset = mediaAssets.first(where: { $0.id == key }) else { return }
-        mediaPanelScrollTarget = key
-        selectMediaAsset(asset)
-    }
-
     func renameMediaAsset(id: String, name: String) {
         guard let asset = mediaAssets.first(where: { $0.id == id }) else { return }
         let oldName = asset.name
@@ -659,80 +673,6 @@ extension EditorViewModel {
         }
         pendingManifestMetadataUpdates.removeAll(keepingCapacity: true)
         updateManifestMetadata(for: assets)
-    }
-
-    /// Text is composited via `CALayer.render` — `AVAssetImageGenerator`
-    /// doesn't evaluate `animationTool` on single-frame extraction.
-    func captureCurrentFrameToMedia() {
-        guard let currentItem = videoEngine?.player.currentItem else {
-            Log.project.error("captureCurrentFrameToMedia: no preview item")
-            return
-        }
-
-        let tab = activePreviewTab
-        let isTimelineTab: Bool
-        let frame: Int
-        let nameBase: String
-        switch tab {
-        case .timeline:
-            isTimelineTab = true
-            frame = currentFrame
-            nameBase = "Frame"
-        case .mediaAsset(let id, _, let type):
-            guard type == .video else { return }
-            isTimelineTab = false
-            frame = sourcePlayheadFrame
-            nameBase = mediaAssets.first(where: { $0.id == id })?.name ?? "Frame"
-        }
-
-        let asset = currentItem.asset
-        let fps = timeline.fps
-        let canvas = CGSize(width: timeline.width, height: timeline.height)
-        let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps))
-
-        let videoComposition = isTimelineTab ? currentItem.videoComposition : nil
-
-        Task.detached {
-            guard (try? await asset.loadTracks(withMediaType: .video).first) != nil else {
-                Log.project.error("captureCurrentFrameToMedia: no video track")
-                return
-            }
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.requestedTimeToleranceBefore = .zero
-            generator.requestedTimeToleranceAfter = .zero
-            if let videoComposition {
-                generator.videoComposition = videoComposition
-                generator.maximumSize = canvas
-            }
-
-            let videoCG: CGImage
-            do {
-                videoCG = try await generator.image(at: time).image
-            } catch {
-                Log.project.error("captureCurrentFrameToMedia: generate failed \(error.localizedDescription)")
-                return
-            }
-
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                // The timeline videoComposition already composites text via CustomVideoCompositor.
-                let rep = NSBitmapImageRep(cgImage: videoCG)
-                guard let data = rep.representation(using: .png, properties: [:]) else {
-                    Log.project.error("captureCurrentFrameToMedia: png encode failed")
-                    return
-                }
-                Task { @MainActor [weak self] in
-                    guard let self,
-                          let mediaAsset = await self.importPastedImageData(data, fileExtension: "png") else { return }
-                    mediaAsset.name = "\(nameBase) \(frame)"
-                    if let idx = self.mediaManifest.entries.firstIndex(where: { $0.id == mediaAsset.id }) {
-                        self.mediaManifest.entries[idx].name = mediaAsset.name
-                    }
-                    self.moveAssetsToFolder(assetIds: [mediaAsset.id], folderId: self.mediaPanelCurrentFolderId)
-                }
-            }
-        }
     }
 
     @discardableResult
@@ -791,7 +731,7 @@ extension EditorViewModel {
             mediaVisualCache.generateWaveform(for: asset)
         case .image:
             mediaVisualCache.generateImageThumbnail(for: asset)
-        case .text, .lottie, .sequence:
+        case .text, .lottie, .sequence, .subtitle:
             break
         }
     }
@@ -814,16 +754,16 @@ extension EditorViewModel {
         }
         if case .mediaAsset(let id, _, let type) = activePreviewTab,
            id == asset.id,
-           type != .image {
+           type != .image, type != .subtitle {
             videoEngine?.previewAsset(asset)
             videoEngine?.seek(to: sourcePlayheadFrame, mode: .exact)
         }
     }
 
-    struct TextClipSpec {
+    struct TextClipSpec: Sendable {
         let trackIndex: Int
-        let startFrame: Int
-        let durationFrames: Int
+        var startFrame: Int
+        var durationFrames: Int
         let content: String
         let style: TextStyle
         /// When nil the box is auto-fit to content and centered on the canvas.
@@ -832,6 +772,7 @@ extension EditorViewModel {
         /// Per-word timing (clip-relative frames) for karaoke animation; empty when unavailable.
         var words: [WordTiming]? = nil
         var animation: TextAnimation? = nil
+        var fillMode: TextFillMode? = nil
     }
 
     /// Batch variant of `addTextClip` for agent flows.
@@ -842,50 +783,74 @@ extension EditorViewModel {
         let canvasW = Double(timeline.width)
         let canvasH = Double(timeline.height)
         var createdIds = [String?](repeating: nil, count: specs.count)
+        var batchTimeline = clearExistingRegions ? nil : timeline
 
-        let indicesByTrack = Dictionary(grouping: specs.indices, by: { specs[$0].trackIndex })
-        for (_, indices) in indicesByTrack {
-            let ordered = indices.sorted { specs[$0].startFrame < specs[$1].startFrame }
-            for i in ordered {
-                let spec = specs[i]
-                guard timeline.tracks.indices.contains(spec.trackIndex) else { continue }
-                let start = max(0, spec.startFrame)
-                let duration = max(1, spec.durationFrames)
-                if clearExistingRegions {
-                    clearRegion(trackIndex: spec.trackIndex, start: start, end: start + duration, prune: false)
+        let orderedIndices: [Int]
+        if clearExistingRegions {
+            orderedIndices = Dictionary(grouping: specs.indices, by: { specs[$0].trackIndex })
+                .values.flatMap { indices in
+                    indices.sorted { specs[$0].startFrame < specs[$1].startFrame }
                 }
-
-                let resolved: Transform
-                if let t = spec.transform {
-                    resolved = t
-                } else {
-                    let natural = TextLayout.naturalSize(
-                        content: spec.content, style: spec.style, maxWidth: CGFloat(canvasW) * 0.9, canvasHeight: CGFloat(canvasH)
-                    )
-                    let w = Double(natural.width) / canvasW
-                    let h = Double(natural.height) / canvasH
-                    resolved = Transform(topLeft: ((1 - w) / 2, (1 - h) / 2), width: w, height: h)
-                }
-                var clip = Clip(
-                    mediaRef: "",
-                    mediaType: .text,
-                    sourceClipType: .text,
-                    startFrame: start,
-                    durationFrames: duration,
-                    transform: resolved
-                )
-                clip.textContent = spec.content
-                clip.textStyle = spec.style
-                clip.captionGroupId = spec.captionGroupId
-                clip.wordTimings = spec.words
-                clip.textAnimation = spec.animation
-                timeline.tracks[spec.trackIndex].clips.append(clip)
-                createdIds[i] = clip.id
-            }
+        } else {
+            orderedIndices = Array(specs.indices)
         }
 
-        for i in Set(specs.map(\.trackIndex)) where timeline.tracks.indices.contains(i) {
-            sortClips(trackIndex: i)
+        for i in orderedIndices {
+            let spec = specs[i]
+            let trackExists = batchTimeline?.tracks.indices.contains(spec.trackIndex)
+                ?? timeline.tracks.indices.contains(spec.trackIndex)
+            guard trackExists else { continue }
+            let start = max(0, spec.startFrame)
+            let duration = max(1, spec.durationFrames)
+            if clearExistingRegions {
+                clearRegion(trackIndex: spec.trackIndex, start: start, end: start + duration, prune: false)
+            }
+
+            let resolved: Transform
+            if let t = spec.transform {
+                resolved = t
+            } else {
+                let natural = TextLayout.naturalSize(
+                    content: spec.content, style: spec.style, maxWidth: CGFloat(canvasW) * 0.9, canvasHeight: CGFloat(canvasH)
+                )
+                let w = Double(natural.width) / canvasW
+                let h = Double(natural.height) / canvasH
+                resolved = Transform(topLeft: ((1 - w) / 2, (1 - h) / 2), width: w, height: h)
+            }
+            var clip = Clip(
+                mediaRef: "",
+                mediaType: .text,
+                sourceClipType: .text,
+                startFrame: start,
+                durationFrames: duration,
+                transform: resolved
+            )
+            clip.textContent = spec.content
+            clip.textStyle = spec.style
+            clip.captionGroupId = spec.captionGroupId
+            clip.wordTimings = spec.words
+            clip.textAnimation = spec.animation
+            if let fillMode = spec.fillMode {
+                clip.setTextFillMode(fillMode, footageMatteColor: spec.style.color)
+            }
+            if batchTimeline != nil {
+                batchTimeline!.tracks[spec.trackIndex].clips.append(clip)
+            } else {
+                timeline.tracks[spec.trackIndex].clips.append(clip)
+            }
+            createdIds[i] = clip.id
+        }
+
+        if var updatedTimeline = batchTimeline {
+            guard createdIds.contains(where: { $0 != nil }) else { return [] }
+            for i in Set(specs.map(\.trackIndex)) where updatedTimeline.tracks.indices.contains(i) {
+                updatedTimeline.tracks[i].clips.sort { $0.startFrame < $1.startFrame }
+            }
+            timeline = updatedTimeline
+        } else {
+            for i in Set(specs.map(\.trackIndex)) where timeline.tracks.indices.contains(i) {
+                sortClips(trackIndex: i)
+            }
         }
         if refreshVisuals {
             videoEngine?.refreshVisuals()
@@ -895,43 +860,32 @@ extension EditorViewModel {
 
     @discardableResult
     func addTextClip(content: String = "Text", style: TextStyle = TextStyle()) -> String? {
-        undo.perform("Add Text") {
-            let durationFrames = max(1, secondsToFrame(seconds: Defaults.textDurationSeconds, fps: timeline.fps))
+        let durationFrames = max(1, secondsToFrame(seconds: Defaults.textDurationSeconds, fps: timeline.fps))
+        let canvasW = Double(timeline.width)
+        let canvasH = Double(timeline.height)
+        let natural = TextLayout.naturalSize(content: content, style: style, maxWidth: CGFloat(canvasW) * 0.9, canvasHeight: CGFloat(canvasH))
+        let w = Double(natural.width) / canvasW
+        let h = Double(natural.height) / canvasH
+        let transform = Transform(topLeft: ((1 - w) / 2, (1 - h) / 2), width: w, height: h)
 
-            // Index 0 is the topmost slot in the timeline UI.
+        var clip = Clip(
+            mediaRef: "",
+            mediaType: .text,
+            sourceClipType: .text,
+            startFrame: max(0, currentFrame),
+            durationFrames: durationFrames,
+            transform: transform
+        )
+        clip.textContent = content
+        clip.textStyle = style
+        let clipId = clip.id
+
+        withTimelineSwap(actionName: "Add Text") {
             let trackIdx = insertTrack(at: 0, type: .video)
-
-            let canvasW = Double(timeline.width)
-            let canvasH = Double(timeline.height)
-            let natural = TextLayout.naturalSize(content: content, style: style, maxWidth: CGFloat(canvasW) * 0.9, canvasHeight: CGFloat(canvasH))
-            let w = Double(natural.width) / canvasW
-            let h = Double(natural.height) / canvasH
-            let transform = Transform(topLeft: ((1 - w) / 2, (1 - h) / 2), width: w, height: h)
-
-            var clip = Clip(
-                mediaRef: "",
-                mediaType: .text,
-                sourceClipType: .text,
-                startFrame: max(0, currentFrame),
-                durationFrames: durationFrames,
-                transform: transform
-            )
-            clip.textContent = content
-            clip.textStyle = style
-            let clipId = clip.id
-
             timeline.tracks[trackIdx].clips.append(clip)
             sortClips(trackIndex: trackIdx)
-
-            undo.register("Add Text", withTarget: self) { vm in
-                if let loc = vm.findClip(id: clipId) {
-                    vm.timeline.tracks[loc.trackIndex].clips.remove(at: loc.clipIndex)
-                    vm.videoEngine?.refreshVisuals()
-                }
-            }
-            selectedClipIds = [clipId]
-            videoEngine?.refreshVisuals()
-            return clipId
         }
+        selectedClipIds = [clipId]
+        return clipId
     }
 }

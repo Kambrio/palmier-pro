@@ -40,7 +40,15 @@ private typealias DocumentCloseCallback = @convention(c) (
     AnyObject, Selector, NSDocument, Bool, UnsafeMutableRawPointer?
 ) -> Void
 
-final class VideoProject: NSDocument {
+class VideoProject: NSDocument {
+    private struct SaveRequest {
+        let url: URL
+        let typeName: String
+        let operation: NSDocument.SaveOperationType
+        let completion: (Error?) -> Void
+    }
+
+    private var saveQueue: [SaveRequest] = []
 
     static let typeIdentifier = Project.typeIdentifier
 
@@ -119,8 +127,7 @@ final class VideoProject: NSDocument {
                 "timelines": timelines.count,
                 "tracks": timelines.reduce(0) { $0 + $1.tracks.count },
                 "clips": timelines.reduce(0) { $0 + $1.tracks.reduce(0) { $0 + $1.clips.count } },
-                "media": loadedManifest?.entries.count ?? 0,
-                "hasGenerationLog": loadedGenerationLog != nil
+                "media": loadedManifest?.entries.count ?? 0
             ]
         )
     }
@@ -196,17 +203,32 @@ final class VideoProject: NSDocument {
     }
 
     override func save(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType, completionHandler: @escaping (Error?) -> Void) {
-        if let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+        let request = SaveRequest(
+            url: url,
+            typeName: typeName,
+            operation: saveOperation,
+            completion: completionHandler
+        )
+        editorViewModel.projectPackageCoordinator.saveStarted()
+        saveQueue.append(request)
+        guard saveQueue.count == 1 else { return }
+        performNextSave()
+    }
+
+    private func performNextSave() {
+        guard let request = saveQueue.first else { return }
+        if let date = try? request.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
             fileModificationDate = date
         }
 
         let coordinator = editorViewModel.projectPackageCoordinator
-        coordinator.saveStarted()
         captureSaveSnapshot()
         snapshotSourceProjectURL = fileURL
-        super.save(to: url, ofType: typeName, for: saveOperation) { error in
+        super.save(to: request.url, ofType: request.typeName, for: request.operation) { error in
             coordinator.saveFinished(success: error == nil)
-            completionHandler(error)
+            request.completion(error)
+            self.saveQueue.removeFirst()
+            self.performNextSave()
         }
     }
 
@@ -259,7 +281,20 @@ final class VideoProject: NSDocument {
         }
     }
 
+    override func writeSafely(
+        to url: URL,
+        ofType typeName: String,
+        for saveOperation: NSDocument.SaveOperationType
+    ) throws {
+        // NSDocument otherwise blocks the main thread while super prepares a safe-save directory.
+        unblockUserInteraction()
+        try super.writeSafely(to: url, ofType: typeName, for: saveOperation)
+    }
+
     override func write(to url: URL, ofType typeName: String) throws {
+        var mainThreadUnblocked = false
+        defer { if !mainThreadUnblocked { unblockUserInteraction() } }
+
         if !snapshotPreparedForWrite {
             guard Thread.isMainThread else {
                 Log.project.error("save: snapshot not prepared for off-main write()")
@@ -273,13 +308,13 @@ final class VideoProject: NSDocument {
 
         let file = snapshotProjectFile
         let manifest = snapshotManifest
-        let generationLog = snapshotGenerationLog
         let thumbnail = snapshotThumbnail
         let chatSessionFiles = snapshotChatSessionFiles
         let sourceURL = snapshotSourceProjectURL
         snapshotPreparedForWrite = false
         snapshotSourceProjectURL = nil
         unblockUserInteraction()
+        mainThreadUnblocked = true
 
         guard let file, let data = try? JSONEncoder().encode(file) else {
             Log.project.error("save: project snapshot missing at write()")
@@ -290,7 +325,7 @@ final class VideoProject: NSDocument {
             ProjectPackageSnapshot(
                 timeline: data,
                 manifest: manifest.flatMap { try? JSONEncoder().encode($0) },
-                generationLog: generationLog.flatMap { try? JSONEncoder().encode($0) },
+                generationLog: snapshotGenerationLog.flatMap { try? JSONEncoder().encode($0) },
                 shotLibrary: snapshotShotLibrary,
                 storyGraph: snapshotStoryGraph,
                 viewState: snapshotViewState,
@@ -482,6 +517,11 @@ final class VideoProject: NSDocument {
             if let oldURL, let newURL = newValue,
                oldURL.standardizedFileURL != newURL.standardizedFileURL {
                 MainActor.assumeIsolated {
+                    Telemetry.beginOperation("project_url_rebase", data: [
+                        "media_count": editorViewModel.mediaAssets.count,
+                        "registry_count": ProjectRegistry.shared.entries.count,
+                    ])
+                    defer { Telemetry.endOperation("project_url_rebase") }
                     ProjectRegistry.shared.updateURL(from: oldURL, to: newURL)
                     editorViewModel.rebaseProjectURL(from: oldURL, to: newURL)
                 }
@@ -547,6 +587,7 @@ final class VideoProject: NSDocument {
         let editorView = EditorView()
             .environment(editorViewModel)
             .focusEffectDisabled()
+            .background(.ultraThickMaterial)
             .sheet(isPresented: Bindable(editorViewModel).showExportDialog) { [editorViewModel] in
                 ExportView()
                     .environment(editorViewModel)
@@ -586,24 +627,25 @@ final class VideoProject: NSDocument {
                     .environment(editorViewModel)
             }
             .animation(.default, value: editorViewModel.proxyManager.isGenerating)
-        let hostingController = NSHostingController(rootView: editorView.tint(AppTheme.Accent.primary))
+        let hostingController = NSHostingController(rootView: editorView.appLocalization().tint(AppTheme.Accent.primary))
         hostingController.sizingOptions = .minSize
 
         let window = NSWindow(contentViewController: hostingController)
         window.minSize = AppTheme.Window.projectMin
-        window.appearance = NSAppearance(named: .darkAqua)
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = true
-        window.backgroundColor = NSColor(AppTheme.Background.surfaceColor)
+        window.backgroundColor = AppTheme.Background.base.withAlphaComponent(CGFloat(AppTheme.Opacity.medium))
+        window.isOpaque = false
+        window.styleMask.insert(.fullSizeContentView)
         window.fillVisibleScreen()
 
-        window.addTitlebarSwiftUI(TitleBarLeadingView().environment(editorViewModel), side: .leading, width: AppTheme.IconSize.lg + AppTheme.Spacing.sm)
+        window.addTitlebarSwiftUI(TitleBarLeadingView().environment(editorViewModel), side: .leading, width: AppTheme.Window.projectTitlebarLeadingWidth)
         window.addTitlebarSwiftUI(TitleBarTrailingView().environment(editorViewModel), side: .trailing, width: AppTheme.Window.projectTitlebarTrailingWidth)
 
         let controller = EditorWindowController(editorViewModel: editorViewModel, window: window)
         controller.onBecameKey = { [weak self] in
             guard let self else { return }
-            AppState.shared.activateProject(self)
+            AppState.shared.projectWindowDidBecomeKey(self)
         }
         window.delegate = controller
         controller.installKeyMonitor()
@@ -837,7 +879,7 @@ extension NSWindow {
     }
 
     func addTitlebarSwiftUI<V: View>(_ view: V, side: NSLayoutConstraint.Attribute, width: CGFloat) {
-        let host = NSHostingController(rootView: view.tint(AppTheme.Accent.primary))
+        let host = NSHostingController(rootView: view.appLocalization().tint(AppTheme.Accent.primary))
         host.view.translatesAutoresizingMaskIntoConstraints = false
 
         let wrapper = CornerAdaptiveView()

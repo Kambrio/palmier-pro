@@ -4,6 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "PalmierPro",
+    defaultLocalization: "en",
     platforms: [.macOS(.v26)],
     products: [
         .executable(name: "PalmierPro", targets: ["PalmierPro"]),
@@ -79,10 +80,11 @@ let package = Package(
                 .copy("Resources/Images"),
                 .copy("Resources/Changelog"),
                 .copy("Resources/Skills"),
+
+                .process("Resources/Localization"),
                 .copy("Resources/Models"),
                 .copy("Resources/OmniVoice"),
                 .copy("Resources/bin"),
-                .copy("Resources/Localization"),
             ],
             swiftSettings: [
                 .define("BUNDLED_SPEECH", .when(traits: ["BundledSpeech"])),
@@ -93,7 +95,10 @@ let package = Package(
         .plugin(name: "MetalCIKernelPlugin", capability: .buildTool()),
         .testTarget(
             name: "PalmierProTests",
-            dependencies: ["PalmierPro"],
+            dependencies: [
+                "PalmierPro",
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
             path: "Tests/PalmierProTests"
         ),
     ]

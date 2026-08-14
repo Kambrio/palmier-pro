@@ -114,7 +114,6 @@ struct VideoProjectLoadTests {
         let snapshot = ProjectPackageSnapshot(
             timeline: try JSONEncoder().encode(Fixtures.timeline()),
             manifest: nil,
-            generationLog: nil,
             thumbnail: nil,
             chatSessionFiles: []
         )
@@ -140,7 +139,6 @@ struct VideoProjectLoadTests {
         let snapshot = ProjectPackageSnapshot(
             timeline: try JSONEncoder().encode(Fixtures.timeline()),
             manifest: nil,                    // unreadable on open → nothing to write
-            generationLog: nil,
             thumbnail: nil,
             chatSessionFiles: []
         )
@@ -163,7 +161,6 @@ struct VideoProjectLoadTests {
         let snapshot = ProjectPackageSnapshot(
             timeline: try JSONEncoder().encode(Fixtures.timeline()),
             manifest: nil,
-            generationLog: nil,
             thumbnail: nil,
             chatSessionFiles: []
         )

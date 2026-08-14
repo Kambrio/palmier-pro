@@ -19,8 +19,8 @@ struct EffectPixelScaleTests {
         var e = descriptor.makeEffect()
         e.params[spec.key] = EffectParam(value: spec.range.upperBound)  // max radius
 
-        let full = descriptor.render(input, effect: e, atOffset: 0, pixelScale: 1)
-        let tiny = descriptor.render(input, effect: e, atOffset: 0, pixelScale: 0.1)
+        let full = descriptor.render(input, effect: e, atOffset: 0, spatialScale: 1)
+        let tiny = descriptor.render(input, effect: e, atOffset: 0, spatialScale: 0.1)
 
         // Render both to Float32 pixel buffers and compare actual pixel values.
         let ctx = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull()])

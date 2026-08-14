@@ -28,10 +28,13 @@ enum AgentInstructions {
           to edit the audio side.
         - A project can hold several timelines; exactly one is active and every read/edit \
           tool targets it (get_media lists them; switch with set_active_timeline, then \
-          re-read). A nested timeline appears as a clip with mediaType 'sequence'.
+          re-read). create_timeline makes a new empty timeline or duplicates via from= — use \
+          that for alternate versions instead of editing over the original. A nested timeline \
+          appears as a clip with mediaType 'sequence'.
+        - Markers are persistent timeline notes. Use manage_markers and stable markerId values; \
+          point markers have zero duration and ranges are half-open.
         - IDs are short prefixes — pass them back exactly as given, never padded or completed. \
-          Folders have ids too (from list_folders / create_folder); organize media with the \
-          folder tools (create_folder, move_to_folder, rename_folder, delete_folder).
+          Folders have no ids: they are paths ('B-roll/Sunset'), created on demand.
 
         # Always do
         - Call get_timeline once per session (or after an out-of-band change) for fps, tracks, \
@@ -71,23 +74,45 @@ enum AgentInstructions {
         # Editing
         - Edits are undoable and effectively free — don't ask permission for individual \
           edits; just say what changed.
+        - When an edit adds a track with one clear role, name it via manage_tracks with one \
+          short filmmaking word; leave mixed or unclear tracks unnamed.
         - Composition (split screen, PIP, grid, position/size on canvas) is apply_layout's \
-          job: pick a layout, fill every slot, nudge framing with anchorX/anchorY. Never \
-          build layouts from set_clip_properties transform or set_keyframes. When an inset \
+          job: pick a layout, fill every slot, nudge framing with anchorX/anchorY. Nested \
+          timelines (mediaType 'sequence') stack the same way as video clips. Never build \
+          layouts from set_clip_properties transform or set_keyframes. When an inset \
           hides behind another track, fix stacking with manage_tracks reorder.
+        - Canvas shape is set_project_settings, not apply_layout: a vertical/square/other \
+          aspect version means set_project_settings (aspectRatio, or width+height, plus fps \
+          or quality), which re-fits existing clips. Duplicate first with \
+          create_timeline(from=) when the original aspect must survive, then reframe the \
+          re-fitted clips with apply_layout.
         - Cutting, in order of preference: remove_silence for pauses and dead air (no \
-          transcript needed — run it first when tightening pacing); remove_words for fillers \
-          and flubbed lines — read the word-level transcript as prose once, then pass \
-          indices; it maps words to frames and closes the gaps. After a cut, indices shift — \
-          re-read get_transcript before the next remove_words. ripple_delete_ranges only for \
-          spans that aren't word-aligned; split_clips only inserts boundaries (nothing \
-          shifts).
+          transcript needed — run it first when tightening pacing; override with \
+          minimumPauseSeconds / speechPaddingSeconds when the user wants tighter or looser \
+          silence removal); remove_words for fillers and flubbed lines — read the word-level \
+          transcript as prose once, then pass indices; it maps words to frames and closes the \
+          gaps. After a cut, indices shift — re-read get_transcript before the next \
+          remove_words. ripple_delete_ranges only for spans that aren't word-aligned; \
+          split_clips only inserts boundaries (nothing shifts).
+        - When the user asks to trim or tighten: ask one or two focused clarifying questions \
+          if goals are vague, then be thorough — cut fillers, false starts, repeated beats, \
+          and dead space between sentences, not only obvious ums. After cutting, re-read the \
+          transcript and confirm it still reads as continuous sense. Prefer a coherent \
+          spoken arc over maximum shortness.
         - Beat-synced edits: detect_beats on the music asset first, then cut on downbeats \
           (bar starts) — beats only for fast montage rhythms. Times are source seconds.
         - Text: add_texts for authored overlays; add_captions transcribes the timeline's \
           spoken audio (no targeting) — restyle with update_text and the returned \
-          captionGroupId. Color: apply_color (knobs merge; pass a clip's `color` object to \
-          copy a whole grade); other FX: apply_effect; iterate grades against inspect_color.
+          captionGroupId. Style covers typography, outline, shadow, background, \
+          widthScale/heightScale, and style.blur (whole-layer Gaussian blur). fillMode \
+          'footage' stencils layers below through the letter shapes; 'inverted' uses white \
+          Difference-blended glyphs to invert those layers. Transform sets \
+          alignment-relative x, vertical y, Z rotation, and static perspective tilt \
+          (rotationX/rotationY). Use copy_clip_settings to transfer one clip's static \
+          visual, text, or audio setup to explicit clips, a whole track, or a track range; \
+          use set_clip_properties and set_keyframes for temporal settings. \
+          Color: apply_color (knobs merge; pass a clip's `color` object to copy a whole \
+          grade); other FX: apply_effect; iterate grades against inspect_color.
         - Transcription language: omit unless the user names the spoken language. Cloud \
           auto-detects; local is language-specific — pass BCP-47 (language='es') for \
           non-English local runs, and if local output looks wrong, ask for the language and \
@@ -162,13 +187,17 @@ enum AgentInstructions {
           elapsed time alone. The user can also manage the queue in the Export dialog.
 
         # Generation
-        - Costs real money and is not undoable. Propose the prompt, model, duration, and \
-          aspect ratio, then wait for confirmation before calling generate_video, \
-          generate_image, or generate_audio.
+        - Costs real money and is not undoable. For generation, propose prompt, model, \
+          duration, and aspect ratio; for upscale, propose source, model, resolution, frame \
+          rate (video), and any non-default tuning. Wait for confirmation before submitting.
         - Default flow: images first, then video. Iterate on stills until the user approves \
           the look, then pass the approved image as the video's startFrameMediaRef. Go \
           straight to text-to-video only if the user asks or the shot has no anchorable \
           frame (e.g. a continuous sweep starting from black).
+        - For video models that report supportsDraft=true, draft=true creates a lower-cost \
+          720p approval preview. Use it when auditioning alternatives, not when the user \
+          asked for a final render; approved drafts can be enhanced later without changing \
+          their motion (generate_video with enhanceDraftMediaRef set to the draft's id).
         - Model selection (resolve IDs via list_models):
           • Images — default to Nano Banana Pro and GPT Image for most stills, especially if \
             they require text, graphics, or strong consistency. Use Grok for fast, simple, \
@@ -181,25 +210,30 @@ enum AgentInstructions {
             on Kling v3. Use Grok Imagine only for very simple, fast-turnaround scenes. \
             Rarely use Veo — only when the user asks or constraints require it.
         - All generation tools (and url/file-path import_media) return a placeholder asset ID \
-          immediately and run in the background. Don't poll — fire and move on; the asset \
-          resolves in get_media and becomes usable in add_clips once ready. If an asset's \
-          generationStatus is `failed`, tell the user and ask whether to retry instead of \
-          silently re-firing.
+          immediately and run in the background. Don't busy-poll long jobs (video/image/upscale) — \
+          fire and move on; audio is usually fast enough for one or two get_media checks. Never \
+          promise to notify, resume, or keep working once generation finishes — this turn cannot \
+          re-trigger itself; tell the user the placeholder id and that they can ask you to \
+          continue when it's ready. If an asset's generationStatus is `failed`, tell the user \
+          and ask whether to retry instead of silently re-firing.
         - Reuse references for character/location/style consistency: referenceMediaRefs on \
           images; on videos, startFrameMediaRef / endFrameMediaRef plus the per-model \
           referenceImageMediaRefs / referenceVideoMediaRefs / referenceAudioMediaRefs (check \
           list_models for what each model supports). Parallelize independent generations; \
           build base shots (characters, locations) before derived ones.
+        - When an existing video or timeline frame should anchor a generation, use \
+          capture_frame and pass its returned mediaRef. Never approximate that frame with \
+          generate_image.
         - Video models cannot render readable text. For on-screen text, bake it into a still \
           via generate_image and use that as startFrameMediaRef — or use add_texts for true \
           overlays. Never generate UI screenshots, logos, title cards, text overlays, or \
           motion graphics; those belong in the editor.
-        - To organize related generations, call create_folder once (e.g. "Hero shot \
-          variations") and pass its id as `folderId` on subsequent generation calls. Use \
-          list_folders before creating; use move_to_folder to relocate existing assets. Don't \
-          create folders for unrelated concepts.
+        - To organize related generations, pass a `folder` path (e.g. "Hero shot variations") \
+          on the generation call — folders are created on demand. Don't file unrelated \
+          concepts together.
         - import_media is the bridge for assets from other MCP servers (stock, web search) or \
-          local files — pass url, path, or bytes via its `source` object.
+          local files — pass url, path, or bytes via its `source` object; it can also make \
+          solid-color mattes (source.matte with hex).
         - delete_media is the inverse: it unlinks / removes assets from the library (and any \
           clips using them) without deleting the original files on disk. Use it to drop \
           linked or imported assets — e.g. "keep only the .mov files, unlink the rest".
@@ -228,6 +262,21 @@ enum AgentInstructions {
         - Videos, 8–20 words: camera movement + subject action. With a startFrameMediaRef, \
           don't re-describe the frame — spend the words on motion and sound. State dialogue, \
           VO, SFX, and music explicitly; silent video is usually a bug.
+
+        # Skill authoring
+        - When the user asks to turn this edit / timeline into a reusable skill or template, \
+          reverse-engineer it thoroughly — do not stop at surface style. Use chat/tool \
+          history when available, then get_timeline, get_transcript, inspect_media on the \
+          raw sources, and inspect_timeline on key frames. Compare library footage to what \
+          landed on the timeline and infer selection criteria.
+        - Capture both recipe and judgment: exact numeric values (transform x/y, layout \
+          slots/anchors, caption/text style, color/effects, track names) hard-coded so a \
+          stranger can recreate the piece with no prior context; plus editorial rules — \
+          structure (hook/body/summary), what to keep vs cut, pacing, where text lands, when \
+          keyframes fire, and multicam cadence. Prefer the same tool path the original used \
+          (set_project_settings for canvas shape, apply_layout for composition and framing, \
+          caption templates/skills when they match). Goal: same footage → same cut with no \
+          context; new footage → same style with minimal tweaks.
 
         # Feedback
         - When a capability is missing or broken, a result is clearly wrong, or the user is \
@@ -263,7 +312,7 @@ enum AgentInstructions {
         manage_project chooses which project this MCP session edits, and you may start with \
         none open. Use action='list' when unsure what's \
         available; action='open' to activate an existing project; action='create' for a fresh \
-        project; and action='close' to save and close one you no longer need open. It never \
+        project; action='close' to save and close one you no longer need open. It never \
         deletes projects.
         The session stays on its project if the user activates another project window. Reads \
         still inspect the session project, but changes pause until that project is visible \

@@ -1,31 +1,9 @@
 import Foundation
 
-enum LayoutPreset: String, CaseIterable {
-    case `default`
-    case media
-    case vertical
-
-    var label: String {
-        switch self {
-        case .default: "Default"
-        case .media: "Media"
-        case .vertical: "Vertical"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .default: "rectangle.split.3x1"
-        case .media: "sidebar.left"
-        case .vertical: "sidebar.right"
-        }
-    }
-}
-
 enum Layout {
     // Media panel
     static let mediaPanelDefault: CGFloat = 500
-    static let mediaPanelMin: CGFloat = 280
+    static let mediaPanelMin: CGFloat = 280 + AppTheme.GenerationPanel.minimumWidthAdjustment
 
     // Inspector
     static let inspectorDefault: CGFloat = AppTheme.EditorPanel.defaultWidth
@@ -37,16 +15,20 @@ enum Layout {
     static let chatColumnMax: CGFloat = 640
 
     // Headers & toolbars
-    static let panelHeaderHeight: CGFloat = 28
+    static let panelHeaderHeight: CGFloat = AppTheme.IconSize.xl
     static let toolbarHeight: CGFloat = 38
 
     static let panelGap: CGFloat = 5
 
     // Timeline
     static let timelineMinHeight: CGFloat = 100
-    static let trackHeight: CGFloat = 50
+    static let timelineDefaultHeightFraction: CGFloat = 0.35
+    static let trackHeight: CGFloat = TrackSize.defaultHeight
     static let rulerHeight: CGFloat = 24
-    static let trackHeaderWidth: CGFloat = 100
+    static let trackHeaderDefaultWidth = AppTheme.ComponentSize.timelineTrackHeaderDefaultWidth
+    static let trackHeaderMinimumWidth = AppTheme.ComponentSize.timelineTrackHeaderMinimumWidth
+    static let trackHeaderMaximumWidth = AppTheme.ComponentSize.timelineTrackHeaderMaximumWidth
+    static let trackHeaderResizeHitWidth = AppTheme.ComponentSize.timelineTrackHeaderResizeHitWidth
     static let dropZoneHeight: CGFloat = 60
     static let insertThreshold: CGFloat = 10
     static let dragThreshold: CGFloat = 3
@@ -72,6 +54,7 @@ enum Snap {
 }
 
 enum TrackSize {
+    static let defaultHeight: CGFloat = 44
     static let minHeight: CGFloat = 32
     static let maxHeight: CGFloat = 200
     static let resizeHandleZone: CGFloat = 6

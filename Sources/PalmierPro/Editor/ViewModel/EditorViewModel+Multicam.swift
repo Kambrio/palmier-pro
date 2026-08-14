@@ -109,13 +109,24 @@ extension EditorViewModel {
         return (max(0, left), max(0, right))
     }
 
+    func multicamRippleCohort(for clip: Clip, edge: TrimEdge) -> [Clip] {
+        guard let groupId = clip.multicamGroupId else { return [clip] }
+        let boundary = edge == .left ? clip.startFrame : clip.endFrame
+        return multicamClips(of: groupId).compactMap { item in
+            let sharesEdge = edge == .left
+                ? item.clip.startFrame == boundary
+                : item.clip.endFrame == boundary
+            return sharesEdge ? item.clip : nil
+        }
+    }
+
     // MARK: - Source sync
     func syncMulticamMembers(
         specs: [MulticamMemberSpec],
         masterRef: String,
         searchWindowSeconds: Double = SyncDefaults.memberSearchWindowSeconds,
         rebase: Bool = true
-    ) async -> MulticamSyncOutcome {
+    ) async throws -> MulticamSyncOutcome {
         var outcome = MulticamSyncOutcome()
 
         var pending: [MulticamMemberSpec] = []
@@ -145,9 +156,12 @@ extension EditorViewModel {
         }
 
         let envelopeSpan = 0...(searchWindowSeconds + 300)
-        guard let masterURL = urls[masterRef],
-              let masterEnv = try? await AudioEnvelopeExtractor.extract(from: masterURL, range: envelopeSpan),
-              !masterEnv.samples.isEmpty else {
+        var masterEnvelope: AudioEnvelope?
+        if let masterURL = urls[masterRef] {
+            masterEnvelope = try? await AudioEnvelopeExtractor.extract(from: masterURL, range: envelopeSpan)
+        }
+        try Task.checkCancellation()
+        guard let masterEnv = masterEnvelope, !masterEnv.samples.isEmpty else {
             outcome.failures.append((masterRef, "Master has no readable audio."))
             for spec in pending { resolveWithoutAudio(spec.mediaRef, reason: "No audio to sync with and no shared timecode.") }
             return rebase ? rebased(outcome) : outcome
@@ -167,6 +181,7 @@ extension EditorViewModel {
             for await (ref, samples) in group { out[ref] = samples }
             return out
         }
+        try Task.checkCancellation()
 
         let hop = AudioEnvelopeExtractor.hopSeconds
         let seedWindow = max(1, Int((SyncDefaults.dateSeedWindowSeconds / hop).rounded()))
@@ -192,7 +207,7 @@ extension EditorViewModel {
                 reference: anchor.samples, target: samples, seedHops: seed, seedWindowHops: seedWindow,
                 maxLagHops: maxLag, minOverlapHops: minOverlapHops, minConfidence: SyncDefaults.minConfidence
             ) else { return nil }
-            return (anchor.offsetSeconds + Double(result.lagHops) * hop, result.confidence)
+            return (anchor.offsetSeconds + result.exactLagHops * hop, result.confidence)
         }
 
         var candidates: [(ref: String, samples: [Float], direct: (offset: Double, confidence: Double)?)] = []
@@ -202,6 +217,7 @@ extension EditorViewModel {
                 continue
             }
             candidates.append((spec.mediaRef, samples, await match(anchors[0], ref: spec.mediaRef, samples: samples)))
+            try Task.checkCancellation()
         }
 
         candidates.sort { ($0.direct?.confidence ?? 0) > ($1.direct?.confidence ?? 0) }
@@ -213,6 +229,7 @@ extension EditorViewModel {
                     best = hit
                 }
             }
+            try Task.checkCancellation()
             guard let best else {
                 resolveWithoutAudio(candidate.ref, reason: "No confident alignment — pin an offset or re-sync with a wider window.")
                 continue
@@ -535,7 +552,7 @@ extension EditorViewModel {
     private func switchOrToast(groupId: String, request: AngleSwitchRequest) {
         do { _ = try switchMulticamAngles(groupId: groupId, requests: [request]) }
         catch let error as ToolError { mediaPanelToast = MediaPanelToast(stringLiteral: error.message) }
-        catch { mediaPanelToast = "Couldn't switch angle." }
+        catch { mediaPanelToast = MediaPanelToast(message: L10n.string("Couldn't switch angle.")) }
     }
 
     func switchMulticamRange(groupId: String, range: Range<Int>, angle: String) {
@@ -543,23 +560,4 @@ extension EditorViewModel {
             AngleSwitchRequest(range: range, angle: angle))
     }
 
-    // MARK: - Dead air (remove_silence)
-
-    func multicamDeadAirMask(for clip: Clip) -> [Bool]? {
-        guard clip.mediaType == .audio, let group = multicamGroup(of: clip) else { return nil }
-        let mics = group.mics
-        guard !mics.isEmpty else { return nil }
-        let cellSeconds = VoiceActivity.chunkDuration
-        var masks: [[Bool]] = []
-        for mic in mics {
-            guard let mask = mediaVisualCache.deadAirMask(for: mic.mediaRef), !mask.isEmpty else { return nil }
-            let shift = Int((mic.sync.offsetSeconds / cellSeconds).rounded())
-            var shifted = [Bool](repeating: true, count: max(0, mask.count + shift))
-            for (i, dead) in mask.enumerated() where i + shift >= 0 && i + shift < shifted.count {
-                shifted[i + shift] = dead
-            }
-            masks.append(shifted)
-        }
-        return (0..<(masks.map(\.count).max() ?? 0)).map { i in masks.allSatisfy { i >= $0.count || $0[i] } }
-    }
 }

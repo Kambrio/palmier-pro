@@ -1,22 +1,49 @@
 import SwiftUI
 
 struct SkillDetailSheet: View {
-    let skillID: String
+    enum Mode: Identifiable {
+        case draft
+        case existing(id: String)
+
+        var id: String {
+            switch self {
+            case .draft: "draft"
+            case let .existing(id): id
+            }
+        }
+    }
 
     @Bindable private var store = SkillStore.shared
     @Bindable private var catalog = SkillCatalog.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var editing = false
-    @State private var draft = ""
-    @State private var originalDraft = ""
-    @State private var confirmingDelete = false
+    @State private var skillID: String?
+    @State private var editing: Bool
+    @State private var draft: String
+    @State private var originalDraft: String
+    @State private var skillPendingDeletion: Skill?
     @State private var isUpdating = false
+    @State private var isSaving = false
     @State private var editingTitle = false
     @State private var draftTitle = ""
     @State private var copyToast: CopyToast?
     @State private var showingSaveError = false
     @State private var failedExit: ExitAction?
     @FocusState private var titleFocused: Bool
+
+    init(mode: Mode) {
+        let skillID: String? = switch mode {
+        case .draft: nil
+        case let .existing(id): id
+        }
+        let isDraft = skillID == nil
+        let draft = isDraft ? SkillStore.newSkillTemplate : ""
+        _skillID = State(initialValue: skillID)
+        _editing = State(initialValue: isDraft)
+        _draft = State(initialValue: draft)
+        _originalDraft = State(initialValue: draft)
+        _editingTitle = State(initialValue: isDraft)
+        _draftTitle = State(initialValue: isDraft ? SkillFrontmatter.parse(draft).fields["name"] ?? "" : "")
+    }
 
     private enum ExitAction {
         case close, preview
@@ -32,20 +59,27 @@ struct SkillDetailSheet: View {
     }
 
     private var skill: Skill? {
-        store.skills.first { $0.id == skillID }
+        guard let skillID else { return nil }
+        return store.skills.first { $0.id == skillID }
     }
 
-    private var deleteTitle: String {
-        guard let skill else { return "Delete skill?" }
-        return "Delete \u{201C}\(skill.name)\u{201D}?"
+    private var isDraft: Bool { skillID == nil }
+
+    private var draftName: String {
+        let name = SkillFrontmatter.parse(draft).fields["name"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let name, !name.isEmpty else { return L10n.string("New skill") }
+        return name
     }
 
     var body: some View {
         Group {
-            if let skill {
+            if isDraft {
+                content(nil)
+            } else if let skill {
                 content(skill)
             } else {
-                Text("Skill unavailable.")
+                Text(L10n.string("Skill unavailable."))
                     .font(.system(size: AppTheme.FontSize.sm))
                     .foregroundStyle(AppTheme.Text.tertiaryColor)
                     .frame(width: AppTheme.Settings.skillDetailWidth)
@@ -57,7 +91,10 @@ struct SkillDetailSheet: View {
                     }
             }
         }
-        .interactiveDismissDisabled((editing && draft != originalDraft) || editingTitle)
+        .interactiveDismissDisabled(isSaving || (!isDraft && (editing && draft != originalDraft || editingTitle)))
+        .task {
+            if isDraft { titleFocused = true }
+        }
         .onExitCommand {
             if editingTitle {
                 cancelTitleEditing()
@@ -65,24 +102,23 @@ struct SkillDetailSheet: View {
                 close()
             }
         }
-        .alert("Unable to save skill", isPresented: $showingSaveError) {
-            Button("Keep Editing", role: .cancel) { failedExit = nil }
+        .alert(L10n.string("Unable to save skill"), isPresented: $showingSaveError) {
+            Button(L10n.string("Keep Editing"), role: .cancel) { failedExit = nil }
             if failedExit != nil {
-                Button("Discard Changes", role: .destructive) { discardChanges() }
+                Button(L10n.string("Discard Changes"), role: .destructive) { discardChanges() }
             }
         } message: {
-            Text("Add nonempty name and description fields to the skill frontmatter.")
+            Text(L10n.string("Add nonempty name and description fields to the skill frontmatter."))
         }
     }
 
-    private func content(_ skill: Skill) -> some View {
+    private func content(_ skill: Skill?) -> some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.zero) {
             header(skill)
-            Divider().overlay(AppTheme.Border.subtleColor)
 
             if editing {
                 editContent
-            } else {
+            } else if let skill {
                 ScrollView {
                     viewContent(skill)
                         .padding(AppTheme.Spacing.xlXxl)
@@ -105,74 +141,108 @@ struct SkillDetailSheet: View {
             }
         }
         .animation(.easeInOut(duration: AppTheme.Anim.transition), value: copyToast)
-        .confirmationDialog(
-            deleteTitle,
-            isPresented: $confirmingDelete,
-            titleVisibility: .visible,
-            presenting: self.skill
-        ) { skill in
-            Button("Delete \u{201C}\(skill.name)\u{201D}", role: .destructive) {
-                store.delete(skill)
-                dismiss()
+        .skillDeleteConfirmation(skill: $skillPendingDeletion) { skill in
+            Task {
+                if await store.delete(skill) {
+                    dismiss()
+                }
             }
-            Button("Keep Skill", role: .cancel) {}
-        } message: { skill in
-            Text("This permanently removes \(displayPath(skill)).")
         }
     }
 
-    private func header(_ skill: Skill) -> some View {
-        let state = SkillCommunityState.resolve(skill, store: store, catalog: catalog)
+    private func header(_ skill: Skill?) -> some View {
+        let state = skill.flatMap { SkillCommunityState.resolve($0, store: store, catalog: catalog) }
         let dirty = editing && draft != originalDraft
 
         return VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
             HStack(spacing: AppTheme.Spacing.md) {
-                titleView(skill)
+                titleView(editing ? draftName : skill?.name ?? draftName)
                 Spacer(minLength: AppTheme.Spacing.md)
                 closeButton
             }
 
             HStack(spacing: AppTheme.Spacing.smMd) {
-                Text(state?.label ?? "Local")
-                    .font(.system(size: AppTheme.FontSize.xs))
-                    .foregroundStyle(state?.color ?? AppTheme.Text.tertiaryColor)
+                if skill != nil {
+                    Text(verbatim: state.map { L10n.string(key: $0.label) } ?? L10n.string("Local"))
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .foregroundStyle(state?.color ?? AppTheme.Text.tertiaryColor)
+                }
 
                 Spacer(minLength: AppTheme.Spacing.md)
-
-                if state == .update, !editing {
-                    if isUpdating {
-                        ProgressView()
-                            .controlSize(.small)
-                            .accessibilityLabel("Updating \(skill.name)")
-                    } else {
-                        Button("Update") { update(skill) }
-                            .buttonStyle(.capsule(.secondary, fill: AnyShapeStyle(AppTheme.Background.raisedColor)))
-                    }
-                }
-
-                SkillExternalAgentMenu(skill: skill, store: store) { agent, url in
-                    copyToast = CopyToast(agentLabel: agent.label, url: url)
-                }
-                .disabled(editing)
-
-                if dirty {
-                    Button("Save Changes") {
-                        commitDraftIfDirty()
-                    }
-                    .buttonStyle(.capsule(.prominent))
-                    .keyboardShortcut("s", modifiers: .command)
-                }
-
-                Button(editing ? "Preview" : "Edit") {
-                    toggleEditing(skill)
-                }
-                .buttonStyle(.capsule(.secondary, fill: AnyShapeStyle(AppTheme.Background.raisedColor)))
-
-                actionsMenu(skill)
+                headerControls(skill: skill, state: state, dirty: dirty)
             }
         }
         .padding(.horizontal, AppTheme.Spacing.xlXxl)
         .padding(.vertical, AppTheme.Spacing.mdLg)
+    }
+
+    @ViewBuilder
+    private func headerControls(
+        skill: Skill?,
+        state: SkillCommunityState?,
+        dirty: Bool
+    ) -> some View {
+        if let skill {
+            existingHeaderControls(skill: skill, state: state, dirty: dirty)
+        } else {
+            draftHeaderControls
+        }
+    }
+
+    @ViewBuilder
+    private func existingHeaderControls(
+        skill: Skill,
+        state: SkillCommunityState?,
+        dirty: Bool
+    ) -> some View {
+        if state == .update, !editing {
+            if isUpdating {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(L10n.string("Updating \(skill.name)"))
+            } else {
+                Button(L10n.string("Update")) { update(skill) }
+                    .buttonStyle(.capsule(.secondary, fill: AnyShapeStyle(AppTheme.Background.raisedColor)))
+            }
+        }
+
+        SkillExternalAgentMenu(skill: skill, store: store) { agent, url in
+            copyToast = CopyToast(agentLabel: agent.label, url: url)
+        }
+        .disabled(editing)
+
+        if dirty {
+            Button(L10n.string("Save Changes")) {
+                Task {
+                    await commitTitle()
+                    _ = await commitDraftIfDirty()
+                }
+            }
+            .buttonStyle(.capsule(.prominent))
+            .keyboardShortcut("s", modifiers: .command)
+        }
+
+        Button(editing ? L10n.string("Preview") : L10n.string("Edit")) {
+            Task { await toggleEditing(skill) }
+        }
+        .buttonStyle(.capsule(.secondary, fill: AnyShapeStyle(AppTheme.Background.raisedColor)))
+
+        actionsMenu(skill)
+    }
+
+    @ViewBuilder
+    private var draftHeaderControls: some View {
+        if isSaving {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel(L10n.string("Save"))
+        } else {
+            Button(L10n.string("Save")) {
+                Task { await saveDraft() }
+            }
+            .buttonStyle(.capsule(.prominent))
+            .keyboardShortcut("s", modifiers: .command)
+        }
     }
 
     private var closeButton: some View {
@@ -185,18 +255,19 @@ struct SkillDetailSheet: View {
                 .hoverHighlight(cornerRadius: AppTheme.Radius.sm)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Close")
-        .help("Close")
+        .disabled(isSaving)
+        .accessibilityLabel(L10n.string("Close"))
+        .help(L10n.string("Close"))
     }
 
     @ViewBuilder
-    private func titleView(_ skill: Skill) -> some View {
+    private func titleView(_ title: String) -> some View {
         if editingTitle {
-            TextField("Skill name", text: $draftTitle)
+            TextField(L10n.string("Skill name"), text: $draftTitle)
                 .textFieldStyle(.plain)
                 .font(.system(size: AppTheme.FontSize.xl, weight: AppTheme.FontWeight.regular))
                 .foregroundStyle(AppTheme.Text.primaryColor)
-                .accessibilityLabel("Skill name")
+                .accessibilityLabel(L10n.string("Skill name"))
                 .focused($titleFocused)
                 .padding(.horizontal, AppTheme.Spacing.sm)
                 .padding(.vertical, AppTheme.Spacing.xs)
@@ -205,30 +276,34 @@ struct SkillDetailSheet: View {
                     cornerRadius: AppTheme.Radius.xs,
                     border: AppTheme.Accent.link.opacity(AppTheme.Opacity.medium)
                 )
-                .onSubmit { commitTitle() }
-                .onChange(of: titleFocused) { if !titleFocused { commitTitle() } }
+                .onSubmit { Task { await commitTitle() } }
+                .onChange(of: titleFocused) { if !titleFocused { Task { await commitTitle() } } }
         } else {
-            Text(skill.name)
-                .font(.system(size: AppTheme.FontSize.xl, weight: AppTheme.FontWeight.regular))
-                .foregroundStyle(AppTheme.Text.primaryColor)
-                .lineLimit(1)
+            Button {
+                beginTitleEditing(title)
+            } label: {
+                Text(title)
+                    .font(.system(size: AppTheme.FontSize.xl, weight: AppTheme.FontWeight.regular))
+                    .foregroundStyle(AppTheme.Text.primaryColor)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L10n.string("Rename Skill"))
+            .help(L10n.string("Rename Skill"))
         }
     }
 
     private func actionsMenu(_ skill: Skill) -> some View {
         Menu {
-            Button("Rename Skill", systemImage: "pencil") {
-                draftTitle = skill.name
-                editingTitle = true
-                titleFocused = true
+            Button(L10n.string("Rename Skill"), systemImage: "pencil") {
+                beginTitleEditing(skill.name)
             }
-            .disabled(editing)
-            Button("Show in Finder", systemImage: "folder") {
+            Button(L10n.string("Show in Finder"), systemImage: "folder") {
                 store.reveal(skill.path)
             }
             Divider()
-            Button("Delete Skill", systemImage: "trash", role: .destructive) {
-                confirmingDelete = true
+            Button(L10n.string("Delete Skill"), systemImage: "trash", role: .destructive) {
+                skillPendingDeletion = skill
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -241,19 +316,26 @@ struct SkillDetailSheet: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityLabel("More skill actions")
-        .help("More skill actions")
+        .accessibilityLabel(L10n.string("More skill actions"))
+        .help(L10n.string("More skill actions"))
     }
 
-    private func toggleEditing(_ skill: Skill) {
+    private func toggleEditing(_ skill: Skill) async {
         if editing {
-            finish(.preview)
+            await finish(.preview)
             return
         }
 
-        commitTitle()
-        draft = (try? String(contentsOf: skill.path, encoding: .utf8)) ?? ""
-        originalDraft = draft
+        await beginEditing(skill)
+    }
+
+    private func beginEditing(_ skill: Skill) async {
+        guard !editing else { return }
+        await commitTitle()
+        let raw = await store.rawContents(for: skill) ?? ""
+        guard !Task.isCancelled, self.skill?.id == skill.id else { return }
+        draft = raw
+        originalDraft = raw
         editing = true
     }
 
@@ -267,9 +349,9 @@ struct SkillDetailSheet: View {
     }
 
     @discardableResult
-    private func commitDraftIfDirty(onFailure exit: ExitAction? = nil) -> Bool {
+    private func commitDraftIfDirty(onFailure exit: ExitAction? = nil) async -> Bool {
         guard draft != originalDraft else { return true }
-        guard let skill, store.save(skill, raw: draft) else {
+        guard let skill, await store.save(skill, raw: draft) else {
             failedExit = exit
             showingSaveError = true
             return false
@@ -279,28 +361,70 @@ struct SkillDetailSheet: View {
         return true
     }
 
-    private func commitTitle() {
-        guard editingTitle, let skill else { return }
+    private func saveDraft() async {
+        guard !isSaving else { return }
+        isSaving = true
+        await commitTitle()
+        guard SkillFrontmatter.requiredFields(draft) != nil else {
+            isSaving = false
+            showingSaveError = true
+            return
+        }
+        guard let id = await store.createSkill(raw: draft) else {
+            isSaving = false
+            showingSaveError = true
+            return
+        }
+        skillID = id
+        originalDraft = draft
+        isSaving = false
+    }
+
+    private func commitTitle() async {
+        guard editingTitle else { return }
+        let name = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         editingTitle = false
-        store.rename(skill, to: draftTitle)
+        guard !name.isEmpty else { return }
+        if isDraft {
+            draft = SkillFrontmatter.replacingFields(draft, name: name)
+            return
+        }
+        guard let skill else { return }
+        if editing {
+            draft = SkillFrontmatter.replacingFields(draft, name: name)
+            return
+        }
+        guard name != skill.name else { return }
+        await store.rename(skill, to: name)
+    }
+
+    private func beginTitleEditing(_ title: String) {
+        draftTitle = title
+        editingTitle = true
+        titleFocused = true
     }
 
     private func cancelTitleEditing() {
         editingTitle = false
-        draftTitle = skill?.name ?? ""
+        draftTitle = skill?.name ?? draftName
     }
 
     private func close() {
-        finish(.close)
+        guard !isSaving else { return }
+        if isDraft {
+            dismiss()
+        } else {
+            Task { await finish(.close) }
+        }
     }
 
-    private func finish(_ action: ExitAction) {
+    private func finish(_ action: ExitAction) async {
         guard skill != nil else {
             dismiss()
             return
         }
-        guard commitDraftIfDirty(onFailure: action) else { return }
-        commitTitle()
+        await commitTitle()
+        guard await commitDraftIfDirty(onFailure: action) else { return }
         switch action {
         case .close: dismiss()
         case .preview: editing = false
@@ -317,15 +441,10 @@ struct SkillDetailSheet: View {
         }
     }
 
-    private func displayPath(_ skill: Skill) -> String {
-        skill.path.deletingLastPathComponent().path
-            .replacingOccurrences(of: NSHomeDirectory(), with: "~")
-    }
-
     private func viewContent(_ skill: Skill) -> some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.xl) {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
-                Text("Description")
+                Text(L10n.string("Description"))
                     .font(.system(size: AppTheme.FontSize.smMd, weight: AppTheme.FontWeight.regular))
                     .foregroundStyle(AppTheme.Text.primaryColor)
                 Text(skill.description)
@@ -337,7 +456,7 @@ struct SkillDetailSheet: View {
             Divider().overlay(AppTheme.Border.subtleColor)
 
             VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-                Text("Instructions")
+                Text(L10n.string("Instructions"))
                     .font(.system(size: AppTheme.FontSize.smMd, weight: AppTheme.FontWeight.regular))
                     .foregroundStyle(AppTheme.Text.primaryColor)
                 MarkdownText(
@@ -354,13 +473,14 @@ struct SkillDetailSheet: View {
         TextEditor(text: $draft)
             .font(.system(size: AppTheme.FontSize.sm, design: .monospaced))
             .foregroundStyle(AppTheme.Text.primaryColor)
-            .accessibilityLabel("Skill instructions")
+            .accessibilityLabel(L10n.string("Skill instructions"))
             .scrollContentBackground(.hidden)
             .padding(AppTheme.Spacing.md)
             .background(AppTheme.Background.raisedColor)
             .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
             .padding(AppTheme.Spacing.xlXxl)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .disabled(isSaving)
     }
 
     private func copyToastBanner(_ toast: CopyToast) -> some View {
@@ -370,7 +490,7 @@ struct SkillDetailSheet: View {
                 .foregroundStyle(AppTheme.Status.successColor)
 
             VStack(alignment: .leading, spacing: AppTheme.Spacing.xxs) {
-                Text("Added to \(toast.agentLabel)")
+                Text(L10n.string("Added to \(toast.agentLabel)"))
                     .font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.medium))
                     .foregroundStyle(AppTheme.Text.primaryColor)
                 Text(toast.displayPath)
@@ -382,7 +502,7 @@ struct SkillDetailSheet: View {
 
             Spacer(minLength: AppTheme.Spacing.md)
 
-            Button("Open") {
+            Button(L10n.string("Open")) {
                 store.reveal(toast.url)
                 copyToast = nil
             }

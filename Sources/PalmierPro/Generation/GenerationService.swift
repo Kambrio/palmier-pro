@@ -32,7 +32,8 @@ final class GenerationService {
         folderId: String? = nil,
         buildParams: @escaping ([String]) -> BackendGenerationParams,
         snapshotRefs: (@Sendable (inout GenerationInput, [String]) -> Void)? = nil,
-        preprocessRef: (@Sendable (Int, MediaAsset) async throws -> URL?)? = nil,
+        preprocessRef: (@Sendable (Int, MediaAsset, URL) async throws -> URL?)? = nil,
+        preprocessSourceVideo: (@Sendable (URL) async throws -> URL?)? = nil,
         fileExtension: String,
         projectURL: URL?,
         editor: EditorViewModel,
@@ -84,7 +85,8 @@ final class GenerationService {
                         let snapshot = references
                         let rewrites: [(Int, URL?)] = try await withThrowingTaskGroup(of: (Int, URL?).self) { group in
                             for (i, asset) in snapshot.enumerated() {
-                                group.addTask { (i, try await preprocessRef(i, asset)) }
+                                let currentURL = urlsToUpload.indices.contains(i) ? urlsToUpload[i] : asset.url
+                                group.addTask { (i, try await preprocessRef(i, asset, currentURL)) }
                             }
                             var results: [(Int, URL?)] = []
                             for try await r in group { results.append(r) }
@@ -133,11 +135,17 @@ final class GenerationService {
 
                 await self.runJob(
                     placeholders: placeholders,
-                    params: params,
                     genInput: finalGenInput,
                     editor: editor,
                     onComplete: onComplete,
-                    onFailure: onFailure
+                    onFailure: onFailure,
+                    submit: {
+                        try await GenerationBackend.submit(
+                            model: finalGenInput.model,
+                            params: params,
+                            projectId: editor.projectId
+                        )
+                    }
                 )
             } catch {
                 let message = error.localizedDescription
@@ -208,9 +216,6 @@ final class GenerationService {
             asset.pendingDownloadURL = nil
             editor.importMediaAsset(asset, skipAppend: true)
             let finalized = await editor.finalizeImportedAsset(asset)
-            if finalized {
-                editor.appendGenerationLog(for: asset)
-            }
             return finalized
         } catch {
             let message = error.localizedDescription
@@ -250,20 +255,37 @@ final class GenerationService {
             for (i, url) in urls.enumerated() {
                 let type = types.indices.contains(i) ? types[i] : .image
                 let cacheKey = cacheKeys.indices.contains(i) ? cacheKeys[i] : nil
-                if let cacheKey, let hit = cacheKey.freshRemoteURL {
+                let requiresConversion = type == .image
+                    && ImageConverter.requiresConversion(url)
+                if !requiresConversion, let cacheKey, let hit = cacheKey.freshRemoteURL {
                     group.addTask { (i, hit) }
                     continue
                 }
-                let contentType = Self.contentType(for: url, fallback: type)
+                let contentType = requiresConversion
+                    ? "image/jpeg"
+                    : Self.contentType(for: url, fallback: type)
                 group.addTask {
-                    let uploaded = try await GenerationBackend.uploadReference(
-                        fileURL: url,
-                        contentType: contentType,
-                    )
-                    if let cacheKey {
-                        await Self.recordUploadCache(asset: cacheKey, url: uploaded)
+                    let convertedURL = requiresConversion
+                        ? try await ImageConverter.convertToJPEG(url)
+                        : nil
+                    do {
+                        let uploaded = try await GenerationBackend.uploadReference(
+                            fileURL: convertedURL ?? url,
+                            contentType: contentType,
+                        )
+                        if let convertedURL {
+                            await ImageConverter.removeConvertedFile(convertedURL)
+                        }
+                        if !requiresConversion, let cacheKey {
+                            await Self.recordUploadCache(asset: cacheKey, url: uploaded)
+                        }
+                        return (i, uploaded)
+                    } catch {
+                        if let convertedURL {
+                            await ImageConverter.removeConvertedFile(convertedURL)
+                        }
+                        throw error
                     }
-                    return (i, uploaded)
                 }
             }
             var results = [(Int, String)]()
@@ -298,7 +320,7 @@ final class GenerationService {
             case .image: return "image/jpeg"
             case .video: return "video/mp4"
             case .audio: return "audio/mpeg"
-            case .text: return "application/octet-stream"
+            case .text, .subtitle: return "application/octet-stream"
             case .lottie: return "application/json"
             case .sequence: return "video/mp4"
             }
@@ -307,13 +329,58 @@ final class GenerationService {
 
     // MARK: - Job execution
 
+    func enhanceDraft(asset: MediaAsset, editor: EditorViewModel) -> String? {
+        guard asset.canEnhanceDraft,
+              let originalInput = asset.generationInput,
+              let sourceJobId = originalInput.backendJobId else { return nil }
+        var enhancedInput = originalInput
+        enhancedInput.draft = false
+        enhancedInput.resolution = "1080p"
+        enhancedInput.backendJobId = nil
+        enhancedInput.resultURLs = nil
+        enhancedInput.createdAt = Date()
+        let placeholder = createPlaceholder(
+            type: .video,
+            name: "\(asset.name) 1080p",
+            duration: asset.resolvedDuration,
+            genInput: enhancedInput,
+            folderId: asset.folderId,
+            destDir: Self.destinationDirectory(for: editor.projectURL),
+            fileExtension: "mp4",
+            editor: editor
+        )
+
+        Task { @MainActor in
+            await self.runJob(
+                placeholders: [placeholder],
+                genInput: enhancedInput,
+                editor: editor,
+                onComplete: { _ in
+                    editor.mediaPanelToast = MediaPanelToast(
+                        message: L10n.string("Enhanced with FLUX.3 at 1080p."),
+                        kind: .success
+                    )
+                },
+                onFailure: {
+                    if case .failed(let message) = placeholder.generationStatus {
+                        editor.mediaPanelToast = MediaPanelToast(message: message)
+                    }
+                },
+                submit: {
+                    try await GenerationBackend.enhanceDraft(sourceJobId: sourceJobId)
+                }
+            )
+        }
+        return placeholder.id
+    }
+
     private func runJob(
         placeholders: [MediaAsset],
-        params: BackendGenerationParams,
         genInput: GenerationInput,
         editor: EditorViewModel,
         onComplete: (@MainActor (MediaAsset) -> Void)?,
-        onFailure: (@MainActor () -> Void)?
+        onFailure: (@MainActor () -> Void)?,
+        submit: () async throws -> String
     ) async {
         if GenerationProvider.selected == .omnivoice || genInput.model == OmniVoiceCatalog.modelId {
             await runOmniVoiceJob(
@@ -335,11 +402,7 @@ final class GenerationService {
 
         let jobId: String
         do {
-            jobId = try await GenerationBackend.submit(
-                model: genInput.model,
-                params: params,
-                projectId: editor.projectId,
-            )
+            jobId = try await submit()
         } catch {
             let (code, message) = backendError(error)
             let expected: Set<String> = [
@@ -420,7 +483,7 @@ final class GenerationService {
             let job = BackendGenerationJob(
                 _id: "higgsfield", status: .succeeded,
                 resultUrls: urlStrings, errorMessage: nil,
-                costCredits: nil, completedAt: nil)
+                costCredits: nil, refundedCredits: nil, completedAt: nil)
             await finalizeSuccess(job: job, placeholders: placeholders, editor: editor,
                                   onComplete: onComplete, onFailure: onFailure)
         } catch {

@@ -324,7 +324,7 @@ final class VideoEngine {
         let startingVisualRefreshGeneration = visualRefreshGeneration
 
         let useProxies = editor.mediaManifest.useProxies
-        let mediaURLs = editor.mediaResolver.expectedURLMap()
+        var mediaURLs = editor.mediaResolver.expectedURLMap()
         // Overlay proxy URLs (precomputed — no per-call FileManager) when proxies are on.
         let proxyURLs: [String: URL] = useProxies
             ? Dictionary(uniqueKeysWithValues: editor.mediaManifest.entries.compactMap { e -> (String, URL)? in
@@ -332,6 +332,27 @@ final class VideoEngine {
                 return (e.id, base.appendingPathComponent(rel))
               })
             : [:]
+        if useProxies {
+            for (id, url) in proxyURLs where mediaURLs[id] != nil { mediaURLs[id] = url }
+        }
+        // Build stabilized-file map for vidstab clips — injected into mediaURLs so the baked
+        // file replaces the source for both video decode and audio (the baked .mov keeps audio).
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clip.mediaType == .video {
+                guard clip.stabilization?.enabled == true,
+                      clip.stabilization?.engine == .vidstab else { continue }
+                if let baked = editor.stabilizationManager.stabilizedURL(for: clip.mediaRef) {
+                    mediaURLs[clip.mediaRef] = baked
+                }
+            }
+        }
+        // Self-heal: queue any missing/stale bakes, analysis, and subject-tracking passes.
+        if editor.timeline.tracks.contains(where: { $0.clips.contains { $0.stabilization?.enabled == true } }) {
+            editor.stabilizationManager.reconcileEnabledClips()
+            editor.stabilizationManager.reconcileVidstabClips()
+            editor.stabilizationManager.reconcileSubjectClips()
+            editor.stabilizationManager.reconcilePointsClips()
+        }
         // Proxy-backed clips play via the proxy, so they aren't offline even if the source is.
         let missingMediaRefs = useProxies
             ? editor.missingMediaRefs.subtracting(proxyURLs.keys)
@@ -367,12 +388,13 @@ final class VideoEngine {
         }
 
         let snapshot = involvedTimelines[0]
+        let resolvedURLs = mediaURLs
         rebuildTask = Task {
             let result: CompositionResult
             do {
                 result = try await CompositionBuilder.build(
                     timeline: snapshot,
-                    resolveURL: { mediaURLs[$0] },
+                    resolveURL: { resolvedURLs[$0] },
                     resolveSourceSize: { assetSizes[$0] },
                     resolveTimeline: resolveTimeline,
                     missingMediaRefs: missingMediaRefs,

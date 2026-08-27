@@ -32,7 +32,10 @@ enum AgentInstructions {
           that for alternate versions instead of editing over the original. A nested timeline \
           appears as a clip with mediaType 'sequence'.
         - Markers are persistent timeline notes. Use manage_markers and stable markerId values; \
-          point markers have zero duration and ranges are half-open.
+          point markers have zero duration and ranges are half-open. Ripple edits may move or \
+          remove them — patch positions from the mutation delta. Leave failed or ambiguous \
+          work open, set review only after applying and verifying the edit, and set resolved only \
+          when the user explicitly approves or requests it.
         - IDs are short prefixes — pass them back exactly as given, never padded or completed. \
           Folders have no ids: they are paths ('B-roll/Sunset'), created on demand.
 

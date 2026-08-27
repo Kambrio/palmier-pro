@@ -10,10 +10,16 @@ fileprivate struct AddClipsInput: DecodableToolArgs {
         let mediaRef: String
         let trackIndex: Int?
         let startFrame: Int
+        let endFrame: Int?
         let durationFrames: Int?
         let trimStartFrame: Int?
         let trimEndFrame: Int?
-        static let allowedKeys: Set<String> = ["mediaRef", "trackIndex", "startFrame", "durationFrames", "trimStartFrame", "trimEndFrame"]
+        let source: [Double]?
+        static let allowedKeys: Set<String> = ["mediaRef", "trackIndex", "startFrame", "endFrame", "durationFrames", "trimStartFrame", "trimEndFrame", "source"]
+
+        var resolvedDurationFrames: Int? {
+            durationFrames ?? endFrame.map { $0 - startFrame }
+        }
     }
 }
 
@@ -83,6 +89,7 @@ fileprivate struct SetClipPropertiesInput: DecodableToolArgs {
     let edgeRounding: Double?
     let edgeSoftness: Double?
     let transform: ParsedTransform?
+    let crop: ParsedCrop?
     let blendMode: String?
 
     static let allowedKeys: Set<String> = Set([
@@ -91,7 +98,7 @@ fileprivate struct SetClipPropertiesInput: DecodableToolArgs {
         "volumeDb", "opacity",
         "fadeInFrames", "fadeOutFrames", "fadeInInterpolation", "fadeOutInterpolation",
         "edgeRounding", "edgeSoftness",
-        "transform",
+        "transform", "crop",
         "blendMode",
     ])
 
@@ -102,6 +109,7 @@ fileprivate struct SetClipPropertiesInput: DecodableToolArgs {
             || fadeInInterpolation != nil || fadeOutInterpolation != nil
             || edgeRounding != nil || edgeSoftness != nil
             || transform?.hasAnyField == true
+            || crop?.hasAnyField == true
             || blendMode != nil
     }
 }
@@ -167,6 +175,43 @@ struct ParsedTransform: Decodable {
     }
 }
 
+/// Partial source crop for generic clip property updates. Insets are 0–1 of the source.
+struct ParsedCrop: Decodable {
+    var left: Double?
+    var top: Double?
+    var right: Double?
+    var bottom: Double?
+
+    static let allowedKeys: Set<String> = ["left", "top", "right", "bottom"]
+
+    var hasAnyField: Bool {
+        left != nil || top != nil || right != nil || bottom != nil
+    }
+
+    func merged(onto crop: Crop, path: String) throws -> Crop {
+        func inset(_ value: Double?, name: String) throws -> Double? {
+            guard let value else { return nil }
+            guard value >= 0 else {
+                throw ToolError("\(path).\(name) must be >= 0 (got \(value))")
+            }
+            return value
+        }
+        var out = crop
+        if let left = try inset(left, name: "left") { out.left = left }
+        if let top = try inset(top, name: "top") { out.top = top }
+        if let right = try inset(right, name: "right") { out.right = right }
+        if let bottom = try inset(bottom, name: "bottom") { out.bottom = bottom }
+        guard out.visibleWidthFraction >= Crop.minimumVisibleFraction,
+              out.visibleHeightFraction >= Crop.minimumVisibleFraction else {
+            throw ToolError(
+                "\(path) must leave at least \(Crop.minimumVisibleFraction) of the source visible on each axis "
+                    + "(got width \(out.visibleWidthFraction), height \(out.visibleHeightFraction))"
+            )
+        }
+        return out
+    }
+}
+
 fileprivate struct AddClipSpec {
     let asset: MediaAsset
     var trackId: String?
@@ -189,26 +234,50 @@ extension ToolExecutor {
     /// Resolves (trimStart, duration, trimEnd) for a clip placement
     fileprivate func resolvePlacement(
         _ asset: MediaAsset, fps: Int,
-        durationFrames: Int?, trimStartFrame: Int?, trimEndFrame: Int?, path: String
+        durationFrames: Int?, source: [Double]?,
+        trimStartFrame: Int?, trimEndFrame: Int?, path: String,
+        framesLabel: String = "durationFrames"
     ) throws -> (trimStart: Int, duration: Int, trimEnd: Int?) {
+        let isStill = asset.type == .image
+        let sourceLen = secondsToFrame(seconds: asset.duration, fps: fps)
+
+        if let source {
+            guard durationFrames == nil && trimStartFrame == nil && trimEndFrame == nil else {
+                throw ToolError("\(path): set source OR \(framesLabel)/trims, not both — source picks a span of the asset, the others an exact placement.")
+            }
+            guard source.count == 2 else {
+                throw ToolError("\(path): source must be [startSeconds, endSeconds] (got \(source.count) element\(source.count == 1 ? "" : "s"))")
+            }
+            guard asset.duration > 0 || isStill else {
+                throw ToolError("\(path): source needs a known source length; this asset has none. Use \(framesLabel).")
+            }
+            let start = max(source[0], 0)
+            let end = isStill ? source[1] : min(source[1], asset.duration)
+            guard end > start else {
+                throw ToolError("\(path): source end (\(source[1])) must be greater than start (\(source[0]))\(isStill ? "" : "; source is \(asset.duration)s").")
+            }
+            let trimStart = secondsToFrame(seconds: start, fps: fps)
+            let duration = max(1, secondsToFrame(seconds: end, fps: fps) - trimStart)
+            return (trimStart, duration, nil)
+        }
+
         let trimStart = trimStartFrame ?? 0
         guard trimStart >= 0 else { throw ToolError("\(path): trimStartFrame must be >= 0 (got \(trimStart))") }
         if let t = trimEndFrame, t < 0 { throw ToolError("\(path): trimEndFrame must be >= 0 (got \(t))") }
-        if let d = durationFrames, d < 1 { throw ToolError("\(path): durationFrames must be >= 1 (got \(d))") }
+        if let d = durationFrames, d < 1 { throw ToolError("\(path): \(framesLabel) must be >= 1 (got \(d))") }
         guard durationFrames == nil || trimEndFrame == nil else {
-            throw ToolError("\(path): set durationFrames OR trimEndFrame, not both — both define the clip's end. Use durationFrames for an explicit length, trimEndFrame to trim the tail.")
+            throw ToolError("\(path): set \(framesLabel) OR trimEndFrame, not both — both define the clip's end. Use \(framesLabel) for an explicit length, trimEndFrame to trim the tail.")
         }
 
-        let sourceLen = secondsToFrame(seconds: asset.duration, fps: fps)
         if let d = durationFrames {
             if sourceLen > 0, trimStart + d > sourceLen {
-                throw ToolError("\(path): trimStartFrame \(trimStart) + durationFrames \(d) exceed the source length (\(sourceLen) frames). Use a shorter durationFrames or smaller trimStartFrame.")
+                throw ToolError("\(path): trimStartFrame \(trimStart) + \(framesLabel) \(d) exceed the source length (\(sourceLen) frames). Use a shorter \(framesLabel) or smaller trimStartFrame.")
             }
             return (trimStart, d, nil)
         }
         // Length derived from the trimmed source window [trimStart, sourceLen - trimEnd].
         guard sourceLen > 0 else {
-            throw ToolError("\(path): durationFrames is required for this asset — its source length is unknown.")
+            throw ToolError("\(path): \(framesLabel) is required for this asset — its source length is unknown.")
         }
         let trimEnd = trimEndFrame ?? 0
         let duration = sourceLen - trimStart - trimEnd
@@ -262,10 +331,14 @@ extension ToolExecutor {
         var specs: [AddClipSpec] = []
         specs.reserveCapacity(prepared.count)
         for (idx, p) in prepared.enumerated() {
+            if let end = p.entry.endFrame, end <= p.entry.startFrame {
+                throw ToolError("entries[\(idx)]: endFrame (\(end)) must be greater than startFrame (\(p.entry.startFrame))")
+            }
             let place = try resolvePlacement(p.asset, fps: editor.timeline.fps,
-                                             durationFrames: p.entry.durationFrames,
+                                             durationFrames: p.entry.resolvedDurationFrames,
+                                             source: p.entry.source,
                                              trimStartFrame: p.entry.trimStartFrame,
-                                             trimEndFrame: p.entry.trimEndFrame, path: "entries[\(idx)]")
+                                             trimEndFrame: p.entry.trimEndFrame, path: "entries[\(idx)]", framesLabel: "endFrame")
             specs.append(.init(asset: p.asset, trackId: p.trackId, startFrame: p.entry.startFrame,
                                durationFrames: place.duration, trimStartFrame: place.trimStart, trimEndFrame: place.trimEnd))
         }
@@ -372,6 +445,7 @@ extension ToolExecutor {
         for (idx, entry) in input.entries.enumerated() {
             let place = try resolvePlacement(resolvedAssets[idx], fps: editor.timeline.fps,
                                              durationFrames: entry.durationFrames,
+                                             source: nil,
                                              trimStartFrame: entry.trimStartFrame,
                                              trimEndFrame: entry.trimEndFrame, path: "entries[\(idx)]")
             specs.append(.init(asset: resolvedAssets[idx], durationFrames: place.duration,
@@ -559,6 +633,16 @@ extension ToolExecutor {
                 path: "set_clip_properties.transform"
             )
         }
+        if let rawCrop = args["crop"] {
+            guard let crop = rawCrop as? [String: Any] else {
+                throw ToolError("set_clip_properties.crop: expected object")
+            }
+            try validateUnknownKeys(
+                crop,
+                allowed: ParsedCrop.allowedKeys,
+                path: "set_clip_properties.crop"
+            )
+        }
         let input: SetClipPropertiesInput = try decodeToolArgs(args, path: "set_clip_properties")
         let clipIds = input.clipIds ?? []
         guard !clipIds.isEmpty else { throw ToolError("Provide a non-empty 'clipIds' array") }
@@ -616,7 +700,7 @@ extension ToolExecutor {
 
         if clipIds.contains(where: { editor.clipFor(id: $0)?.multicamGroupId != nil }),
            input.trimStartFrame != nil || input.trimEndFrame != nil || input.durationFrames != nil || input.speed != nil {
-            throw ToolError("Timing fields would slip a multicam clip out of sync — switch angles with change_cam; split/delete and property fields (volumeDb, opacity, edgeRounding, edgeSoftness, transform) stay editable.")
+            throw ToolError("Timing fields would slip a multicam clip out of sync — switch angles with change_cam; split/delete and property fields (volumeDb, opacity, edgeRounding, edgeSoftness, transform, crop) stay editable.")
         }
 
         if input.fadeInFrames != nil || input.fadeOutFrames != nil {
@@ -666,6 +750,22 @@ extension ToolExecutor {
                 throw ToolError("edgeRounding and edgeSoftness only apply to non-text visual clips: \(unsupported.joined(separator: ", "))")
             }
         }
+        var crops: [String: Crop] = [:]
+        if let parsedCrop = input.crop, parsedCrop.hasAnyField {
+            let unsupported = targetClips.filter {
+                $0.value.mediaType == .audio || $0.value.mediaType == .text
+            }.map(\.key).sorted()
+            if !unsupported.isEmpty {
+                throw ToolError("crop only applies to non-text visual clips: \(unsupported.joined(separator: ", "))")
+            }
+            for id in clipIds {
+                guard let clip = targetClips[id] else { continue }
+                crops[id] = try parsedCrop.merged(
+                    onto: clip.cropAt(frame: editor.activeFrame),
+                    path: "set_clip_properties.crop"
+                )
+            }
+        }
 
         // Expand timing fields to linked partners via the shared model helper.
         // Partners drop trim/speed when they're text — handled per-partner below.
@@ -682,6 +782,7 @@ extension ToolExecutor {
             return (input.volumeDb != nil && clip.volumeTrack != nil)
                 || (input.opacity != nil && clip.opacityTrack != nil)
                 || (input.transform?.rotation != nil && clip.rotationTrack != nil)
+                || (input.crop?.hasAnyField == true && clip.cropTrack != nil)
         }
         if !clearedKeyframes.isEmpty {
             notes.append("Setting a static value cleared existing keyframes on: \(clearedKeyframes.joined(separator: ", ")).")
@@ -710,6 +811,7 @@ extension ToolExecutor {
                     edgeRounding: input.edgeRounding,
                     edgeSoftness: input.edgeSoftness,
                     transform: input.transform,
+                    crop: crops[id],
                     blendMode: blendMode,
                     setBlendMode: setBlendMode,
                     clipId: id,
@@ -728,7 +830,7 @@ extension ToolExecutor {
                     volumeDb: nil, opacity: nil,
                     fadeInFrames: nil, fadeOutFrames: nil,
                     fadeInInterpolation: nil, fadeOutInterpolation: nil,
-                    edgeRounding: nil, edgeSoftness: nil, transform: nil,
+                    edgeRounding: nil, edgeSoftness: nil, transform: nil, crop: nil,
                     blendMode: nil, setBlendMode: false,
                     clipId: partnerId,
                     editor: editor
@@ -759,6 +861,7 @@ extension ToolExecutor {
         edgeRounding: Double?,
         edgeSoftness: Double?,
         transform: ParsedTransform?,
+        crop: Crop?,
         blendMode: BlendMode?,
         setBlendMode: Bool,
         clipId: String,
@@ -796,6 +899,11 @@ extension ToolExecutor {
             if let t = transform {
                 t.apply(to: &clip)
                 changed.append("transform")
+            }
+            if let crop {
+                clip.crop = crop
+                clip.cropTrack = nil
+                changed.append("crop")
             }
         }
         return changed

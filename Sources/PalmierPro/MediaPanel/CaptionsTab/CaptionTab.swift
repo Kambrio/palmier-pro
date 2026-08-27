@@ -1,8 +1,14 @@
 import SwiftUI
 
 struct CaptionTab: View {
+    private enum Output {
+        case captions((String?) -> Void)
+        case transcript((EditorViewModel.TimelineTranscriptDocument) -> Void)
+    }
+
     @Environment(EditorViewModel.self) var editor
     @Bindable private var account = AccountService.shared
+    private let output: Output
 
     @State private var style: TextStyle = .caption
     @State private var center = AppTheme.Caption.defaultCenter
@@ -29,6 +35,18 @@ struct CaptionTab: View {
     private static let previewText = L10n.key("Captions will look like this")
     private static let maxWordRange = 0.0...50.0
     private static let maxCharacterRange = 0.0...200.0
+
+    init(onGeneratedCaptions: @escaping (String?) -> Void) {
+        output = .captions(onGeneratedCaptions)
+    }
+
+    init(onGeneratedTranscript: @escaping (EditorViewModel.TimelineTranscriptDocument) -> Void) {
+        output = .transcript(onGeneratedTranscript)
+    }
+
+    private var isTranscriptOnly: Bool {
+        if case .transcript = output { true } else { false }
+    }
 
     private var previewConfiguration: CaptionPreviewConfiguration {
         CaptionPreviewConfiguration(
@@ -110,23 +128,29 @@ struct CaptionTab: View {
     var body: some View {
         ZStack {
             VStack(spacing: AppTheme.Spacing.zero) {
-                previewToggleBar
                 ScrollView {
                     VStack(alignment: .leading, spacing: AppTheme.Spacing.zero) {
                         sourceSection
-                        settingsSection
-                        styleSection
-                        animationSection
+                        if isTranscriptOnly {
+                            generateBar
+                        } else {
+                            settingsSection
+                            styleSection
+                            animationSection
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
 
-                generateBar
+                if !isTranscriptOnly {
+                    generateBar
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.Background.surfaceColor)
         .task {
+            guard !isTranscriptOnly else { return }
             guard supportedLocales.isEmpty else { return }
             let langs = await Transcription.availableLanguages()
             appleCodes = await Set(Transcription.supportedLocales().compactMap { $0.language.languageCode?.identifier })
@@ -134,8 +158,10 @@ struct CaptionTab: View {
         }
         .onAppear {
             rememberSelectedClipTargets()
-            editor.captionPreviewCenterChange = { center = $0 }
-            showCaptionPreview()
+            if !isTranscriptOnly {
+                editor.captionPreviewCenterChange = { center = $0 }
+                showCaptionPreview()
+            }
         }
         .onDisappear {
             editor.captionPreviewConfiguration = nil
@@ -163,41 +189,16 @@ struct CaptionTab: View {
         }
     }
 
-    private var previewToggleBar: some View {
-        HStack(spacing: AppTheme.Spacing.sm) {
-            Image(systemName: editor.captionPreviewEnabled ? "eye" : "eye.slash")
-                .font(.system(size: AppTheme.FontSize.xxs, weight: AppTheme.FontWeight.semibold))
-                .foregroundStyle(AppTheme.Text.tertiaryColor)
-                .frame(width: AppTheme.IconSize.xs, height: AppTheme.IconSize.xs)
-            Text(L10n.string("Preview"))
-                .font(.system(size: AppTheme.FontSize.smMd, weight: AppTheme.FontWeight.medium))
-                .foregroundStyle(AppTheme.Text.primaryColor)
-            Spacer(minLength: AppTheme.Spacing.sm)
-            Toggle(
-                String(),
-                isOn: Binding(
-                    get: { editor.captionPreviewEnabled },
-                    set: { editor.captionPreviewEnabled = $0 }
-                )
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .accessibilityLabel(L10n.string("Preview"))
-            .tint(AppTheme.Text.primaryColor.opacity(AppTheme.Opacity.strong))
-        }
-        .padding(.horizontal, AppTheme.Spacing.smMd)
-        .frame(maxWidth: .infinity, minHeight: AppTheme.EditorPanel.groupHeaderHeight)
-        .background(AppTheme.Background.surfaceColor)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(AppTheme.Border.primaryColor)
-                .frame(height: AppTheme.BorderWidth.thin)
-        }
-    }
-
     private var sourceSection: some View {
-        EditorPanelGroup(L10n.string("Source"), isExpanded: $sourceExpanded) {
+        EditorPanelGroup(
+            L10n.string("Source"),
+            isExpanded: $sourceExpanded,
+            headerAccessory: {
+                if !isTranscriptOnly {
+                    captionPreviewToggle
+                }
+            }
+        ) {
             InspectorRow(
                 label: L10n.string("Source"),
                 labelHelp: L10n.string("Uses selected clips when available, otherwise all captionable audio. Choose a track to limit captions."),
@@ -212,6 +213,27 @@ struct CaptionTab: View {
                 onReset: { provider = .cloud }
             ) { providerPicker }
         }
+    }
+
+    private var captionPreviewToggle: some View {
+        HStack(spacing: AppTheme.Spacing.sm) {
+            Text(L10n.string("Preview"))
+                .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.medium))
+                .foregroundStyle(AppTheme.Text.secondaryColor)
+            Toggle(
+                String(),
+                isOn: Binding(
+                    get: { editor.captionPreviewEnabled },
+                    set: { editor.captionPreviewEnabled = $0 }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .tint(AppTheme.Text.primaryColor.opacity(AppTheme.Opacity.strong))
+            .accessibilityLabel(L10n.string("Preview"))
+        }
+        .help(L10n.string("Preview"))
     }
 
     private var settingsSection: some View {
@@ -470,6 +492,23 @@ struct CaptionTab: View {
         }
     }
 
+    private var generateLabel: String {
+        if cloudModeUnavailableMessage == nil, provider == .cloud, let cost = estimatedCloudCost, cost > 0 {
+            if isTranscriptOnly {
+                return cost == 1
+                    ? L10n.string("Transcribe · 1 credit")
+                    : L10n.string("Transcribe · \(cost) credits")
+            }
+            return CostEstimator.localizedGenerateLabel(cost)
+        }
+        return isTranscriptOnly ? L10n.string("Transcribe") : L10n.string("Generate")
+    }
+
+    private var generateHelp: String {
+        if let cloudModeUnavailableMessage { return cloudModeUnavailableMessage }
+        return provider == .cloud ? costHelpText : String()
+    }
+
     private var agentMenu: some View {
         EditorAgentMenu(
             help: L10n.string("Let Agent create captions for you. Choose a predefined task, or ask Agent in the chat.")
@@ -505,25 +544,22 @@ struct CaptionTab: View {
     }
 
     private var generateBar: some View {
-        EditorActionFooter(message: note) {
+        EditorActionFooter(message: note ?? cloudModeUnavailableMessage) {
             HStack(spacing: AppTheme.Spacing.sm) {
+                Spacer(minLength: AppTheme.Spacing.zero)
                 Button(action: generate) {
-                    HStack(spacing: AppTheme.Spacing.xs) {
-                        Text(cloudModeUnavailableMessage ?? L10n.string("Generate Captions"))
-                        if cloudModeUnavailableMessage == nil, provider == .cloud, let cost = estimatedCloudCost {
-                            Image(systemName: "dollarsign.circle.fill").font(.system(size: AppTheme.FontSize.xs))
-                            Text(verbatim: "\(cost)").monospacedDigit()
-                        }
-                    }
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity)
+                    Text(generateLabel)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.editorPrimary)
+                .buttonStyle(.capsule(.prominent))
+                .fixedSize()
                 .focusable(false)
                 .disabled(!canGenerateCaptions || editor.captionJob != nil)
                 .help(provider == .cloud ? costHelpText : "")
 
-                agentMenu
+                if !isTranscriptOnly {
+                    agentMenu
+                }
             }
         }
     }
@@ -553,7 +589,9 @@ struct CaptionTab: View {
     }
 
     private func showCaptionPreview() {
-        editor.captionPreviewConfiguration = editor.mediaPanelVisible ? previewConfiguration : nil
+        editor.captionPreviewConfiguration = !isTranscriptOnly && editor.mediaPanelVisible
+            ? previewConfiguration
+            : nil
     }
 
     private func updateMaxCharacters(_ value: Double) {

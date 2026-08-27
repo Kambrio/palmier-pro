@@ -22,7 +22,6 @@ final class TimelineView: NSView, NSPopoverDelegate {
     private(set) var hoveredClipId: String?
     private let canvas = TimelineCanvasView()
     private var markerPopover: NSPopover?
-    private var markerEditorPreview: TimelineMarker?
 
     // MARK: - Init
 
@@ -99,6 +98,7 @@ final class TimelineView: NSView, NSPopoverDelegate {
             layer?.backgroundColor = Self.trackBg
         }
         updateAgentActivityColors()
+        playheadOverlay?.refreshAppearance()
     }
 
     private func configureAgentActivityLayers() {
@@ -328,7 +328,9 @@ final class TimelineView: NSView, NSPopoverDelegate {
         }
         drawClips(geometry: geo, dirtyRect: dirtyRect, context: ctx, rippleInsertPreview: rippleInsertPreview)
         drawStoryPreviewBands(geometry: geo, dirtyRect: dirtyRect, context: ctx)
-        var displayedMarkers = editor.displayedTimelineMarkers(preview: markerEditorPreview)
+                var displayedMarkers = editor.displayedTimelineMarkers(
+            preview: editor.timelineMarkerPreview
+        )
         if case .timelineMarker(let drag) = inputController.dragState,
            let index = displayedMarkers.firstIndex(where: { $0.id == drag.original.id }) {
             displayedMarkers[index] = drag.value
@@ -343,17 +345,6 @@ final class TimelineView: NSView, NSPopoverDelegate {
                 drawRippleInsertIndicator(atFrame: externalDragFrame, geometry: geo, context: ctx)
                 drawRippleInsertBadge(atFrame: externalDragFrame, geometry: geo, scrollOffset: scrollOffset, visibleWidth: visibleWidth, context: ctx)
             }
-        }
-
-        if case .marquee(let marq) = inputController.dragState,
-           marq.current.width > 0 || marq.current.height > 0 {
-            ctx.setStrokeColor(AppTheme.Text.primary.withAlphaComponent(0.6).cgColor)
-            ctx.setFillColor(AppTheme.Text.primary.withAlphaComponent(0.1).cgColor)
-            ctx.setLineWidth(1)
-            ctx.setLineDash(phase: 0, lengths: [3, 3])
-            ctx.addRect(marq.current)
-            ctx.drawPath(using: .fillStroke)
-            ctx.setLineDash(phase: 0, lengths: [])
         }
 
         let activeDropTarget: TrackDropTarget? = {
@@ -398,6 +389,17 @@ final class TimelineView: NSView, NSPopoverDelegate {
             rulerMinY: scrollOffset.y,
             context: ctx
         )
+
+        if case .marquee(let marq) = inputController.dragState,
+           marq.current.width > 0 || marq.current.height > 0 {
+            ctx.setStrokeColor(AppTheme.Text.primary.withAlphaComponent(0.6).cgColor)
+            ctx.setFillColor(AppTheme.Text.primary.withAlphaComponent(0.1).cgColor)
+            ctx.setLineWidth(AppTheme.BorderWidth.thin)
+            ctx.setLineDash(phase: 0, lengths: [3, 3])
+            ctx.addRect(marq.current)
+            ctx.drawPath(using: .fillStroke)
+            ctx.setLineDash(phase: 0, lengths: [])
+        }
     }
 
     func updatePlayheadLayer() { playheadOverlay.update() }
@@ -419,7 +421,7 @@ final class TimelineView: NSView, NSPopoverDelegate {
                 marker: marker,
                 fps: editor.timeline.fps,
                 onPreview: { [weak self] marker in
-                    self?.markerEditorPreview = marker
+                    self?.editor.timelineMarkerPreview = marker
                     self?.needsDisplay = true
                 },
                 onDismiss: { [weak self] in self?.dismissMarkerEditor() }
@@ -431,7 +433,7 @@ final class TimelineView: NSView, NSPopoverDelegate {
     }
 
     private func dismissMarkerEditor() {
-        markerEditorPreview = nil
+        editor.timelineMarkerPreview = nil
         markerPopover?.close()
         needsDisplay = true
     }
@@ -439,7 +441,7 @@ final class TimelineView: NSView, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         guard let closed = notification.object as? NSPopover,
               closed === markerPopover else { return }
-        markerEditorPreview = nil
+        editor.timelineMarkerPreview = nil
         markerPopover = nil
         needsDisplay = true
     }
@@ -1619,6 +1621,12 @@ final class TimelineView: NSView, NSPopoverDelegate {
             labelItems.append(labelItem)
         }
 
+        if clip.mediaType == .video, editor.canExtractAudio(fromClipId: clip.id) {
+            let item = NSMenuItem(title: L10n.string("Save as Audio"), action: #selector(performSaveAsAudio(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = clip.id
+            mediaItems.append(item)
+        }
         // Sync
         var syncItems: [NSMenuItem] = []
         if let pair = editor.syncSelection() {
@@ -1874,6 +1882,12 @@ final class TimelineView: NSView, NSPopoverDelegate {
         guard let item = sender as? NSMenuItem,
               let clipId = item.representedObject as? String else { return }
         editor.saveClipAsMedia(clipId: clipId)
+    }
+
+    @objc private func performSaveAsAudio(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let clipId = item.representedObject as? String else { return }
+        Task { await editor.extractAudio(fromClipId: clipId) }
     }
 
     @objc private func performSwapMedia(_ sender: Any?) {

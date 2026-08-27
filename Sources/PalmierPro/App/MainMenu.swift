@@ -113,6 +113,12 @@ enum MainMenuBuilder {
         rippleDeleteItem.keyEquivalentModifierMask = [.shift]
         menu.addItem(rippleDeleteItem)
 
+        menu.addItem(
+            withTitle: L10n.string("Ripple Timeline Markers"),
+            action: #selector(EditorActions.toggleRippleTimelineMarkers(_:)),
+            keyEquivalent: ""
+        )
+
         item.submenu = menu
         return item
     }
@@ -194,6 +200,7 @@ enum MainMenuBuilder {
     func selectForwardOnAllTracks(_ sender: Any?)
     func deleteSelectedClips(_ sender: Any?)
     func rippleDeleteSelected(_ sender: Any?)
+    func toggleRippleTimelineMarkers(_ sender: Any?)
     func importMedia(_ sender: Any?)
     func importTimeline(_ sender: Any?)
     func playPause(_ sender: Any?)

@@ -1013,5 +1013,41 @@
                 type="application/octet-stream"
                 sparkle:edSignature="ZtIgok6EaSVi3b3Uz3+9hsU/MWPGF4nnNAKG+dILoqObaprIGjVbWX3mkJ3n+xuDFmxXRrhLXYV6hYd2rhhvDQ=="/>
         </item>
+        <item>
+            <title>Version 0.10.0</title>
+            <pubDate>Tue, 22 Sep 2026 19:20:15 -0700</pubDate>
+            <sparkle:version>87</sparkle:version>
+            <sparkle:shortVersionString>0.10.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/palmier-io/palmier-pro/releases/download/v0.10.0/PalmierPro.dmg"
+                length="136544837"
+                type="application/octet-stream"
+                sparkle:edSignature="NOsu0LBDtmBE9E+tZYWwD3l+u+hXbRDz89rzetiiiRjXgGAe+gpiuXAe6BvV69fnApxinYCj8c06sU3N/qnLCg=="/>
+        </item>
+        <item>
+            <title>Version 0.10.1</title>
+            <pubDate>Fri, 25 Sep 2026 18:02:59 -0700</pubDate>
+            <sparkle:version>88</sparkle:version>
+            <sparkle:shortVersionString>0.10.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/palmier-io/palmier-pro/releases/download/v0.10.1/PalmierPro.dmg"
+                length="136747441"
+                type="application/octet-stream"
+                sparkle:edSignature="AjU26vX0Vo+6qIMlf4fFb9WPMrraVHzc92UznQZ28G2AGuw+Rffiv67gK3y5jkUWsCMSN+bSrkVUcFCJw0xpDg=="/>
+        </item>
+        <item>
+            <title>Version 0.11.0</title>
+            <pubDate>Sun, 04 Oct 2026 23:09:34 -0700</pubDate>
+            <sparkle:version>89</sparkle:version>
+            <sparkle:shortVersionString>0.11.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/palmier-io/palmier-pro/releases/download/v0.11.0/PalmierPro.dmg"
+                length="113980442"
+                type="application/octet-stream"
+                sparkle:edSignature="zBXSKWZ0/7GpKN6iN8skx9VOpqt+x+ozNJTBs1fXYbCDbr7GxdYRCX50jI0+f/+r/iwV/BlX3/3nJMihBhNxBw=="/>
+        </item>
     </channel>
 </rss>

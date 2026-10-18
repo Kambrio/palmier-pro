@@ -671,7 +671,7 @@ import AVFoundation
         defer { ClipEmbedStore.remove(key: key); try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(key)) }
 
         try await GemmaIndexer.indexVideo(
-            indexURL: fixture, key: key, duration: 3, embedder: StubGemmaEmbedder(), progress: nil)
+            indexURL: fixture, key: key, duration: 3, embedder: StubGemmaEmbedding(), progress: nil)
 
         let frames = try EmbeddingStore.load(key: key)
         #expect(frames!.header.model == GemmaIndexer.modelName)
@@ -688,7 +688,7 @@ import AVFoundation
         defer { try? FileManager.default.removeItem(at: fixture) }
         let key = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: fixture)!
         defer { ClipEmbedStore.remove(key: key) }
-        try await GemmaIndexer.indexAudio(url: fixture, key: key, embedder: StubGemmaEmbedder())
+        try await GemmaIndexer.indexAudio(url: fixture, key: key, embedder: StubGemmaEmbedding())
         let record = ClipEmbedStore.load(key: key)
         #expect(record?.audio.isEmpty == false)
         #expect(record?.audio.allSatisfy { $0.vector.count == 768 } == true)
@@ -1659,7 +1659,7 @@ git commit -m "feat(agent): find_moments, cluster_footage, match_audio tools"
         let video = try TestMedia.makeVideo(seconds: 4, name: "gemma-e2e")
         let audio = try TestMedia.makeWAV(seconds: 2, sampleRate: 16_000, name: "gemma-e2e-audio")
         defer { try? [video, audio].forEach(FileManager.default.removeItem) }
-        let stub = StubGemmaEmbedder()
+        let stub = StubGemmaEmbedding()
         let vKey = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: video)!
         let aKey = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: audio)!
         defer { ClipEmbedStore.remove(key: vKey); ClipEmbedStore.remove(key: aKey)

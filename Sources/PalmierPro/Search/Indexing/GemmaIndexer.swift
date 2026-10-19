@@ -103,8 +103,31 @@ enum GemmaIndexer {
             embedded.append(.init(start: chunk.start, end: chunk.start + Double(chunk.samples.count) / 16_000.0, vector: vector))
         }
         try ClipEmbedStore.save(
-            .init(model: modelName, modelVersion: modelVersion, clipVector: existing?.clipVector, audio: embedded),
+            .init(model: modelName, modelVersion: modelVersion, clipVector: existing?.clipVector,
+                  audio: embedded, transcriptText: existing?.transcriptText,
+                  transcriptVector: existing?.transcriptVector),
             key: key)
+    }
+
+    static let transcriptCharCap = 4000
+
+    /// Fragments like "uh" or "[music]" would embed into noise; a real transcript has at least three words.
+    static func worthEmbedding(_ text: String) -> Bool {
+        text.split(whereSeparator: \.isWhitespace).count >= 3
+    }
+
+    /// Fuses a transcript into the record under `key`, preserving its clip and audio fields.
+    /// Returns false when no record exists yet (the visual/audio pass never ran for this key).
+    @discardableResult
+    static func embedTranscript(key: String, text: String, embedder: any GemmaEmbedding) async throws -> Bool {
+        guard var record = ClipEmbedStore.load(key: key) else { return false }
+        let capped = String(text.prefix(transcriptCharCap))
+        let vector = try await embedder.embedText(capped, task: .document)
+        try Task.checkCancellation()
+        record.transcriptText = capped
+        record.transcriptVector = vector
+        try ClipEmbedStore.save(record, key: key)
+        return true
     }
 
     /// Uniform ≤ maxFrames samples at `fps` for the whole-clip embedding.

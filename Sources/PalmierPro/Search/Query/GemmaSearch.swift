@@ -6,7 +6,11 @@ enum GemmaSearch {
         case frame(time: Double, shotStart: Double, shotEnd: Double)
         case clip
         case audio(start: Double, end: Double)
+        /// Whole-asset transcript match; carries the first 120 characters of the transcript.
+        case transcriptText(snippet: String)
     }
+
+    static let snippetLength = 120
 
     struct Hit: Equatable, Sendable {
         let assetID: String
@@ -50,6 +54,13 @@ enum GemmaSearch {
                 let score = cosine(chunk.vector, query)
                 if score >= minScore {
                     hits.append(Hit(assetID: assetID, kind: .audio(start: chunk.start, end: chunk.end), score: score))
+                }
+            }
+            if let transcript = record.transcriptVector, transcript.count == query.count {
+                let score = cosine(transcript, query)
+                if score >= minScore {
+                    let snippet = String((record.transcriptText ?? "").prefix(snippetLength))
+                    hits.append(Hit(assetID: assetID, kind: .transcriptText(snippet: snippet), score: score))
                 }
             }
         }

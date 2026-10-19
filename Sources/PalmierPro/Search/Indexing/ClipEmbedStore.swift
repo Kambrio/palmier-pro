@@ -13,6 +13,8 @@ struct ClipEmbedStore {
         let modelVersion: Int
         var clipVector: [Float]?
         var audio: [AudioChunk]
+        var transcriptText: String?
+        var transcriptVector: [Float]?
     }
 
     static func url(forKey key: String) -> URL {

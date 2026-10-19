@@ -350,6 +350,7 @@ final class SearchIndexCoordinator {
         let type = asset.type
         let hasAudio = asset.hasAudio
         let assetID = asset.id
+        let engineTag = TranscriptCache.currentEngineTag()
         let task = Task.detached(priority: .utility) {
             guard let key = GemmaIndexer.key(assetID: assetID, url: indexURL, sources: [assetID: sourceURL]) else { return }
             switch type {
@@ -361,11 +362,13 @@ final class SearchIndexCoordinator {
                 if hasAudio {
                     try await GemmaIndexer.indexAudio(url: indexURL, key: key, embedder: gemma)
                 }
+                await Self.embedTranscript(key: key, url: indexURL, isVideo: true, engineTag: engineTag, embedder: gemma)
             case .audio:
                 guard !ClipEmbedStore.isCurrent(
                     key: key, model: GemmaIndexer.modelName, modelVersion: GemmaIndexer.modelVersion
                 ) else { return }
                 try await GemmaIndexer.indexAudio(url: indexURL, key: key, embedder: gemma)
+                await Self.embedTranscript(key: key, url: indexURL, isVideo: false, engineTag: engineTag, embedder: gemma)
             default:
                 break
             }
@@ -374,6 +377,22 @@ final class SearchIndexCoordinator {
             try await task.value
         } onCancel: {
             task.cancel()
+        }
+    }
+
+    /// A transcript miss must never fail the visual pass, so every failure here is logged and swallowed.
+    private nonisolated static func embedTranscript(
+        key: String, url: URL, isVideo: Bool, engineTag: String, embedder: any GemmaEmbedding
+    ) async {
+        do {
+            let result = try await TranscriptCache.shared.transcript(
+                for: url, isVideo: isVideo, range: nil, engineTag: engineTag)
+            guard GemmaIndexer.worthEmbedding(result.text) else { return }
+            if try await GemmaIndexer.embedTranscript(key: key, text: result.text, embedder: embedder) {
+                Log.search.debug("transcript fused key=\(key.prefix(12)) chars=\(result.text.count)")
+            }
+        } catch {
+            Log.search.debug("transcript fuse skipped key=\(key.prefix(12)): \(error.localizedDescription)")
         }
     }
 

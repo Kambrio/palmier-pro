@@ -58,4 +58,31 @@ import Foundation
         #expect(matches.first?.start == 0)
         #expect(matches.first!.score > matches.last!.score)
     }
+
+    @Test func transcriptHitOutranksWeakerClipHitAndCarriesSnippet() {
+        var query = [Float](repeating: 0, count: 768); query[0] = 1
+        var transcript = [Float](repeating: 0, count: 768); transcript[0] = 1
+        var clip = [Float](repeating: 0, count: 768); clip[0] = 1; clip[1] = 1
+        let record = ClipEmbedStore.Record(
+            model: "embeddinggemma-2", modelVersion: 1, clipVector: clip, audio: [],
+            transcriptText: String(repeating: "word ", count: 40), transcriptVector: transcript)
+        let mismatched = ClipEmbedStore.Record(
+            model: "embeddinggemma-2", modelVersion: 1, clipVector: nil, audio: [],
+            transcriptText: "short", transcriptVector: [1, 0])
+
+        let hits = GemmaSearch.search(query: query, frameIndexes: [],
+                                      clipRecords: [("a1", record), ("a2", mismatched)], limit: 10)
+        #expect(hits.first?.kind == .transcriptText(snippet: String(repeating: "word ", count: 24)))
+        #expect((hits.first?.score ?? 0) > (hits.last?.score ?? 0))
+        #expect(hits.contains { $0.kind == .clip })
+        #expect(!hits.contains { $0.assetID == "a2" }) // dimension-mismatched transcript ignored
+    }
+
+    @Test func fuseDropsTranscriptHits() {
+        let sig = [VisualSearch.Hit(assetID: "s", time: 1, shotStart: 0, shotEnd: 2, score: 0.9)]
+        let gem = [GemmaSearch.Hit(assetID: "t", kind: .transcriptText(snippet: "hello"), score: 0.99)]
+        let fused = GemmaSearch.fuse(sig, gem, limit: 5)
+        #expect(fused.count == 1)
+        #expect(fused[0].assetID == "s")
+    }
 }

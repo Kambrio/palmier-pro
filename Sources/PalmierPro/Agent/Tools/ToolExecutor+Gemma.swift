@@ -32,12 +32,15 @@ enum GemmaToolCore {
         sources: [String: URL?],
         totalVideoAssets: Int
     ) throws -> ToolResult {
-        let items: [(id: String, vector: [Float])] = candidates.compactMap { candidate in
+        var items: [(id: String, vector: [Float])] = []
+        var transcriptCovered = 0
+        for candidate in candidates {
             guard let key = GemmaIndexer.key(assetID: candidate.id, url: candidate.url, sources: sources),
-                  let vector = ClipEmbedStore.load(key: key)?.clipVector else { return nil }
-            return (id: candidate.id, vector: vector)
+                  let record = ClipEmbedStore.load(key: key) else { continue }
+            if record.transcriptVector != nil { transcriptCovered += 1 }
+            if let vector = record.clipVector { items.append((id: candidate.id, vector: vector)) }
         }
-        let coverage = ["assets": totalVideoAssets, "grouped": items.count]
+        let coverage = ["assets": totalVideoAssets, "grouped": items.count, "transcriptCovered": transcriptCovered]
         guard !items.isEmpty else {
             return try receipt([
                 "groups": [Any](),
@@ -102,6 +105,9 @@ enum GemmaToolCore {
             entry["kind"] = "audio"
             entry["start"] = start
             entry["end"] = end
+        case .transcriptText(let snippet):
+            entry["kind"] = "transcript"
+            if !snippet.isEmpty { entry["snippet"] = snippet }
         }
         return entry
     }

@@ -9,10 +9,25 @@ import Foundation
         let record = ClipEmbedStore.Record(
             model: "embeddinggemma-2", modelVersion: 1,
             clipVector: [0.1, 0.2, 0.3],
-            audio: [.init(start: 0, end: 30, vector: [0.4, 0.5])])
+            audio: [.init(start: 0, end: 30, vector: [0.4, 0.5])],
+            transcriptText: "a person walks along the shore",
+            transcriptVector: [0.6, 0.7, 0.8])
         try ClipEmbedStore.save(record, key: key)
         let loaded = ClipEmbedStore.load(key: key)
         #expect(loaded == record)
+    }
+
+    @Test func legacyJSONWithoutTranscriptFieldsDecodesNil() throws {
+        let key = "test-legacy-\(UUID().uuidString.prefix(8))"
+        defer { ClipEmbedStore.remove(key: key) }
+        let legacy = #"{"model":"embeddinggemma-2","modelVersion":1,"clipVector":[0.1,0.2],"audio":[{"start":0,"end":30,"vector":[0.4]}]}"#
+        try FileManager.default.createDirectory(at: EmbeddingStore.directory, withIntermediateDirectories: true)
+        try Data(legacy.utf8).write(to: ClipEmbedStore.url(forKey: key))
+        let loaded = ClipEmbedStore.load(key: key)
+        #expect(loaded?.clipVector == [0.1, 0.2])
+        #expect(loaded?.audio == [.init(start: 0, end: 30, vector: [0.4])])
+        #expect(loaded?.transcriptText == nil)
+        #expect(loaded?.transcriptVector == nil)
     }
 
     @Test func isCurrentChecksModelIdentity() throws {

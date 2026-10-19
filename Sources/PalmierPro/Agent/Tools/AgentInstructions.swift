@@ -161,8 +161,9 @@ enum AgentInstructions {
           write the description/name back with set_shot.
         - RESPECT labels: never place footage labeled 'skip'; lead the cut with 'key' shots. Footage \
           sharing a personGroup features the same person — use that for continuity and to group a \
-          subject's coverage. Give footage clear names with set_shot — those names show on the timeline, \
-          so prefer meaningful names over raw filenames when building an edit.
+          subject's coverage. Footage sharing a sceneTag shows the same scene — prefer one good shot \
+          per scene over repeating similar coverage. Give footage clear names with set_shot — those \
+          names show on the timeline, so prefer meaningful names over raw filenames when building an edit.
 
         # Story development (story graph)
         - The Story Graph helps the user EDIT footage they've ALREADY SHOT into a story — it's a \

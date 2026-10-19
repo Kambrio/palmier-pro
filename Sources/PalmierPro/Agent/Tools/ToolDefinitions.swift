@@ -1163,9 +1163,10 @@ enum ToolDefinitions {
             footage shows and how it's tagged. Labels include the built-ins 'key' (drives the story) and \
             'skip' (don't use this footage) plus any custom tags — RESPECT them: never place footage \
             labeled 'skip', and lead the story with 'key' shots. Footage with the same personGroup \
-            features the same person. Returns unanalyzedCount; run analyze_footage if footage is missing.
+            features the same person; the same sceneTag (clustered from clip embeddings) shows the \
+            same scene. Returns unanalyzedCount; run analyze_footage if footage is missing.
             Reading the whole library returns a COMPACT summary per shot (name, shotSize, people, \
-            labels, personGroup, speech) — small even for hundreds of clips. Pass mediaRefs to get the \
+            labels, personGroup, sceneTag, speech) — small even for hundreds of clips. Pass mediaRefs to get the \
             full per-frame scene/object detail for a handful of specific shots.
             """,
             inputSchema: objectSchema(

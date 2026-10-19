@@ -81,6 +81,7 @@ final class ShotLibraryManager {
             // A cancelAll (new generation) owns its own drain — don't clobber its state.
             guard let self, self.generation == gen else { return }
             self.recomputeIdentityGroups()   // once per batch, not per asset
+            await self.recomputeSceneTags()
             self.editor.onPersistentStateChanged?()
             self.job = nil
             self.isAnalyzing = false
@@ -133,6 +134,35 @@ final class ShotLibraryManager {
         }
         editor.shotLibrary.upsert(entry)
         editor.onPersistentStateChanged?()
+    }
+
+    // MARK: - Scene tags
+
+    /// Clusters whole-clip gemma embeddings across the library's video footage (FootageGroupsView's
+    /// recipe) and stamps `sceneTag` on entries in a cluster. Store reads run off-main; entries
+    /// without an embedding keep whatever they had. A superseded generation applies nothing.
+    func recomputeSceneTags() async {
+        let gen = generation
+        let snapshot: [(id: String, url: URL)] = editor.shotLibrary.entries.compactMap { entry in
+            guard let asset = editor.mediaAssetsById[entry.assetId], asset.type == .video else { return nil }
+            return (id: entry.assetId, url: asset.url)
+        }
+        guard !snapshot.isEmpty else { return }
+        let sources = editor.searchIndex.gemmaSourceMap()
+        let assignments = await Task.detached(priority: .utility) { () -> [String: Int] in
+            let items: [(id: String, vector: [Float])] = snapshot.compactMap { entry in
+                guard let key = GemmaIndexer.key(assetID: entry.id, url: entry.url, sources: sources),
+                      let vector = ClipEmbedStore.load(key: key)?.clipVector, !vector.isEmpty else { return nil }
+                return (id: entry.id, vector: vector)
+            }
+            return SceneTagger.sceneAssignments(items: items)
+        }.value
+        guard generation == gen, !Task.isCancelled else { return }
+        for i in editor.shotLibrary.entries.indices {
+            if let index = assignments[editor.shotLibrary.entries[i].assetId] {
+                editor.shotLibrary.entries[i].sceneTag = SceneTagger.label(for: index)
+            }
+        }
     }
 
     // MARK: - Editing mutations (UI + agent)

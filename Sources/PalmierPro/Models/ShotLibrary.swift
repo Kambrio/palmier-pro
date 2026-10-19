@@ -193,6 +193,9 @@ struct ShotEntry: Codable, Sendable, Equatable, Identifiable {
     var faceEmbedding: String?
     /// Identity cluster id; entries sharing a group feature the same person.
     var personGroup: Int?
+    /// Scene cluster label from gemma clip-embedding clusters (e.g. "Scene 2"); footage of the
+    /// same scene shares a tag.
+    var sceneTag: String?
 
     init(assetId: String) { self.assetId = assetId }
 
@@ -214,6 +217,7 @@ struct ShotEntry: Codable, Sendable, Equatable, Identifiable {
         edited = try c.decodeIfPresent(Bool.self, forKey: .edited) ?? false
         faceEmbedding = try c.decodeIfPresent(String.self, forKey: .faceEmbedding)
         personGroup = try c.decodeIfPresent(Int.self, forKey: .personGroup)
+        sceneTag = try c.decodeIfPresent(String.self, forKey: .sceneTag)
     }
 
     /// Whether this entry should be re-analyzed given the asset's current source signature.

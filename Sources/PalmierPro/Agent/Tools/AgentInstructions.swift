@@ -73,6 +73,13 @@ enum AgentInstructions {
           budget"), call search_media before inspecting files one by one — describe what's \
           on screen or quote the words said. Hits are source-second ranges ready to convert \
           into add_clips trims.
+        - When the multimodal EmbeddingGemma 2 model is enabled, find_moments goes deeper: \
+          one semantic query over indexed frames, whole clips, AND audio, returning scored \
+          source-second moments (kind frame/clip/audio). cluster_footage surveys visual \
+          coverage — similar-clip groups and near-duplicate takes for b-roll and best-take \
+          picks; match_audio finds footage audio that sounds like a given voice asset. All \
+          three need the model (Settings → Storage); when it's off or still indexing, their \
+          receipts say so — fall back to search_media then.
 
         # Editing
         - Edits are undoable and effectively free — don't ask permission for individual \
@@ -154,8 +161,9 @@ enum AgentInstructions {
           write the description/name back with set_shot.
         - RESPECT labels: never place footage labeled 'skip'; lead the cut with 'key' shots. Footage \
           sharing a personGroup features the same person — use that for continuity and to group a \
-          subject's coverage. Give footage clear names with set_shot — those names show on the timeline, \
-          so prefer meaningful names over raw filenames when building an edit.
+          subject's coverage. Footage sharing a sceneTag shows the same scene — prefer one good shot \
+          per scene over repeating similar coverage. Give footage clear names with set_shot — those \
+          names show on the timeline, so prefer meaningful names over raw filenames when building an edit.
 
         # Story development (story graph)
         - The Story Graph helps the user EDIT footage they've ALREADY SHOT into a story — it's a \

@@ -20,9 +20,9 @@ struct MediaSearchIndexStatus: View {
         case .preparing:
             statusIndicator(L10n.string("Preparing…"), help: L10n.string("Getting the search model ready."))
         case .ready where search.indexingActive:
-            statusIndicator(L10n.string("Indexing \(min(search.batchCompleted + 1, search.batchTotal))/\(search.batchTotal)"),
-                            help: L10n.string("Analyzing media so you can search it."),
-                            progress: search.indexingProgress)
+            indexingIndicator()
+        case _ where search.indexingActive && (GemmaModelManager.shared.isReady || VisualModelLoader.shared.isReady):
+            indexingIndicator()
         case .failed where model.enabled:
             statusButton(icon: "exclamationmark.triangle", label: L10n.string("Retry")) { model.download() }
                 .help(L10n.string("Visual search model download failed. Check your connection and try again."))
@@ -33,6 +33,14 @@ struct MediaSearchIndexStatus: View {
 
     private var hasIndexableAssets: Bool {
         mediaAssets.contains { $0.type == .video || $0.type == .image }
+    }
+
+    private func indexingIndicator() -> some View {
+        statusIndicator(
+            L10n.string("Indexing \(min(search.batchCompleted + 1, search.batchTotal))/\(search.batchTotal)"),
+            help: L10n.string("Analyzing media so you can search it."),
+            progress: search.indexingProgress
+        )
     }
 
     private var modelSizeLabel: String {

@@ -19,6 +19,9 @@ enum ToolName: String, CaseIterable, Sendable {
     case getMedia = "get_media"
     case inspectMedia = "inspect_media"
     case searchMedia = "search_media"
+    case findMoments = "find_moments"
+    case clusterFootage = "cluster_footage"
+    case matchAudio = "match_audio"
     case importMedia = "import_media"
     case captureFrame = "capture_frame"
     case organizeMedia = "organize_media"
@@ -238,6 +241,33 @@ enum ToolDefinitions {
                     "limit": ["type": "integer", "description": "Optional. Max hits per group (default 10, max 50)."],
                 ],
                 required: ["query"]
+            )
+        ),
+        AgentTool(
+            name: .findMoments,
+            description: "Semantic moment search with the multimodal EmbeddingGemma 2 model: one natural-language query ranks indexed video FRAMES (best frame per shot, with the shot's range), whole CLIPS, and AUDIO chunks across the library at once. Prefer it over search_media when the request spans picture and sound ('the tense whisper before the cut'), when you need per-moment audio hits, or to double-check a fused search_media ranking — the two rank with different models. Returns asset ids, kind (frame|clip|audio), source-second ranges (frame hits also carry the moment's time; clip hits have none), and scores for ordering only — frame/clip ranges drop straight into add_clips source trims. Requires EmbeddingGemma 2 enabled in Settings → Storage; when no indexes exist yet the receipt says indexing is still running instead of returning empty results.",
+            inputSchema: objectSchema(
+                properties: [
+                    "query": ["type": "string", "description": "Natural-language description of the moment to find."],
+                    "limit": ["type": "integer", "minimum": 1, "maximum": 100, "description": "Optional. Max moments returned (default 20)."],
+                ],
+                required: ["query"]
+            )
+        ),
+        AgentTool(
+            name: .clusterFootage,
+            description: "Groups the library's video clips by visual similarity (k-means over stored clip embeddings) and lists near-duplicate take groups. Use it to survey coverage before structuring a cut ('what do I have many of?'), to pick the best of repeated takes, and to find b-roll families for a montage. Returns groups ([memberIds, size]), similarTakes (arrays of asset ids that are near-identical, 0.92+ similarity), and coverage ({assets, grouped} — videos with embeddings vs total videos). Requires EmbeddingGemma 2 enabled in Settings → Storage; with no clip embeddings yet it returns an explicit note instead of empty groups.",
+            inputSchema: objectSchema()
+        ),
+        AgentTool(
+            name: .matchAudio,
+            description: "Ranks footage audio moments that sound like a given voice/audio asset — find where a line, a sound, or a motif recurs across the library, or check whether footage already carries a voice line before laying a new one under it. Pass the voice asset's id from get_media; every OTHER indexed asset's audio chunks are compared. Matches come back as (videoAssetId, start, end, score) source-second spans, highest similarity first, ready for add_clips source trims. Requires EmbeddingGemma 2 enabled in Settings → Storage; a voice asset without indexed audio gets an error naming it, and no similar moments yields an explicit note.",
+            inputSchema: objectSchema(
+                properties: [
+                    "voiceAssetId": ["type": "string", "description": "Asset id (from get_media) whose audio to match against the rest of the library."],
+                    "limit": ["type": "integer", "minimum": 1, "maximum": 50, "description": "Optional. Max matches (default 5)."],
+                ],
+                required: ["voiceAssetId"]
             )
         ),
         AgentTool(
@@ -1133,9 +1163,10 @@ enum ToolDefinitions {
             footage shows and how it's tagged. Labels include the built-ins 'key' (drives the story) and \
             'skip' (don't use this footage) plus any custom tags — RESPECT them: never place footage \
             labeled 'skip', and lead the story with 'key' shots. Footage with the same personGroup \
-            features the same person. Returns unanalyzedCount; run analyze_footage if footage is missing.
+            features the same person; the same sceneTag (clustered from clip embeddings) shows the \
+            same scene. Returns unanalyzedCount; run analyze_footage if footage is missing.
             Reading the whole library returns a COMPACT summary per shot (name, shotSize, people, \
-            labels, personGroup, speech) — small even for hundreds of clips. Pass mediaRefs to get the \
+            labels, personGroup, sceneTag, speech) — small even for hundreds of clips. Pass mediaRefs to get the \
             full per-frame scene/object detail for a handful of specific shots.
             """,
             inputSchema: objectSchema(

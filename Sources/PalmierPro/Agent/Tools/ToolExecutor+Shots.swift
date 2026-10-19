@@ -173,6 +173,7 @@ extension ToolExecutor {
         if let size = entry.shotSize, size != .unknown { out["shotSize"] = size.rawValue }
         if let people = entry.people { out["people"] = people }
         if let group = entry.personGroup { out["personGroup"] = group }
+        if let sceneTag = entry.sceneTag { out["sceneTag"] = sceneTag }
         if let speech = entry.hasSpeech, speech { out["hasSpeech"] = true }
         if let dur = entry.durationSeconds { out["durationSeconds"] = (dur * 100).rounded() / 100 }
         return out
@@ -185,6 +186,7 @@ extension ToolExecutor {
         if let size = entry.shotSize, size != .unknown { out["shotSize"] = size.rawValue }
         if let people = entry.people { out["people"] = people }
         if let group = entry.personGroup { out["personGroup"] = group }
+        if let sceneTag = entry.sceneTag { out["sceneTag"] = sceneTag }
         if let speech = entry.hasSpeech { out["hasSpeech"] = speech }
         if let excerpt = entry.transcriptExcerpt { out["transcript"] = excerpt }
         if let dur = entry.durationSeconds { out["durationSeconds"] = (dur * 100).rounded() / 100 }

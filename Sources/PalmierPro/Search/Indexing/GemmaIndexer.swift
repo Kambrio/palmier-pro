@@ -19,6 +19,13 @@ enum GemmaIndexer {
         return !(framesCurrent && clipCurrent)
     }
 
+    /// A current record from a cancelled audio pass still carries `audio: []` and must re-index.
+    static func needsAudioPass(key: String, hasAudio: Bool) -> Bool {
+        guard hasAudio else { return false }
+        guard let record = ClipEmbedStore.load(key: key) else { return true }
+        return record.model != modelName || record.modelVersion != modelVersion || record.audio.isEmpty
+    }
+
     static func indexVideo(
         indexURL: URL,
         key: String,

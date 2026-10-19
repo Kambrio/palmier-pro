@@ -59,6 +59,24 @@ import AVFoundation
         #expect(record?.audio.isEmpty == false)
         #expect(record?.clipVector != nil)
     }
+
+    @Test func needsAudioPassFlagsCancelledAudioWindow() async throws {
+        let video = try TestMedia.makeVideo(seconds: 3, name: "gemma-audio-pass")
+        let audio = try TestMedia.makeWAV(seconds: 2, sampleRate: 16_000, name: "gemma-audio-pass-src")
+        defer { try? FileManager.default.removeItem(at: video); try? FileManager.default.removeItem(at: audio) }
+        let key = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: video)!
+        defer { ClipEmbedStore.remove(key: key); try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(key)) }
+
+        #expect(GemmaIndexer.needsAudioPass(key: key, hasAudio: true)) // no record yet
+        #expect(!GemmaIndexer.needsAudioPass(key: key, hasAudio: false))
+
+        try await GemmaIndexer.indexVideo(indexURL: video, key: key, duration: 3, embedder: StubGemmaEmbedding())
+        #expect(!GemmaIndexer.needsIndex(key: key)) // both stores current after indexVideo
+        #expect(GemmaIndexer.needsAudioPass(key: key, hasAudio: true)) // but audio pass cancelled
+
+        try await GemmaIndexer.indexAudio(url: audio, key: key, embedder: StubGemmaEmbedding())
+        #expect(!GemmaIndexer.needsAudioPass(key: key, hasAudio: true))
+    }
 }
 
 @Suite struct AudioPCMExtractorTests {

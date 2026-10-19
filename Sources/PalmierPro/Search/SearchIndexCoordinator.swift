@@ -346,7 +346,9 @@ final class SearchIndexCoordinator {
             guard let key = GemmaIndexer.indexKey(sourceURL: sourceURL, fallbackURL: indexURL) else { return }
             switch type {
             case .video:
-                guard GemmaIndexer.needsIndex(key: key) else { return }
+                // A cancelled audio pass leaves a current record with audio: [] — re-run for that alone.
+                guard GemmaIndexer.needsIndex(key: key)
+                    || GemmaIndexer.needsAudioPass(key: key, hasAudio: hasAudio) else { return }
                 try await GemmaIndexer.indexVideo(indexURL: indexURL, key: key, duration: duration, embedder: gemma)
                 if hasAudio {
                     try await GemmaIndexer.indexAudio(url: indexURL, key: key, embedder: gemma)

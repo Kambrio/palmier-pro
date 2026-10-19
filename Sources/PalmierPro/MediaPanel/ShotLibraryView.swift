@@ -5,9 +5,12 @@ import SwiftUI
 /// The Shot Library: per-footage AI analysis with an editing mode for descriptions, meaningful
 /// names, and editorial labels (skip / key / custom). Opened from the Documents tab.
 struct ShotLibraryView: View {
+    private enum SectionTab { case shots, groups }
+
     @Environment(EditorViewModel.self) private var editor
     @Environment(\.dismiss) private var dismiss
     @State private var selectedAssetId: String?
+    @State private var tab: SectionTab = .shots
     /// Play-vs-frames mode, held here (not in the per-asset detail editor) so switching shots keeps
     /// play mode and the next shot starts playing instead of snapping back to the frames view.
     @State private var playing = false
@@ -21,6 +24,11 @@ struct ShotLibraryView: View {
             Divider().overlay(AppTheme.Border.subtleColor)
             if assets.isEmpty {
                 emptyState
+            } else if tab == .groups {
+                FootageGroupsView(assets: assets) { assetId in
+                    selectedAssetId = assetId
+                    tab = .shots
+                }
             } else {
                 HStack(spacing: 0) {
                     footageList
@@ -49,14 +57,23 @@ struct ShotLibraryView: View {
                     .foregroundStyle(AppTheme.Text.tertiaryColor)
             }
             Spacer()
-            if manager.isAnalyzing {
-                ProgressView().controlSize(.small)
+            Picker("Section", selection: $tab) {
+                Text(L10n.string("Shots")).tag(SectionTab.shots)
+                Text(L10n.string("Groups")).tag(SectionTab.groups)
             }
-            Button(manager.library.entries.isEmpty ? "Analyze all" : "Re-analyze all") {
-                manager.analyzeAll(force: !manager.library.entries.isEmpty)
-            }
-            .buttonStyle(.capsule(.secondary, size: .small))
+            .pickerStyle(.segmented)
+            .frame(width: 168)
             .disabled(assets.isEmpty)
+            if tab == .shots {
+                if manager.isAnalyzing {
+                    ProgressView().controlSize(.small)
+                }
+                Button(manager.library.entries.isEmpty ? "Analyze all" : "Re-analyze all") {
+                    manager.analyzeAll(force: !manager.library.entries.isEmpty)
+                }
+                .buttonStyle(.capsule(.secondary, size: .small))
+                .disabled(assets.isEmpty)
+            }
             Button("Done") { dismiss() }
                 .buttonStyle(.capsule(.prominent, size: .small))
                 .keyboardShortcut(.defaultAction)

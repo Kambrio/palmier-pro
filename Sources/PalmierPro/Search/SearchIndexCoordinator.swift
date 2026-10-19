@@ -29,7 +29,7 @@ final class SearchIndexCoordinator {
 
     private struct IndexWork: Sendable {
         let asset: AssetSnapshot
-        /// Nil for gemma-only audio work, enqueued when no SigLIP model is available.
+        /// Nil for gemma-only work (any type), enqueued when no SigLIP model is available.
         let spec: VisualEmbedder.Spec?
     }
 
@@ -130,8 +130,8 @@ final class SearchIndexCoordinator {
         let snapshot = Self.snapshot(asset)
         if VisualModelLoader.shared.enabled, let model = VisualModelLoader.shared.embedder {
             queue.append(IndexWork(asset: snapshot, spec: model.spec))
-        } else if snapshot.type == .audio,
-                  GemmaModelManager.shared.enabled, GemmaModelManager.shared.isReady {
+        } else if GemmaModelManager.shared.enabled, GemmaModelManager.shared.isReady {
+            // Gemma-only indexing: SigLIP absent or still loading, but gemma can take the asset.
             queue.append(IndexWork(asset: snapshot, spec: nil))
         } else {
             return
@@ -218,7 +218,7 @@ final class SearchIndexCoordinator {
             if let retry { schedule(retry) }
         }
 
-        // Gemma-only audio work: no SigLIP preflight; the gemma pass checks its own staleness.
+        // Gemma-only work: no SigLIP preflight; the gemma pass checks its own staleness.
         guard let spec = work.spec else {
             guard isCurrent(work) else {
                 retry = assetsProvider().first { $0.id == work.asset.id }
@@ -380,7 +380,10 @@ final class SearchIndexCoordinator {
     // MARK: - Query
 
     func search(query: String, limit: Int = 20, within ids: Set<String>? = nil) async -> [VisualSearch.Hit] {
-        guard let model = VisualModelLoader.shared.embedder, VisualModelLoader.shared.isReady else { return [] }
+        // Gemma-only mode: with SigLIP absent the gemma half still runs; both absent means no search.
+        let siglipModel = VisualModelLoader.shared.isReady ? VisualModelLoader.shared.embedder : nil
+        let gemmaReady = GemmaModelManager.shared.enabled && GemmaModelManager.shared.isReady
+        guard siglipModel != nil || gemmaReady else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
@@ -392,6 +395,8 @@ final class SearchIndexCoordinator {
         let minScore = SearchIndexConfig.visualMatchCosineFloor
 
         let (siglipHits, loaded) = await Task.detached(priority: .userInitiated) {
+            () -> ([VisualSearch.Hit], [String: (key: String, index: EmbeddingStore.AssetIndex)]) in
+            guard let model = siglipModel else { return ([VisualSearch.Hit](), [:]) }
             var indexes: [(String, EmbeddingStore.AssetIndex)] = []
             var loaded: [String: (key: String, index: EmbeddingStore.AssetIndex)] = [:]
             for (assetID, url) in candidates {

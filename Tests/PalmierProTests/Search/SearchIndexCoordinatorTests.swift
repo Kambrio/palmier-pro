@@ -12,6 +12,18 @@ struct TranscriptCacheDiskTests {
     }
 }
 
+@Suite("SearchIndexCoordinator — query guards")
+@MainActor
+struct SearchIndexQueryGuardTests {
+    /// Neither model is prepared in the test process, so search must short-circuit to [].
+    @Test func searchWithNoEmbedderReadyReturnsEmpty() async {
+        let coordinator = SearchIndexCoordinator()
+        coordinator.assetsProvider = { [] }
+        let hits = await coordinator.search(query: "a harbor at dusk")
+        #expect(hits.isEmpty)
+    }
+}
+
 @Suite("SearchIndexCoordinator — disk preflight")
 struct SearchIndexPreflightTests {
     private let spec = VisualEmbedder.Spec(

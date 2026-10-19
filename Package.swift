@@ -23,7 +23,10 @@ let package = Package(
         .package(url: "https://github.com/get-convex/convex-swift", from: "0.8.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.3"),
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.32.3")),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.32.3"),
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift-lm",
+            .revision("028a828efa1801ca6d40dfdca82fa501059dbf1f")
+        ),
         .package(url: "https://github.com/airbnb/lottie-ios", from: "4.6.1"),
         .package(url: "https://github.com/argmaxinc/WhisperKit", from: "1.0.0"),
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),

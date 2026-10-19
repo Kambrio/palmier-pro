@@ -29,8 +29,11 @@ final class GemmaModelManager {
 
     init(factories: ModelFactories) { self.factories = factories }
 
+    // Test-only enable switch; skips the UserDefaults write of setEnabled(_:).
+    func setEnabledInternal(_ value: Bool) { enabled = value }
+
     func prepare() async {
-        guard state == .unknown else { return }
+        guard enabled, state == .unknown else { return }
         let factories = self.factories
         let installed = await Task.detached(priority: .userInitiated) { factories.isInstalled() }.value
         guard installed else { state = .notInstalled; return }
@@ -52,6 +55,7 @@ final class GemmaModelManager {
                         self.state = .downloading(fraction)
                     }
                 }
+                guard enabled else { state = .unknown; return }
                 state = .preparing
                 self.embedder = embedder
                 state = .ready
@@ -101,11 +105,13 @@ final class GemmaModelManager {
 
 #if BUNDLED_SPEECH
 import CoreGraphics
+import CoreImage
+import CoreMedia
 import HuggingFace
 import MLX
-import MLXEmbedders
 import MLXHuggingFace
 import MLXLMCommon
+import MLXVLM
 import Tokenizers
 
 enum LiveGemmaEmbedderFactory {
@@ -124,67 +130,61 @@ enum LiveGemmaEmbedderFactory {
         try? FileManager.default.removeItem(at: HubCache.default.repoDirectory(repo: repo, kind: .model))
     }
 
-    // mlx-swift-lm 3.32.3 has no EmbeddingGemma 2 class; loads the registry's gemma3 text path.
     static func load(progress: @escaping @Sendable (Double) -> Void) async throws -> any GemmaEmbedding {
-        let container = try await Task.detached(priority: .userInitiated) { () -> EmbedderModelContainer in
-            try await EmbedderModelFactory.shared.loadContainer(
-                from: #hubDownloader(),
-                using: #huggingFaceTokenizerLoader(),
-                configuration: .init(id: hubID),
+        let resolved = try await Task.detached(priority: .userInitiated) {
+            try await resolve(
+                configuration: ModelConfiguration(id: hubID),
+                from: #hubDownloader(), useLatest: false,
                 progressHandler: { progress($0.fractionCompleted) })
         }.value
+        let underlying = try await EmbeddingGemma2Embedding(
+            modelDirectory: resolved.modelDirectory, tokenizerLoader: #huggingFaceTokenizerLoader())
         progress(1)
-        return try await MLXGemmaEmbedder(container: container)
+        return try await MLXGemmaEmbedder(underlying: underlying)
     }
 }
 
 final class MLXGemmaEmbedder: GemmaEmbedding, Sendable {
     let dim: Int
-    private let container: EmbedderModelContainer
+    private let underlying: EmbeddingGemma2Embedding
 
-    init(container: EmbedderModelContainer) async throws {
-        self.container = container
-        dim = try await Self.embed(container: container, text: "warm up", task: .document).count
+    init(underlying: EmbeddingGemma2Embedding) async throws {
+        self.underlying = underlying
+        dim = try await underlying.embed(.init(text: "warm up"), task: .document).count
     }
 
     func embedText(_ text: String, task: GemmaTask) async throws -> [Float] {
-        try await Self.embed(container: container, text: text, task: task)
+        try await underlying.embed(.init(text: text), task: task.libraryTask)
     }
 
     func embedImages(_ images: [CGImage]) async throws -> [[Float]] {
-        throw GemmaUnavailableError.modalityUnsupported("images")
+        let inputs: [EmbeddingGemma2Embedding.Input] = images.map {
+            .init([.image(.ciImage(CIImage(cgImage: $0)))])
+        }
+        return try await underlying.embed(inputs, task: .document)
     }
 
     func embedVideo(_ frames: [CGImage]) async throws -> [Float] {
-        throw GemmaUnavailableError.modalityUnsupported("video")
+        let parts = frames.enumerated().map { index, frame in
+            UserInput.VideoFrame(
+                image: .ciImage(CIImage(cgImage: frame)),
+                timeStamp: CMTime(seconds: Double(index), preferredTimescale: 600))
+        }
+        return try await underlying.embed(.init([.video(.frames(parts))]), task: .document)
     }
 
     func embedAudio(_ samples: [Float], sampleRate: Int) async throws -> [Float] {
-        throw GemmaUnavailableError.modalityUnsupported("audio")
+        try await underlying.embed(.init([.audio(.array(MLXArray(samples)))]), task: .document)
     }
+}
 
-    // EmbeddingGemma instruction prefixes; GemmaTask rawValues name the non-query tasks.
-    private static func prompt(_ text: String, task: GemmaTask) -> String {
-        switch task {
-        case .searchQuery: "task: search result | query: \(text)"
-        case .document, .clustering: "task: \(task.rawValue) | text: \(text)"
+private extension GemmaTask {
+    var libraryTask: EmbeddingGemma2Embedding.Task {
+        switch self {
+        case .searchQuery: .searchQuery
+        case .document: .document
+        case .clustering: .clustering
         }
-    }
-
-    private static func embed(container: EmbedderModelContainer, text: String, task: GemmaTask) async throws -> [Float] {
-        let formatted = prompt(text, task: task)
-        return try await Task.detached(priority: .userInitiated) { () -> [Float] in
-            try await container.perform { context in
-                let ids = context.tokenizer.encode(text: formatted, addSpecialTokens: true)
-                let inputs = MLXArray([ids])
-                let mask = MLXArray.ones([1, ids.count])
-                let output = context.model(inputs, positionIds: nil, tokenTypeIds: nil, attentionMask: mask)
-                // pooledOutput is already projected and L2-normalized; extra layerNorm would skew it.
-                let pooled = context.pooling(output, mask: mask, normalize: true, applyLayerNorm: false)
-                pooled.eval()
-                return pooled.asArray(Float.self)
-            }
-        }.value
     }
 }
 #else
@@ -199,12 +199,8 @@ enum LiveGemmaEmbedderFactory {
 
 enum GemmaUnavailableError: Error, LocalizedError {
     case modelNotBuilt
-    case modalityUnsupported(String)
 
     var errorDescription: String? {
-        switch self {
-        case .modelNotBuilt: "Gemma embedding requires the BundledSpeech build."
-        case .modalityUnsupported(let modality): "Gemma embedding for \(modality) is not available in this mlx-swift-lm release."
-        }
+        "Gemma embedding requires the BundledSpeech build."
     }
 }

@@ -66,8 +66,13 @@ enum GemmaIndexer {
     }
 
     static func indexAudio(url: URL, key: String, embedder: any GemmaEmbedding) async throws {
-        guard !ClipEmbedStore.isCurrent(key: key, model: modelName, modelVersion: modelVersion) else { return }
+        // Skip only when this record's audio pass already ran; a record from indexVideo (audio: []) still merges.
         let existing = ClipEmbedStore.load(key: key)
+        if let existing,
+           existing.model == modelName, existing.modelVersion == modelVersion,
+           !existing.audio.isEmpty {
+            return
+        }
         let chunks = try await AudioPCMExtractor.mono16kChunks(url: url)
         var embedded: [ClipEmbedStore.AudioChunk] = []
         for chunk in chunks {

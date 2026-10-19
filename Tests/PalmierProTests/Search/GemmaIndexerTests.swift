@@ -44,6 +44,21 @@ import AVFoundation
         #expect(record?.audio.isEmpty == false)
         #expect(record?.audio.allSatisfy { $0.vector.count == 768 } == true)
     }
+
+    @Test func indexAudioAfterIndexVideoMergesChunks() async throws {
+        let video = try TestMedia.makeVideo(seconds: 4, name: "gemma-merge-video")
+        let audio = try TestMedia.makeWAV(seconds: 2, sampleRate: 16_000, name: "gemma-merge-audio")
+        defer { try? FileManager.default.removeItem(at: video); try? FileManager.default.removeItem(at: audio) }
+        let vKey = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: video)!
+        defer { ClipEmbedStore.remove(key: vKey); try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(vKey)) }
+
+        try await GemmaIndexer.indexVideo(indexURL: video, key: vKey, duration: 4, embedder: StubGemmaEmbedding())
+        try await GemmaIndexer.indexAudio(url: audio, key: vKey, embedder: StubGemmaEmbedding())
+
+        let record = ClipEmbedStore.load(key: vKey)
+        #expect(record?.audio.isEmpty == false)
+        #expect(record?.clipVector != nil)
+    }
 }
 
 @Suite struct AudioPCMExtractorTests {

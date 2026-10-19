@@ -47,6 +47,13 @@ final class SearchIndexCoordinator {
     /// On-disk source URL per asset id, so gemma keys survive proxy resolution.
     var manifestSourceLookup: @MainActor (String) -> URL? = { _ in nil }
 
+    /// Source-map snapshot for gemma store readers outside the coordinator (tools, footage groups).
+    func gemmaSourceMap() -> [String: URL?] {
+        var map: [String: URL?] = [:]
+        for asset in assetsProvider() { map[asset.id] = manifestSourceLookup(asset.id) }
+        return map
+    }
+
     private var queue: [IndexWork] = []
     private var scheduledIds: Set<String> = []
     private var isCancelling = false
@@ -342,8 +349,9 @@ final class SearchIndexCoordinator {
         let duration = asset.duration
         let type = asset.type
         let hasAudio = asset.hasAudio
+        let assetID = asset.id
         let task = Task.detached(priority: .utility) {
-            guard let key = GemmaIndexer.indexKey(sourceURL: sourceURL, fallbackURL: indexURL) else { return }
+            guard let key = GemmaIndexer.key(assetID: assetID, url: indexURL, sources: [assetID: sourceURL]) else { return }
             switch type {
             case .video:
                 // A cancelled audio pass leaves a current record with audio: [] — re-run for that alone.
@@ -415,15 +423,9 @@ final class SearchIndexCoordinator {
                 var frameIndexes: [(assetID: String, index: EmbeddingStore.AssetIndex)] = []
                 var clipRecords: [(assetID: String, record: ClipEmbedStore.Record)] = []
                 for (assetID, url) in candidates {
-                    // Same key inputs as runGemmaPass so the search sees what the indexer wrote.
-                    guard let key = GemmaIndexer.indexKey(sourceURL: gemmaSources[assetID] ?? nil, fallbackURL: url) else { continue }
-                    if let index = try? EmbeddingStore.load(key: key),
-                       index.header.model == GemmaIndexer.modelName {
-                        frameIndexes.append((assetID: assetID, index: index))
-                    }
-                    if let record = ClipEmbedStore.load(key: key) {
-                        clipRecords.append((assetID: assetID, record: record))
-                    }
+                    let (frameIndex, record) = GemmaIndexer.stores(assetID: assetID, url: url, sources: gemmaSources)
+                    if let frameIndex { frameIndexes.append((assetID: assetID, index: frameIndex)) }
+                    if let record { clipRecords.append((assetID: assetID, record: record)) }
                 }
                 guard let vector = try? await gemma.embedText(trimmed, task: .searchQuery) else { return [] }
                 return GemmaSearch.search(query: vector, frameIndexes: frameIndexes,

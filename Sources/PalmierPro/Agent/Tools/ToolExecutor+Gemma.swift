@@ -29,10 +29,11 @@ enum GemmaToolCore {
 
     static func clusterFootage(
         candidates: [(id: String, url: URL)],
+        sources: [String: URL?],
         totalVideoAssets: Int
     ) throws -> ToolResult {
         let items: [(id: String, vector: [Float])] = candidates.compactMap { candidate in
-            guard let key = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: candidate.url),
+            guard let key = GemmaIndexer.key(assetID: candidate.id, url: candidate.url, sources: sources),
                   let vector = ClipEmbedStore.load(key: key)?.clipVector else { return nil }
             return (id: candidate.id, vector: vector)
         }
@@ -62,7 +63,7 @@ enum GemmaToolCore {
         limit: Int,
         fps: Int
     ) throws -> ToolResult {
-        guard let voiceKey = GemmaIndexer.indexKey(sourceURL: sources[voiceID] ?? nil, fallbackURL: voiceURL),
+        guard let voiceKey = GemmaIndexer.key(assetID: voiceID, url: voiceURL, sources: sources),
               let voiceRecord = ClipEmbedStore.load(key: voiceKey),
               let query = voiceRecord.audio.first?.vector else {
             return .error(
@@ -70,8 +71,7 @@ enum GemmaToolCore {
         }
         var searchable: [(assetID: String, record: ClipEmbedStore.Record)] = []
         for candidate in candidates where candidate.id != voiceID {
-            guard let key = GemmaIndexer.indexKey(
-                      sourceURL: sources[candidate.id] ?? nil, fallbackURL: candidate.url),
+            guard let key = GemmaIndexer.key(assetID: candidate.id, url: candidate.url, sources: sources),
                   let record = ClipEmbedStore.load(key: key) else { continue }
             searchable.append((assetID: candidate.id, record: record))
         }
@@ -115,15 +115,10 @@ enum GemmaToolCore {
         var frameIndexes: [(assetID: String, index: EmbeddingStore.AssetIndex)] = []
         var clipRecords: [(assetID: String, record: ClipEmbedStore.Record)] = []
         for candidate in candidates {
-            guard let key = GemmaIndexer.indexKey(
-                sourceURL: sources[candidate.id] ?? nil, fallbackURL: candidate.url) else { continue }
-            if let index = try? EmbeddingStore.load(key: key),
-               index.header.model == GemmaIndexer.modelName {
-                frameIndexes.append((assetID: candidate.id, index: index))
-            }
-            if let record = ClipEmbedStore.load(key: key) {
-                clipRecords.append((assetID: candidate.id, record: record))
-            }
+            let (frameIndex, record) = GemmaIndexer.stores(
+                assetID: candidate.id, url: candidate.url, sources: sources)
+            if let frameIndex { frameIndexes.append((assetID: candidate.id, index: frameIndex)) }
+            if let record { clipRecords.append((assetID: candidate.id, record: record)) }
         }
         return (frameIndexes, clipRecords)
     }
@@ -163,7 +158,7 @@ extension ToolExecutor {
         let candidates = editor.mediaAssets
             .filter { $0.type == .video || $0.type == .audio }
             .map { (id: $0.id, url: $0.url) }
-        let sources = Self.gemmaSourceMap(editor, ids: candidates.map(\.id))
+        let sources = editor.searchIndex.gemmaSourceMap()
         let fps = editor.timeline.fps
         let result = try await Task.detached(priority: .userInitiated) {
             try await GemmaToolCore.findMoments(
@@ -180,8 +175,10 @@ extension ToolExecutor {
 
         let videos = editor.mediaAssets.filter { $0.type == .video }
         let candidates = videos.map { (id: $0.id, url: $0.url) }
+        let sources = editor.searchIndex.gemmaSourceMap()
         let result = try await Task.detached(priority: .userInitiated) {
-            try GemmaToolCore.clusterFootage(candidates: candidates, totalVideoAssets: videos.count)
+            try GemmaToolCore.clusterFootage(
+                candidates: candidates, sources: sources, totalVideoAssets: videos.count)
         }.value
         try Task.checkCancellation()
         return result
@@ -197,7 +194,7 @@ extension ToolExecutor {
         let candidates = editor.mediaAssets
             .filter { $0.type == .video || $0.type == .audio }
             .map { (id: $0.id, url: $0.url) }
-        let sources = Self.gemmaSourceMap(editor, ids: candidates.map(\.id) + [voice.id])
+        let sources = editor.searchIndex.gemmaSourceMap()
         let fps = editor.timeline.fps
         let voiceID = voice.id
         let voiceURL = voice.url
@@ -208,14 +205,5 @@ extension ToolExecutor {
         }.value
         try Task.checkCancellation()
         return result
-    }
-
-    /// On-disk source URL per asset id, so proxied assets key stores as the indexer did.
-    private static func gemmaSourceMap(_ editor: EditorViewModel, ids: [String]) -> [String: URL?] {
-        var sources: [String: URL?] = [:]
-        for id in ids {
-            sources[id] = editor.searchIndex.manifestSourceLookup(id)
-        }
-        return sources
     }
 }

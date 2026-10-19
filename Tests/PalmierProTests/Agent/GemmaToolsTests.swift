@@ -124,7 +124,7 @@ struct GemmaToolsTests {
         }
 
         let result = try GemmaToolCore.clusterFootage(
-            candidates: zip(ids, urls).map { (id: $0.0, url: $0.1) }, totalVideoAssets: 6)
+            candidates: zip(ids, urls).map { (id: $0.0, url: $0.1) }, sources: [:], totalVideoAssets: 6)
         #expect(result.isError == false)
         let obj = try jsonObject(result)
 
@@ -149,7 +149,7 @@ struct GemmaToolsTests {
         defer { cleanup(url: url, key: key) }
 
         let result = try GemmaToolCore.clusterFootage(
-            candidates: [(id: "v0", url: url)], totalVideoAssets: 1)
+            candidates: [(id: "v0", url: url)], sources: [:], totalVideoAssets: 1)
         #expect(result.isError == false)
         let obj = try jsonObject(result)
         #expect((obj["groups"] as? [Any])?.isEmpty == true)
@@ -158,6 +158,36 @@ struct GemmaToolsTests {
         #expect(coverage["assets"] as? Int == 1)
         #expect(coverage["grouped"] as? Int == 0)
         #expect((obj["note"] as? String)?.contains("indexing") == true)
+    }
+
+    @Test func clusterFootageResolvesProxiedAssetsThroughSourceMap() throws {
+        let sources = try (0..<2).map { try seededFile("origin\($0).mov") }
+        let proxies = try (0..<2).map { try seededFile("proxy\($0).mov") }
+        let keys = sources.map { storeKey($0) }
+        defer {
+            for (url, key) in zip(sources, keys) { cleanup(url: url, key: key) }
+            proxies.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
+        for key in keys {
+            try ClipEmbedStore.save(
+                .init(model: GemmaIndexer.modelName, modelVersion: GemmaIndexer.modelVersion,
+                      clipVector: unitVector(axis: 0), audio: []),
+                key: key)
+        }
+        let candidates = zip(["v0", "v1"], proxies).map { (id: $0.0, url: $0.1) }
+
+        // Without the map the proxy URLs key nowhere; with it the source keys resolve.
+        let unmappped = try GemmaToolCore.clusterFootage(
+            candidates: candidates, sources: [:], totalVideoAssets: 2)
+        #expect((try jsonObject(unmappped)["groups"] as? [Any])?.isEmpty == true)
+
+        let sourceMap = ["v0": sources[0], "v1": sources[1]]
+        let result = try GemmaToolCore.clusterFootage(
+            candidates: candidates, sources: sourceMap, totalVideoAssets: 2)
+        let obj = try jsonObject(result)
+        let groups = try #require(obj["groups"] as? [[String: Any]])
+        #expect(groups.count == 1)
+        #expect(groups[0]["memberIds"] as? [String] == ["v0", "v1"])
     }
 
     // MARK: GemmaToolCore — match_audio

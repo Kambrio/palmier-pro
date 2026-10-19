@@ -179,10 +179,11 @@ struct FootageGroupsView: View {
             hasVectors = false
             return
         }
+        let sources = editor.searchIndex.gemmaSourceMap()
         let result = await Task.detached(priority: .utility) {
             () -> (groups: [FootageGroups.Group], nearDuplicates: [[String]], hasVectors: Bool) in
             let items: [(id: String, vector: [Float])] = snapshot.compactMap { entry in
-                guard let key = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: entry.url),
+                guard let key = GemmaIndexer.key(assetID: entry.id, url: entry.url, sources: sources),
                       let vector = ClipEmbedStore.load(key: key)?.clipVector,
                       !vector.isEmpty else { return nil }
                 return (id: entry.id, vector: vector)

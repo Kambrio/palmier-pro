@@ -11,6 +11,21 @@ enum GemmaIndexer {
         return EmbeddingStore.key(for: fallbackURL)
     }
 
+    /// The one key rule for every gemma store reader: prefer the asset's on-disk source over its proxy URL.
+    static func key(assetID: String, url: URL, sources: [String: URL?]) -> String? {
+        indexKey(sourceURL: sources[assetID] ?? nil, fallbackURL: url)
+    }
+
+    /// Both gemma stores for one asset under that rule; frame index nil unless written by this model.
+    static func stores(
+        assetID: String, url: URL, sources: [String: URL?]
+    ) -> (frameIndex: EmbeddingStore.AssetIndex?, record: ClipEmbedStore.Record?) {
+        guard let key = key(assetID: assetID, url: url, sources: sources) else { return (nil, nil) }
+        let frameIndex = (try? EmbeddingStore.load(key: key))
+            .flatMap { $0.header.model == modelName ? $0 : nil }
+        return (frameIndex, ClipEmbedStore.load(key: key))
+    }
+
     static func needsIndex(key: String) -> Bool {
         let framesCurrent = EmbeddingStore.isCurrent(
             key: key, model: modelName, modelVersion: modelVersion,

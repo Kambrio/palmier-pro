@@ -380,7 +380,7 @@ final class SearchIndexCoordinator {
         let cached = loadedIndexes
         let minScore = SearchIndexConfig.visualMatchCosineFloor
 
-        let (hits, loaded) = await Task.detached(priority: .userInitiated) {
+        let (siglipHits, loaded) = await Task.detached(priority: .userInitiated) {
             var indexes: [(String, EmbeddingStore.AssetIndex)] = []
             var loaded: [String: (key: String, index: EmbeddingStore.AssetIndex)] = [:]
             for (assetID, url) in candidates {
@@ -399,6 +399,35 @@ final class SearchIndexCoordinator {
         }.value
 
         loadedIndexes.merge(loaded) { _, new in new }
+
+        // Gemma re-ranking fused with the SigLIP hits; loads gemma stores directly —
+        // loadedIndexes caches SigLIP stores under the same keys.
+        var hits = siglipHits
+        if GemmaModelManager.shared.enabled, GemmaModelManager.shared.isReady,
+           let gemma = GemmaModelManager.shared.embedder {
+            let gemmaSources = candidates.reduce(into: [String: URL?]()) { map, entry in
+                map[entry.0] = manifestSourceLookup(entry.0)
+            }
+            let gemmaHits = await Task.detached(priority: .userInitiated) { () -> [GemmaSearch.Hit] in
+                var frameIndexes: [(assetID: String, index: EmbeddingStore.AssetIndex)] = []
+                var clipRecords: [(assetID: String, record: ClipEmbedStore.Record)] = []
+                for (assetID, url) in candidates {
+                    // Same key inputs as runGemmaPass so the search sees what the indexer wrote.
+                    guard let key = GemmaIndexer.indexKey(sourceURL: gemmaSources[assetID] ?? nil, fallbackURL: url) else { continue }
+                    if let index = try? EmbeddingStore.load(key: key),
+                       index.header.model == GemmaIndexer.modelName {
+                        frameIndexes.append((assetID: assetID, index: index))
+                    }
+                    if let record = ClipEmbedStore.load(key: key) {
+                        clipRecords.append((assetID: assetID, record: record))
+                    }
+                }
+                guard let vector = try? await gemma.embedText(trimmed, task: .searchQuery) else { return [] }
+                return GemmaSearch.search(query: vector, frameIndexes: frameIndexes,
+                                          clipRecords: clipRecords, limit: limit)
+            }.value
+            hits = GemmaSearch.fuse(hits, gemmaHits, limit: limit)
+        }
         return hits
     }
 }

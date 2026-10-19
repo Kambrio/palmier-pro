@@ -8,10 +8,16 @@ enum FootageGroups {
 
     static func groups(items: [(id: String, vector: [Float])], k: Int) -> [Group] {
         guard !items.isEmpty, k > 0 else { return [] }
-        let vectors = items.map { GemmaVector.truncate($0.vector, to: 256) }
-        let labels = kmeans(vectors, k: min(k, items.count))
+        // Vectors shorter than 256 dims truncate to [] and cannot cluster.
+        let usable: [(id: String, vector: [Float])] = items.compactMap { item -> (id: String, vector: [Float])? in
+            let truncated = GemmaVector.truncate(item.vector, to: 256)
+            return truncated.isEmpty ? nil : (id: item.id, vector: truncated)
+        }
+        guard usable.count > 1 else { return [] }
+        let vectors = usable.map(\.vector)
+        let labels = kmeans(vectors, k: min(k, usable.count))
         var buckets: [Int: (ids: [String], sum: [Float])] = [:]
-        for (i, item) in items.enumerated() {
+        for (i, item) in usable.enumerated() {
             let entry = buckets[labels[i]] ?? (ids: [], sum: [Float](repeating: 0, count: 256))
             buckets[labels[i]] = (entry.ids + [item.id], zip(entry.sum, vectors[i]).map(+))
         }
@@ -40,7 +46,7 @@ enum FootageGroups {
         var labels = [Int](repeating: 0, count: n)
         for _ in 0..<iterations {
             var changed = false
-            for i in 0..<n {
+            for i in 0..<n where !vectors[i].isEmpty {
                 var best = 0; var bestScore = -Float.infinity
                 for c in 0..<k {
                     let score = dot(vectors[i], centroids[c])
@@ -51,9 +57,9 @@ enum FootageGroups {
             guard changed else { break }
             var sums = [[Float]](repeating: [Float](repeating: 0, count: dim), count: k)
             var counts = [Int](repeating: 0, count: k)
-            for i in 0..<n {
+            for i in 0..<n where !vectors[i].isEmpty {
                 counts[labels[i]] += 1
-                for d in 0..<dim { sums[labels[i]][d] += vectors[i][d] }
+                for d in 0..<dim where d < vectors[i].count { sums[labels[i]][d] += vectors[i][d] }
             }
             for c in 0..<k where counts[c] > 0 {
                 centroids[c] = sums[c].map { $0 / Float(counts[c]) }

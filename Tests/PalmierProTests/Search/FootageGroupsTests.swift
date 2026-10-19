@@ -42,4 +42,22 @@ import Foundation
         #expect(dups.contains { $0.sorted() == ["x", "y"] })
         #expect(!dups.flatMap({ $0 }).contains("z"))
     }
+
+    @Test func groupsRejectsShortVectors() {
+        let items: [(id: String, vector: [Float])] = [
+            ("a", unit(0)), ("b", [Float](repeating: 0.1, count: 64)),
+        ]
+        let groups = FootageGroups.groups(items: items, k: 2)
+        #expect(groups.isEmpty)
+    }
+
+    @Test func kmeansNeverTrapsOnRaggedInput() {
+        let ragged: [[Float]] = [
+            [Float](repeating: 0.3, count: 300),
+            [Float](repeating: 0.9, count: 10),
+            [],
+        ]
+        let labels = FootageGroups.kmeans(ragged, k: 2)
+        #expect(labels.count == ragged.count || labels.isEmpty)
+    }
 }

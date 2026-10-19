@@ -34,10 +34,11 @@ final class GemmaModelManager {
 
     func prepare() async {
         guard enabled, state == .unknown else { return }
+        // Claim the slot before the first await so overlapping launch callers can't both load.
+        state = .preparing
         let factories = self.factories
         let installed = await Task.detached(priority: .userInitiated) { factories.isInstalled() }.value
         guard installed else { state = .notInstalled; return }
-        state = .preparing
         await load()
     }
 
@@ -93,6 +94,7 @@ final class GemmaModelManager {
     private func load() async {
         do {
             let embedder = try await factories.load { _ in }
+            guard enabled else { state = .unknown; return }
             self.embedder = embedder
             state = .ready
             Log.search.notice("gemma model ready dim=\(embedder.dim)")

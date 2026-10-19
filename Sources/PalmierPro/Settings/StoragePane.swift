@@ -7,6 +7,8 @@ struct StoragePane: View {
     @State private var indexBytes: Int64 = 0
     @State private var modelBytes: Int64 = 0
     @State private var searchEnabled = SearchIndexConfig.enabled
+    @State private var gemmaEnabled = GemmaModelManager.shared.enabled
+    @State private var showGemmaRemoveConfirmation = false
     @State private var documentsOverride = DocumentPreferences.overrideDirectory
 
     var body: some View {
@@ -16,6 +18,8 @@ struct StoragePane: View {
             }
             SettingsSection(title: L10n.string("Search")) {
                 searchIndexSection
+                Divider().overlay(AppTheme.Border.subtleColor)
+                gemmaSection
             }
             SettingsSection(title: "Documents") {
                 documentsSection
@@ -159,6 +163,98 @@ struct StoragePane: View {
         }
     }
 
+    private var gemmaSection: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
+            HStack(alignment: .top, spacing: AppTheme.Spacing.md) {
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
+                    Text(L10n.string("EmbeddingGemma 2"))
+                        .font(.system(size: AppTheme.FontSize.md, weight: AppTheme.FontWeight.regular))
+                        .foregroundStyle(AppTheme.Text.primaryColor)
+                    Text(L10n.string("Local multimodal embeddings for search, grouping, and agent tools."))
+                        .font(.system(size: AppTheme.FontSize.sm))
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: AppTheme.Spacing.lg)
+                Toggle(String(), isOn: $gemmaEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .accessibilityLabel(L10n.string("EmbeddingGemma 2"))
+                    .onChange(of: gemmaEnabled) { _, newValue in
+                        GemmaModelManager.shared.setEnabled(newValue)
+                    }
+            }
+
+            if gemmaState != .unknown {
+                HStack(spacing: AppTheme.Spacing.sm) {
+                    gemmaStatus
+                    Spacer(minLength: AppTheme.Spacing.md)
+                    if gemmaAllowsRemove {
+                        Button(L10n.string("Remove model")) { showGemmaRemoveConfirmation = true }
+                            .buttonStyle(actionButtonStyle)
+                    }
+                }
+                .padding(.top, AppTheme.Spacing.xs)
+            }
+        }
+        .confirmationDialog(
+            L10n.string("Remove EmbeddingGemma 2?"),
+            isPresented: $showGemmaRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.string("Remove model"), role: .destructive) { removeGemma() }
+            Button(L10n.string("Cancel"), role: .cancel) {}
+        } message: {
+            Text(L10n.string("This permanently deletes the downloaded model files."))
+        }
+    }
+
+    private var gemmaState: GemmaModelManager.State { GemmaModelManager.shared.state }
+
+    private var gemmaAllowsRemove: Bool {
+        switch gemmaState {
+        case .preparing, .ready, .failed: true
+        default: false
+        }
+    }
+
+    @ViewBuilder
+    private var gemmaStatus: some View {
+        switch gemmaState {
+        case .notInstalled:
+            Button(L10n.string("Install")) { GemmaModelManager.shared.download() }
+                .buttonStyle(actionButtonStyle)
+        case .downloading(let fraction):
+            HStack(spacing: AppTheme.Spacing.xs) {
+                ProgressView().controlSize(.mini)
+                Text(L10n.string("Downloading \(Int(fraction * 100))%"))
+                    .font(.system(size: AppTheme.FontSize.xs).monospacedDigit())
+                    .foregroundStyle(AppTheme.Text.secondaryColor)
+            }
+        case .preparing:
+            HStack(spacing: AppTheme.Spacing.xs) {
+                ProgressView().controlSize(.mini)
+                Text(L10n.string("Preparing…"))
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+            }
+        case .ready:
+            Text(L10n.string("Ready"))
+                .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.medium))
+                .foregroundStyle(AppTheme.Text.secondaryColor)
+                .padding(.horizontal, AppTheme.Spacing.sm)
+                .padding(.vertical, AppTheme.Spacing.xxs)
+                .background(AppTheme.Background.raisedColor, in: Capsule())
+        case .failed(let message):
+            Button(L10n.string("Retry")) { GemmaModelManager.shared.download() }
+                .buttonStyle(actionButtonStyle)
+                .help(message)
+        case .unknown:
+            EmptyView()
+        }
+    }
+
     private var actionButtonStyle: CapsuleButtonStyle {
         .init(
             variant: .secondary,
@@ -205,6 +301,10 @@ struct StoragePane: View {
             await VisualModelLoader.shared.remove()
             await refresh()
         }
+    }
+
+    private func removeGemma() {
+        Task { await GemmaModelManager.shared.remove() }
     }
 
     private func refresh() async {

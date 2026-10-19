@@ -92,6 +92,7 @@ final class SearchIndexCoordinator {
         )
         Task {
             await VisualModelLoader.shared.prepare()
+            await GemmaModelManager.shared.prepare()
             sweep()
         }
     }

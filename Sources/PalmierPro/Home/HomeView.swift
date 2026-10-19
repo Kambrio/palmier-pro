@@ -21,7 +21,10 @@ struct HomeView: View {
         )
         .background(.ultraThinMaterial)
         .focusEffectDisabled()
-        .task { await VisualModelLoader.shared.prepare() }
+        .task {
+            await VisualModelLoader.shared.prepare()
+            await GemmaModelManager.shared.prepare()
+        }
         .onAppear { changelog.checkForWhatsNew() }
         .overlay {
             ZStack {

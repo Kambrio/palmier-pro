@@ -186,7 +186,7 @@ struct StoragePane: View {
                     }
             }
 
-            if gemmaState != .unknown {
+            if gemmaState != .unknown || GemmaModelManager.shared.enabled {
                 HStack(spacing: AppTheme.Spacing.sm) {
                     gemmaStatus
                     Spacer(minLength: AppTheme.Spacing.md)
@@ -233,12 +233,7 @@ struct StoragePane: View {
                     .foregroundStyle(AppTheme.Text.secondaryColor)
             }
         case .preparing:
-            HStack(spacing: AppTheme.Spacing.xs) {
-                ProgressView().controlSize(.mini)
-                Text(L10n.string("Preparing…"))
-                    .font(.system(size: AppTheme.FontSize.xs))
-                    .foregroundStyle(AppTheme.Text.tertiaryColor)
-            }
+            gemmaPreparingStatus
         case .ready:
             Text(L10n.string("Ready"))
                 .font(.system(size: AppTheme.FontSize.xs, weight: AppTheme.FontWeight.medium))
@@ -251,7 +246,18 @@ struct StoragePane: View {
                 .buttonStyle(actionButtonStyle)
                 .help(message)
         case .unknown:
-            EmptyView()
+            if GemmaModelManager.shared.enabled {
+                gemmaPreparingStatus
+            }
+        }
+    }
+
+    private var gemmaPreparingStatus: some View {
+        HStack(spacing: AppTheme.Spacing.xs) {
+            ProgressView().controlSize(.mini)
+            Text(L10n.string("Preparing…"))
+                .font(.system(size: AppTheme.FontSize.xs))
+                .foregroundStyle(AppTheme.Text.tertiaryColor)
         }
     }
 

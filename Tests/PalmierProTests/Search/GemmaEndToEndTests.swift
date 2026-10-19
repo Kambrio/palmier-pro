@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 @testable import PalmierPro
+#if BUNDLED_SPEECH
+import MLX
+#endif
 
 @Suite struct GemmaEndToEndTests {
     /// Full pipeline with the stub embedder: index video+audio → search → fuse → cluster.
@@ -58,6 +61,7 @@ struct LiveGemmaSanityTests {
     @Test func queryDocumentGeometry() async throws {
         guard ProcessInfo.processInfo.environment["PALMIER_GEMMA_LIVE"] == "1" else { return }
 #if BUNDLED_SPEECH
+        try Self.pointMLXAtMetallib()
         let embedder = try await LiveGemmaEmbedderFactory.load { _ in }
         let q = try await embedder.embedText("a person walking at night", task: .searchQuery)
         let d = try await embedder.embedText("a city street at night", task: .document)
@@ -73,6 +77,33 @@ struct LiveGemmaSanityTests {
         #expect(Bool(true)) // live embedder needs the BundledSpeech build trait
 #endif
     }
+
+#if BUNDLED_SPEECH
+    /// SwiftPM never compiles MLX's Metal kernels; point the device at a prebuilt metallib
+    /// (scripts/bundle.sh --speech builds .build/<config>/mlx.metallib) before the first MLX call.
+    private static func pointMLXAtMetallib() throws {
+        guard GPU.metallib == nil else { return }
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Search
+            .deletingLastPathComponent() // PalmierProTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // repo root
+        for config in ["debug", "release"] {
+            let url = repoRoot.appendingPathComponent(".build/\(config)/mlx.metallib")
+            if FileManager.default.fileExists(atPath: url.path) {
+                GPU.metallib = url
+                return
+            }
+        }
+        let bundleMetallib = Bundle.main.url(forResource: "mlx", withExtension: "metallib")
+            ?? Bundle(for: GemmaModelManager.self).url(forResource: "mlx", withExtension: "metallib")
+        if let bundleMetallib {
+            GPU.metallib = bundleMetallib
+            return
+        }
+        throw ToolError("live test needs a prebuilt mlx.metallib — run scripts/bundle.sh debug --speech once")
+    }
+#endif
 
     private func norm(_ v: [Float]) -> Float {
         sqrt(v.reduce(Float(0)) { $0 + $1 * $1 })

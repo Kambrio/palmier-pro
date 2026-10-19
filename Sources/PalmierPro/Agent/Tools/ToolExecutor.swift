@@ -254,6 +254,7 @@ final class ToolExecutor {
     private static func canReadInactiveProject(_ tool: ToolName) -> Bool {
         switch tool {
         case .getTimeline, .inspectTimeline, .getMedia, .inspectMedia, .searchMedia,
+             .findMoments, .clusterFootage, .matchAudio,
              .getMulticam, .getTranscript, .detectBeats, .inspectColor, .listModels, .sendFeedback:
             true
         default:
@@ -327,6 +328,9 @@ final class ToolExecutor {
         case .detectBeats:   return try await detectBeats(editor, args)
         case .inspectTimeline: return try await inspectTimeline(editor, args)
         case .searchMedia:   return try await searchMedia(editor, args)
+        case .findMoments:   return try await findMoments(editor, args)
+        case .clusterFootage: return try await clusterFootage(editor, args)
+        case .matchAudio:    return try await matchAudio(editor, args)
         case .applyColor:    return try applyColor(editor, args)
         case .applyEffect:   return try applyEffect(editor, args)
         case .denoiseAudio:  return try denoiseAudio(editor, args)

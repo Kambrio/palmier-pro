@@ -73,6 +73,13 @@ enum AgentInstructions {
           budget"), call search_media before inspecting files one by one — describe what's \
           on screen or quote the words said. Hits are source-second ranges ready to convert \
           into add_clips trims.
+        - When the multimodal EmbeddingGemma 2 model is enabled, find_moments goes deeper: \
+          one semantic query over indexed frames, whole clips, AND audio, returning scored \
+          source-second moments (kind frame/clip/audio). cluster_footage surveys visual \
+          coverage — similar-clip groups and near-duplicate takes for b-roll and best-take \
+          picks; match_audio finds footage audio that sounds like a given voice asset. All \
+          three need the model (Settings → Storage); when it's off or still indexing, their \
+          receipts say so — fall back to search_media then.
 
         # Editing
         - Edits are undoable and effectively free — don't ask permission for individual \

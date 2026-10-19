@@ -118,7 +118,10 @@ let package = Package(
                 "PalmierPro",
                 .product(name: "MCP", package: "swift-sdk"),
             ],
-            path: "Tests/PalmierProTests"
+            path: "Tests/PalmierProTests",
+            swiftSettings: [
+                .define("BUNDLED_SPEECH", .when(traits: ["BundledSpeech"])),
+            ]
         ),
     ]
 )

@@ -1,0 +1,60 @@
+import Testing
+import Foundation
+import AVFoundation
+@testable import PalmierPro
+
+@Suite struct GemmaIndexerTests {
+    @Test func indexKeyPrefersSourceWhenReadable() throws {
+        let source = URL(fileURLWithPath: #filePath) // exists, has attrs
+        let proxy = URL(fileURLWithPath: "/nonexistent/proxy.mov")
+        let a = GemmaIndexer.indexKey(sourceURL: source, fallbackURL: proxy)
+        let b = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: source)
+        #expect(a == b) // same file identity
+        let c = GemmaIndexer.indexKey(sourceURL: URL(fileURLWithPath: "/gone/a.mov"),
+                                      fallbackURL: source)
+        #expect(c == b) // unreadable source falls back to index URL
+    }
+
+    @Test func indexVideoWritesFrameRowsAndClipVector() async throws {
+        let fixture = try TestMedia.makeVideo(seconds: 3, name: "gemma-index-video")
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let key = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: fixture)!
+        defer { ClipEmbedStore.remove(key: key); try? FileManager.default.removeItem(at: EmbeddingStore.diskURL(key)) }
+
+        try await GemmaIndexer.indexVideo(
+            indexURL: fixture, key: key, duration: 3, embedder: StubGemmaEmbedding(), progress: nil)
+
+        let frames = try EmbeddingStore.load(key: key)
+        #expect(frames.header.model == GemmaIndexer.modelName)
+        #expect(frames.header.modelVersion == GemmaIndexer.modelVersion)
+        #expect(frames.header.dim == 768)
+        #expect(frames.header.count > 0)
+        let record = ClipEmbedStore.load(key: key)
+        #expect(record?.clipVector?.count == 768)
+        #expect(GemmaIndexer.needsIndex(key: key) == false)
+    }
+
+    @Test func indexAudioWritesChunks() async throws {
+        let fixture = try TestMedia.makeWAV(seconds: 2, sampleRate: 16_000, name: "gemma-index-audio")
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let key = GemmaIndexer.indexKey(sourceURL: nil, fallbackURL: fixture)!
+        defer { ClipEmbedStore.remove(key: key) }
+        try await GemmaIndexer.indexAudio(url: fixture, key: key, embedder: StubGemmaEmbedding())
+        let record = ClipEmbedStore.load(key: key)
+        #expect(record?.audio.isEmpty == false)
+        #expect(record?.audio.allSatisfy { $0.vector.count == 768 } == true)
+    }
+}
+
+@Suite struct AudioPCMExtractorTests {
+    @Test func chunksAreMono16kAndBounded() async throws {
+        let fixture = try TestMedia.makeWAV(seconds: 2, sampleRate: 48_000, name: "gemma-pcm")
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let chunks = try await AudioPCMExtractor.mono16kChunks(url: fixture, chunkSeconds: 1)
+        #expect(chunks.count == 2)
+        for (i, chunk) in chunks.enumerated() {
+            #expect(abs(chunk.start - Double(i)) < 0.01)
+            #expect(chunk.samples.count <= 16_000)
+        }
+    }
+}

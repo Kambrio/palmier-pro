@@ -38,13 +38,4 @@ struct ClipEmbedStore {
         guard let record = load(key: key) else { return false }
         return record.model == model && record.modelVersion == modelVersion
     }
-
-    static func clearAll() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: EmbeddingStore.directory, includingPropertiesForKeys: nil
-        ) else { return }
-        for file in files where file.pathExtension == "clipembed" || file.lastPathComponent.hasSuffix(".clipembed.json") {
-            try? FileManager.default.removeItem(at: file)
-        }
-    }
 }

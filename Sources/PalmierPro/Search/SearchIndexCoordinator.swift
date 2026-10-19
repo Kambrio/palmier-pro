@@ -29,7 +29,8 @@ final class SearchIndexCoordinator {
 
     private struct IndexWork: Sendable {
         let asset: AssetSnapshot
-        let spec: VisualEmbedder.Spec
+        /// Nil for gemma-only audio work, enqueued when no SigLIP model is available.
+        let spec: VisualEmbedder.Spec?
     }
 
     private(set) var batchTotal = 0
@@ -43,6 +44,8 @@ final class SearchIndexCoordinator {
     }
 
     var assetsProvider: () -> [MediaAsset] = { [] }
+    /// On-disk source URL per asset id, so gemma keys survive proxy resolution.
+    var manifestSourceLookup: @MainActor (String) -> URL? = { _ in nil }
 
     private var queue: [IndexWork] = []
     private var scheduledIds: Set<String> = []
@@ -96,7 +99,7 @@ final class SearchIndexCoordinator {
     /// Enqueue all current assets that need (re)indexing.
     /// Failed assets get a fresh chance; failedIds only dedupes within a batch.
     func sweep() {
-        guard VisualModelLoader.shared.enabled, VisualModelLoader.shared.isReady else { return }
+        guard VisualModelLoader.shared.enabled || GemmaModelManager.shared.enabled else { return }
         failedIds.removeAll()
         let assets = assetsProvider()
         Log.search.notice(
@@ -114,13 +117,17 @@ final class SearchIndexCoordinator {
     }
 
     func schedule(_ asset: MediaAsset) {
-        guard !isCancelling,
-              VisualModelLoader.shared.enabled,
-              let model = VisualModelLoader.shared.embedder,
-              !asset.isGenerating else { return }
+        guard !isCancelling, !asset.isGenerating else { return }
         guard !scheduledIds.contains(asset.id), !failedIds.contains(asset.id) else { return }
         let snapshot = Self.snapshot(asset)
-        queue.append(IndexWork(asset: snapshot, spec: model.spec))
+        if VisualModelLoader.shared.enabled, let model = VisualModelLoader.shared.embedder {
+            queue.append(IndexWork(asset: snapshot, spec: model.spec))
+        } else if snapshot.type == .audio,
+                  GemmaModelManager.shared.enabled, GemmaModelManager.shared.isReady {
+            queue.append(IndexWork(asset: snapshot, spec: nil))
+        } else {
+            return
+        }
         scheduledIds.insert(snapshot.id)
         batchTotal += 1
         ensureWorker()
@@ -203,11 +210,29 @@ final class SearchIndexCoordinator {
             if let retry { schedule(retry) }
         }
 
+        // Gemma-only audio work: no SigLIP preflight; the gemma pass checks its own staleness.
+        guard let spec = work.spec else {
+            guard isCurrent(work) else {
+                retry = assetsProvider().first { $0.id == work.asset.id }
+                return
+            }
+            while ExportQueue.shared.isExportActive, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+            }
+            guard !Task.isCancelled else { return }
+            guard isCurrent(work) else {
+                retry = assetsProvider().first { $0.id == work.asset.id }
+                return
+            }
+            await indexOne(work.asset, model: nil, transcribe: false)
+            return
+        }
+
         let request = PreflightRequest(
             url: work.asset.url,
             type: work.asset.type,
             hasAudio: work.asset.hasAudio,
-            spec: work.spec
+            spec: spec
         )
         let task = Task.detached(priority: .utility) { Self.preflight(request) }
         let result = await withTaskCancellationHandler {
@@ -221,7 +246,11 @@ final class SearchIndexCoordinator {
             retry = assetsProvider().first { $0.id == work.asset.id }
             return
         }
-        guard result.needsIndex else { return }
+        // A current SigLIP index must not gate the gemma pass: indexOne re-checks staleness internally.
+        let gemmaEligible = GemmaModelManager.shared.enabled
+            && GemmaModelManager.shared.isReady
+            && (work.asset.type == .video || work.asset.type == .audio)
+        guard result.needsIndex || gemmaEligible else { return }
 
         while ExportQueue.shared.isExportActive, !Task.isCancelled {
             try? await Task.sleep(for: .seconds(2))
@@ -235,6 +264,11 @@ final class SearchIndexCoordinator {
     }
 
     private func isCurrent(_ work: IndexWork) -> Bool {
+        if work.spec == nil {
+            guard GemmaModelManager.shared.enabled, GemmaModelManager.shared.isReady,
+                  let asset = assetsProvider().first(where: { $0.id == work.asset.id }) else { return false }
+            return Self.snapshot(asset) == work.asset
+        }
         guard VisualModelLoader.shared.enabled,
               VisualModelLoader.shared.embedder?.spec == work.spec,
               let asset = assetsProvider().first(where: { $0.id == work.asset.id }) else { return false }
@@ -249,7 +283,7 @@ final class SearchIndexCoordinator {
 
     private func indexOne(
         _ asset: AssetSnapshot,
-        model: VisualEmbedder,
+        model: VisualEmbedder?,
         transcribe: Bool
     ) async {
         let visualShare = transcribe ? 0.5 : 1.0
@@ -267,16 +301,19 @@ final class SearchIndexCoordinator {
                     _ = try await TranscriptCache.shared.transcript(for: url, isVideo: isVideo, range: nil, engineTag: engineTag)
                 }
             }()
-            switch asset.type {
-            case .image:
-                try await VisualIndexer.indexImage(url: url, model: model)
-            case .video:
-                try await VisualIndexer.index(
-                    url: url, duration: asset.duration, model: model, progress: onProgress
-                )
-            default:
-                break
+            if let model {
+                switch asset.type {
+                case .image:
+                    try await VisualIndexer.indexImage(url: url, model: model)
+                case .video:
+                    try await VisualIndexer.index(
+                        url: url, duration: asset.duration, model: model, progress: onProgress
+                    )
+                default:
+                    break
+                }
             }
+            try await runGemmaPass(asset, url: url)
             loadedIndexes[asset.id] = nil
             let visualSeconds = start.duration(to: .now).seconds
             currentAssetFraction = visualShare
@@ -291,6 +328,41 @@ final class SearchIndexCoordinator {
         } catch {
             failedIds.insert(asset.id)
             Log.search.warning("index failed asset=\(asset.id.prefix(8)): \(error.localizedDescription)")
+        }
+    }
+
+    /// Gemma indexing beside the SigLIP pass; keying and staleness checks stat files, so all of it runs off-actor.
+    private func runGemmaPass(_ asset: AssetSnapshot, url: URL) async throws {
+        guard GemmaModelManager.shared.enabled, GemmaModelManager.shared.isReady,
+              let gemma = GemmaModelManager.shared.embedder,
+              asset.type == .video || asset.type == .audio else { return }
+        let sourceURL = manifestSourceLookup(asset.id)
+        let indexURL = url
+        let duration = asset.duration
+        let type = asset.type
+        let hasAudio = asset.hasAudio
+        let task = Task.detached(priority: .utility) {
+            guard let key = GemmaIndexer.indexKey(sourceURL: sourceURL, fallbackURL: indexURL) else { return }
+            switch type {
+            case .video:
+                guard GemmaIndexer.needsIndex(key: key) else { return }
+                try await GemmaIndexer.indexVideo(indexURL: indexURL, key: key, duration: duration, embedder: gemma)
+                if hasAudio {
+                    try await GemmaIndexer.indexAudio(url: indexURL, key: key, embedder: gemma)
+                }
+            case .audio:
+                guard !ClipEmbedStore.isCurrent(
+                    key: key, model: GemmaIndexer.modelName, modelVersion: GemmaIndexer.modelVersion
+                ) else { return }
+                try await GemmaIndexer.indexAudio(url: indexURL, key: key, embedder: gemma)
+            default:
+                break
+            }
+        }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 

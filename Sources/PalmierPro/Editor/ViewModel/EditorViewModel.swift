@@ -441,6 +441,9 @@ final class EditorViewModel {
         agentService.editor = self
         mediaVisualCache.editor = self
         searchIndex.assetsProvider = { [weak self] in self?.mediaAssets ?? [] }
+        searchIndex.manifestSourceLookup = { [weak self] id in
+            self?.mediaManifest.sourceFileURL(forAssetID: id)
+        }
         mediaVisualCache.speech.onAnalyzingCountChange = { [weak self] count in
             self?.speechAnalyzingCount = count
         }

@@ -100,3 +100,21 @@ enum MediaSource: Codable, Sendable, Equatable {
     case external(absolutePath: String)
     case project(relativePath: String)
 }
+
+extension MediaManifest {
+    /// On-disk source URL for an asset id when it differs from the (possibly proxied) url.
+    func sourceFileURL(forAssetID id: String) -> URL? {
+        guard let entry = entries.first(where: { $0.id == id }) else { return nil }
+        if let url = entry.importInput?.sourceURL, !url.isEmpty,
+           let parsed = URL(string: url), parsed.isFileURL {
+            return parsed
+        }
+        if let path = entry.importInput?.sourcePath, !path.isEmpty {
+            return URL(fileURLWithPath: path)
+        }
+        if case .external(let absolutePath) = entry.source {
+            return URL(fileURLWithPath: absolutePath)
+        }
+        return nil
+    }
+}
